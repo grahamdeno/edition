@@ -22,8 +22,9 @@
 html, body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--sans); font-size: 16px; min-height: 100dvh; }
 button { font: inherit; color: inherit; cursor: pointer; border: 0; background: none; }
 a { color: inherit; }
+input, textarea { font: inherit; color: inherit; background: transparent; }
 
-.app { max-width: 480px; margin: 0 auto; padding: calc(16px + var(--safe-t)) 20px calc(24px + var(--safe-b)); }
+.app { max-width: 480px; margin: 0 auto; padding: calc(16px + var(--safe-t)) 20px calc(100px + var(--safe-b)); }
 
 /* Edition front page */
 .mast { display: flex; justify-content: space-between; align-items: baseline; font-size: 12px; letter-spacing: 0.04em; color: var(--muted); margin-bottom: 6px; }
@@ -33,7 +34,7 @@ a { color: inherit; }
 .title { font-family: var(--serif); font-size: 48px; font-weight: 400; letter-spacing: -0.02em; margin: 4px 0 8px; line-height: 1; }
 .sub { color: var(--fg-2); font-size: 15px; margin: 0 0 18px; line-height: 1.4; }
 
-.lead { background: var(--card); border: 1px solid var(--rim); border-radius: 14px; padding: 14px; margin-bottom: 14px; }
+.lead { background: var(--card); border: 1px solid var(--rim); border-radius: 14px; padding: 14px; margin-bottom: 14px; width: 100%; text-align: left; }
 .lead .kicker { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); margin-bottom: 8px; }
 .lead .preview { height: 140px; background: #1a1a1c; border-radius: 10px; display: grid; place-items: center; color: var(--muted); font-size: 13px; margin-bottom: 12px; }
 .lead h2 { font-family: var(--serif); font-size: 24px; font-weight: 400; margin: 0 0 6px; line-height: 1.15; }
@@ -53,6 +54,36 @@ a { color: inherit; }
 .bar { height: 4px; background: var(--hair); border-radius: 2px; overflow: hidden; }
 .bar > span { display: block; height: 100%; background: var(--accent); width: 0; transition: width 0.3s; }
 .progress .label { font-size: 12px; color: var(--muted); margin-top: 6px; text-align: right; }
+
+/* Floating add */
+.add-btn {
+  position: fixed; right: 20px; bottom: calc(20px + var(--safe-b));
+  width: 56px; height: 56px; border-radius: 16px;
+  background: var(--accent); color: #1a120d; font-size: 28px; font-weight: 400;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4); z-index: 5;
+}
+
+/* Capture sheet */
+.sheet {
+  position: fixed; inset: 0; background: var(--bg); z-index: 20;
+  padding: calc(16px + var(--safe-t)) 20px calc(24px + var(--safe-b));
+  display: flex; flex-direction: column; max-width: 480px; margin: 0 auto;
+}
+.sheet-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+.sheet-head h2 { font-family: var(--serif); font-size: 28px; font-weight: 400; margin: 0; }
+.field { margin-bottom: 14px; }
+.field label { display: block; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
+.field input, .field textarea {
+  width: 100%; border: 1px solid var(--rim); border-radius: 12px;
+  background: var(--card); padding: 12px 14px; outline: none;
+}
+.field textarea { min-height: 90px; resize: vertical; }
+.clip-note {
+  font-size: 13px; color: var(--accent); background: var(--card);
+  border: 1px solid var(--rim); border-radius: 10px; padding: 10px 12px; margin-bottom: 14px;
+}
+.sheet-actions { display: flex; gap: 10px; margin-top: auto; }
+.sheet-actions .btn { flex: 1; }
 
 /* Triage */
 .triage { position: fixed; inset: 0; background: var(--bg); z-index: 10; display: flex; flex-direction: column; padding: calc(12px + var(--safe-t)) 16px calc(16px + var(--safe-b)); }
