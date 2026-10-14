@@ -83,11 +83,12 @@ export const sampleItems = [
 export function load() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { items: structuredClone(sampleItems), editionDate: todayKey() };
+    if (!raw) return { items: structuredClone(sampleItems), editionDate: todayKey(), lastClip: "" };
     const data = JSON.parse(raw);
+    if (!data.lastClip) data.lastClip = "";
     return data;
   } catch {
-    return { items: structuredClone(sampleItems), editionDate: todayKey() };
+    return { items: structuredClone(sampleItems), editionDate: todayKey(), lastClip: "" };
   }
 }
 
@@ -130,4 +131,23 @@ export function applyVerdict(item, verdict) {
     next.readNow = true;
   }
   return next;
+}
+
+export function createItem({ title, summary, url, text, type }) {
+  const isUrl = !!url || (text && /^https?:\/\//i.test(text.trim()));
+  const cleanUrl = url || (isUrl ? text.trim() : "");
+  const cleanText = isUrl ? "" : (text || "").trim();
+  return {
+    id: "i" + Date.now().toString(36),
+    type: type || (isUrl ? "link" : "thought"),
+    title: (title || cleanText || cleanUrl || "Untitled").slice(0, 120),
+    url: cleanUrl || undefined,
+    text: cleanText || undefined,
+    summary: (summary || "").slice(0, 280),
+    created: Date.now(),
+    skips: 0,
+    status: "active",
+    minutes: isUrl ? 8 : 2,
+    tags: [isUrl ? "link" : "thought"],
+  };
 }
