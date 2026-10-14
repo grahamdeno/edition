@@ -1,7 +1,16 @@
 import { load, save, selectEdition, applyVerdict, createItem, VERDICTS, todayKey } from "./core.js";
+import { analyzeItem } from "./analyze.js";
 
 const app = document.getElementById("app");
 let data = load();
+
+function getKey() {
+  return localStorage.getItem("edition-anthropic-key") || "";
+}
+function setKey(k) {
+  if (k) localStorage.setItem("edition-anthropic-key", k);
+  else localStorage.removeItem("edition-anthropic-key");
+}
 
 function render() {
   const edition = selectEdition(data.items);
@@ -31,7 +40,7 @@ function render() {
     <p class="sub">Today's front page, built from your saves. Finish it and you're done.</p>
 
     <button class="lead" data-id="${lead.id}">
-      <div class="kicker">Lead · saved ${daysAgo(lead.created)} days ago</div>
+      <div class="kicker">${(lead.category || lead.type || "item").toUpperCase()} · saved ${daysAgo(lead.created)} days ago</div>
       <div class="preview">[preview image]</div>
       <h2>${escapeHtml(lead.title)}</h2>
       <p class="summary">${escapeHtml(lead.summary)}</p>
@@ -55,8 +64,9 @@ function render() {
 }
 
 function card(item) {
+  const label = (item.category || item.type || "item").toUpperCase();
   return `<button class="card" data-id="${item.id}">
-    <div class="kicker">${item.type} · ${item.minutes} min</div>
+    <div class="kicker">${label} · ${item.minutes} min</div>
     <h3>${escapeHtml(item.title)}</h3>
   </button>`;
 }
@@ -64,7 +74,7 @@ function card(item) {
 function row(item) {
   return `<button class="row" data-id="${item.id}">
     <span class="t">${escapeHtml(item.title)}</span>
-    <span class="meta">Below the fold</span>
+    <span class="meta">${item.category || item.type}</span>
   </button>`;
 }
 
@@ -76,6 +86,7 @@ function openCapture(prefill) {
   const titleGuess = isUrl ? "" : (prefill || "").slice(0, 80);
   const urlGuess = isUrl ? prefill.trim() : "";
   const textGuess = isUrl ? "" : (prefill || "");
+  const hasKey = !!getKey();
 
   const sheet = document.createElement("div");
   sheet.className = "sheet";
@@ -97,6 +108,11 @@ function openCapture(prefill) {
       <label>Note (optional)</label>
       <input id="cap-note" placeholder="Why it might matter" />
     </div>
+    <div class="field">
+      <label>Anthropic API key ${hasKey ? "(saved)" : ""}</label>
+      <input id="cap-key" type="password" placeholder="sk-ant-..." value="${escapeAttr(getKey())}" />
+    </div>
+    <div id="cap-status" class="clip-note" style="display:none"></div>
     <div class="sheet-actions">
       <button class="btn" id="cap-paste">Paste</button>
       <button class="btn primary" id="cap-save">Save</button>
@@ -115,18 +131,41 @@ function openCapture(prefill) {
       }
     }
   };
-  sheet.querySelector("#cap-save").onclick = () => {
+  sheet.querySelector("#cap-save").onclick = async () => {
     const title = sheet.querySelector("#cap-title").value.trim();
     const body = sheet.querySelector("#cap-body").value.trim();
     const note = sheet.querySelector("#cap-note").value.trim();
+    const key = sheet.querySelector("#cap-key").value.trim();
     if (!title && !body) return;
+    setKey(key);
+
+    const status = sheet.querySelector("#cap-status");
+    const saveBtn = sheet.querySelector("#cap-save");
+    saveBtn.disabled = true;
+    saveBtn.textContent = "Saving…";
+
+    let analysis = null;
+    if (key) {
+      status.style.display = "block";
+      status.textContent = "Analyzing…";
+      analysis = await analyzeItem({ title, body, note, apiKey: key });
+      if (!analysis) status.textContent = "Analysis failed (CORS or key). Saved without it.";
+    }
+
     const isLink = /^https?:\/\//i.test(body);
     const item = createItem({
-      title: title || undefined,
-      summary: note,
+      title: analysis?.title || title || undefined,
+      summary: analysis?.summary || note,
       url: isLink ? body : undefined,
       text: isLink ? undefined : body,
+      type: analysis?.type,
     });
+    if (analysis) {
+      item.category = analysis.category;
+      item.minutes = analysis.minutes || item.minutes;
+      item.tags = analysis.tags || item.tags;
+      item.analyzed = true;
+    }
     data.items.unshift(item);
     if (prefill) data.lastClip = prefill;
     save(data);
@@ -138,8 +177,7 @@ function openCapture(prefill) {
 async function readClip() {
   try {
     if (!navigator.clipboard?.readText) return "";
-    const text = (await navigator.clipboard.readText()).trim();
-    return text;
+    return (await navigator.clipboard.readText()).trim();
   } catch {
     return "";
   }
@@ -149,7 +187,6 @@ async function checkClipboard() {
   const text = await readClip();
   if (!text || text.length < 8) return;
   if (text === data.lastClip) return;
-  // Already have this URL or exact text
   const exists = data.items.some((i) => i.url === text || i.text === text || i.title === text);
   if (exists) {
     data.lastClip = text;
@@ -176,7 +213,7 @@ function openTriage(id) {
     <div class="stack">
       <div class="tcard" id="tcard">
         <div class="preview">[preview]</div>
-        <div class="kicker">${item.type} · saved ${daysAgo(item.created)} days ago</div>
+        <div class="kicker">${(item.category || item.type || "item").toUpperCase()} · saved ${daysAgo(item.created)} days ago</div>
         <h2>${escapeHtml(item.title)}</h2>
         <p class="summary">${escapeHtml(item.summary)}</p>
         <div class="tags">
@@ -196,7 +233,6 @@ function openTriage(id) {
   document.body.appendChild(overlay);
 
   overlay.querySelector(".back").onclick = () => overlay.remove();
-
   overlay.querySelectorAll("[data-v]").forEach((btn) => {
     btn.onclick = () => verdict(item, btn.dataset.v, overlay);
   });
@@ -253,15 +289,10 @@ function escapeHtml(s) {
   return div.innerHTML;
 }
 function escapeAttr(s) {
-  return String(s || "").replace(/"/g, """).replace(/</g, "<");
+  return String(s || "").replace(/&/g, "&").replace(/"/g, """).replace(/</g, "<");
 }
 
 render();
-
-// Clipboard check: on open and when returning to the app.
-// iOS often requires a gesture for readText, so the + button and Paste
-// button are the reliable fallback. When permission is already granted
-// the form opens automatically.
 setTimeout(checkClipboard, 400);
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") checkClipboard();
