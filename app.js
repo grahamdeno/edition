@@ -31,8 +31,8 @@ function render() {
     <button class="lead" data-id="${lead.id}">
       <div class="kicker">Lead · saved ${daysAgo(lead.created)} days ago</div>
       <div class="preview">[preview image]</div>
-      <h2>${escape(lead.title)}</h2>
-      <p class="summary">${escape(lead.summary)}</p>
+      <h2>${escapeHtml(lead.title)}</h2>
+      <p class="summary">${escapeHtml(lead.summary)}</p>
     </button>
 
     ${rest.length ? `<div class="grid">${rest.slice(0, 2).map(card).join("")}</div>` : ""}
@@ -53,13 +53,13 @@ function render() {
 function card(item) {
   return `<button class="card" data-id="${item.id}">
     <div class="kicker">${item.type} · ${item.minutes} min</div>
-    <h3>${escape(item.title)}</h3>
+    <h3>${escapeHtml(item.title)}</h3>
   </button>`;
 }
 
 function row(item) {
   return `<button class="row" data-id="${item.id}">
-    <span class="t">${escape(item.title)}</span>
+    <span class="t">${escapeHtml(item.title)}</span>
     <span class="meta">Below the fold</span>
   </button>`;
 }
@@ -80,11 +80,11 @@ function openTriage(id) {
       <div class="tcard" id="tcard">
         <div class="preview">[preview]</div>
         <div class="kicker">${item.type} · saved ${daysAgo(item.created)} days ago</div>
-        <h2>${escape(item.title)}</h2>
-        <p class="summary">${escape(item.summary)}</p>
+        <h2>${escapeHtml(item.title)}</h2>
+        <p class="summary">${escapeHtml(item.summary)}</p>
         <div class="tags">
           <span class="tag">${item.minutes} min</span>
-          ${item.tags?.[0] ? `<span class="tag">${item.tags[0]}</span>` : ""}
+          ${item.tags && item.tags[0] ? `<span class="tag">${item.tags[0]}</span>` : ""}
         </div>
       </div>
     </div>
@@ -104,26 +104,26 @@ function openTriage(id) {
     btn.onclick = () => verdict(item, btn.dataset.v, overlay);
   });
 
-  const card = overlay.querySelector("#tcard");
+  const cardEl = overlay.querySelector("#tcard");
   let startX = 0, startY = 0, dx = 0, dy = 0;
-  card.addEventListener("pointerdown", (e) => {
+  cardEl.addEventListener("pointerdown", (e) => {
     startX = e.clientX; startY = e.clientY;
-    card.setPointerCapture(e.pointerId);
+    cardEl.setPointerCapture(e.pointerId);
   });
-  card.addEventListener("pointermove", (e) => {
+  cardEl.addEventListener("pointermove", (e) => {
     if (!startX) return;
     dx = e.clientX - startX;
     dy = e.clientY - startY;
-    card.style.transform = `translate(${dx}px, ${dy}px) rotate(${dx / 20}deg)`;
+    cardEl.style.transform = "translate(" + dx + "px, " + dy + "px) rotate(" + (dx / 20) + "deg)";
   });
-  card.addEventListener("pointerup", () => {
+  cardEl.addEventListener("pointerup", () => {
     const absX = Math.abs(dx), absY = Math.abs(dy);
     if (absX > 80 && absX > absY) {
       verdict(item, dx > 0 ? VERDICTS.READ_NOW : VERDICTS.LET_GO, overlay);
     } else if (dy < -60 && absY > absX) {
       verdict(item, VERDICTS.LATER, overlay);
     } else {
-      card.style.transform = "";
+      cardEl.style.transform = "";
     }
     startX = 0; dx = 0; dy = 0;
   });
@@ -150,14 +150,10 @@ function totalMinutes(items) {
 function isToday(ts) {
   return ts && new Date(ts).toISOString().slice(0, 10) === todayKey();
 }
-function escape(s) {
-  return String(s || "").replace(/[&<>"']/g, (c) => ({
-    "&": "&",
-    "<": "<",
-    ">": ">",
-    '"': """,
-    "'": "&#39;"
-  }[c]));
+function escapeHtml(s) {
+  const div = document.createElement("div");
+  div.textContent = String(s || "");
+  return div.innerHTML;
 }
 
 render();
