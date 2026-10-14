@@ -1,4 +1,4 @@
-import { load, save, selectEdition, applyVerdict, VERDICTS, todayKey } from "./core.js";
+import { load, save, selectEdition, applyVerdict, createItem, VERDICTS, todayKey } from "./core.js";
 
 const app = document.getElementById("app");
 let data = load();
@@ -13,7 +13,9 @@ function render() {
       <div class="done-screen">
         <h1>You're done.</h1>
         <p>Today's edition is finished.</p>
-      </div>`;
+      </div>
+      <button class="add-btn" aria-label="Add">+</button>`;
+    app.querySelector(".add-btn").onclick = () => openCapture();
     return;
   }
 
@@ -43,11 +45,13 @@ function render() {
       <div class="bar"><span style="width:${(doneCount / Math.max(total, 1)) * 100}%"></span></div>
       <div class="label">${doneCount} of ${total} read</div>
     </div>
+    <button class="add-btn" aria-label="Add">+</button>
   `;
 
   app.querySelectorAll("[data-id]").forEach((el) => {
     el.addEventListener("click", () => openTriage(el.dataset.id));
   });
+  app.querySelector(".add-btn").onclick = () => openCapture();
 }
 
 function card(item) {
@@ -62,6 +66,99 @@ function row(item) {
     <span class="t">${escapeHtml(item.title)}</span>
     <span class="meta">Below the fold</span>
   </button>`;
+}
+
+function openCapture(prefill) {
+  const existing = document.querySelector(".sheet");
+  if (existing) existing.remove();
+
+  const isUrl = prefill && /^https?:\/\//i.test(prefill.trim());
+  const titleGuess = isUrl ? "" : (prefill || "").slice(0, 80);
+  const urlGuess = isUrl ? prefill.trim() : "";
+  const textGuess = isUrl ? "" : (prefill || "");
+
+  const sheet = document.createElement("div");
+  sheet.className = "sheet";
+  sheet.innerHTML = `
+    <div class="sheet-head">
+      <h2>Capture</h2>
+      <button class="back" aria-label="Close">×</button>
+    </div>
+    ${prefill ? `<div class="clip-note">Found on the clipboard. Edit and save, or dismiss.</div>` : ""}
+    <div class="field">
+      <label>Title</label>
+      <input id="cap-title" value="${escapeAttr(titleGuess)}" placeholder="What is this?" />
+    </div>
+    <div class="field">
+      <label>Link or text</label>
+      <textarea id="cap-body" placeholder="Paste a URL or a thought">${escapeHtml(urlGuess || textGuess)}</textarea>
+    </div>
+    <div class="field">
+      <label>Note (optional)</label>
+      <input id="cap-note" placeholder="Why it might matter" />
+    </div>
+    <div class="sheet-actions">
+      <button class="btn" id="cap-paste">Paste</button>
+      <button class="btn primary" id="cap-save">Save</button>
+    </div>
+  `;
+  document.body.appendChild(sheet);
+
+  sheet.querySelector(".back").onclick = () => sheet.remove();
+  sheet.querySelector("#cap-paste").onclick = async () => {
+    const text = await readClip();
+    if (text) {
+      const body = sheet.querySelector("#cap-body");
+      body.value = text;
+      if (!sheet.querySelector("#cap-title").value && !/^https?:\/\//i.test(text)) {
+        sheet.querySelector("#cap-title").value = text.slice(0, 80);
+      }
+    }
+  };
+  sheet.querySelector("#cap-save").onclick = () => {
+    const title = sheet.querySelector("#cap-title").value.trim();
+    const body = sheet.querySelector("#cap-body").value.trim();
+    const note = sheet.querySelector("#cap-note").value.trim();
+    if (!title && !body) return;
+    const isLink = /^https?:\/\//i.test(body);
+    const item = createItem({
+      title: title || undefined,
+      summary: note,
+      url: isLink ? body : undefined,
+      text: isLink ? undefined : body,
+    });
+    data.items.unshift(item);
+    if (prefill) data.lastClip = prefill;
+    save(data);
+    sheet.remove();
+    render();
+  };
+}
+
+async function readClip() {
+  try {
+    if (!navigator.clipboard?.readText) return "";
+    const text = (await navigator.clipboard.readText()).trim();
+    return text;
+  } catch {
+    return "";
+  }
+}
+
+async function checkClipboard() {
+  const text = await readClip();
+  if (!text || text.length < 8) return;
+  if (text === data.lastClip) return;
+  // Already have this URL or exact text
+  const exists = data.items.some((i) => i.url === text || i.text === text || i.title === text);
+  if (exists) {
+    data.lastClip = text;
+    save(data);
+    return;
+  }
+  data.lastClip = text;
+  save(data);
+  openCapture(text);
 }
 
 function openTriage(id) {
@@ -155,5 +252,17 @@ function escapeHtml(s) {
   div.textContent = String(s || "");
   return div.innerHTML;
 }
+function escapeAttr(s) {
+  return String(s || "").replace(/"/g, """).replace(/</g, "<");
+}
 
 render();
+
+// Clipboard check: on open and when returning to the app.
+// iOS often requires a gesture for readText, so the + button and Paste
+// button are the reliable fallback. When permission is already granted
+// the form opens automatically.
+setTimeout(checkClipboard, 400);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") checkClipboard();
+});
