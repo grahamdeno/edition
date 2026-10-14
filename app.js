@@ -98,11 +98,11 @@ function openCapture(prefill) {
     ${prefill ? `<div class="clip-note">Found on the clipboard. Edit and save, or dismiss.</div>` : ""}
     <div class="field">
       <label>Title</label>
-      <input id="cap-title" value="${escapeAttr(titleGuess)}" placeholder="What is this?" />
+      <input id="cap-title" placeholder="What is this?" />
     </div>
     <div class="field">
       <label>Link or text</label>
-      <textarea id="cap-body" placeholder="Paste a URL or a thought">${escapeHtml(urlGuess || textGuess)}</textarea>
+      <textarea id="cap-body" placeholder="Paste a URL or a thought"></textarea>
     </div>
     <div class="field">
       <label>Note (optional)</label>
@@ -110,7 +110,7 @@ function openCapture(prefill) {
     </div>
     <div class="field">
       <label>Anthropic API key ${hasKey ? "(saved)" : ""}</label>
-      <input id="cap-key" type="password" placeholder="sk-ant-..." value="${escapeAttr(getKey())}" />
+      <input id="cap-key" type="password" placeholder="sk-ant-..." />
     </div>
     <div id="cap-status" class="clip-note" style="display:none"></div>
     <div class="sheet-actions">
@@ -119,6 +119,10 @@ function openCapture(prefill) {
     </div>
   `;
   document.body.appendChild(sheet);
+
+  sheet.querySelector("#cap-title").value = titleGuess;
+  sheet.querySelector("#cap-body").value = urlGuess || textGuess;
+  sheet.querySelector("#cap-key").value = getKey();
 
   sheet.querySelector(".back").onclick = () => sheet.remove();
   sheet.querySelector("#cap-paste").onclick = async () => {
@@ -287,9 +291,6 @@ function escapeHtml(s) {
   const div = document.createElement("div");
   div.textContent = String(s || "");
   return div.innerHTML;
-}
-function escapeAttr(s) {
-  return String(s || "").replace(/&/g, "&").replace(/"/g, """).replace(/</g, "<");
 }
 
 render();
