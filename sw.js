@@ -1,4 +1,4 @@
-const CACHE = "edition-v0.1";
+const CACHE = "edition-v0.2";
 const ASSETS = ["./", "./index.html", "./styles.css", "./app.js", "./core.js", "./manifest.webmanifest"];
 
 self.addEventListener("install", (e) => {
