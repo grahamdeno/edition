@@ -23,13 +23,13 @@ import {
 } from "./model.js";
 import * as db from "./db.js";
 import { captureText, captureFile, captureTransfer, readClipboard, captureShares } from "./capture.js";
-import { sampleItems } from "./samples.js";
+import { sampleItems, SAMPLES_VERSION } from "./samples.js";
 import * as ai from "./ai.js";
 import { tick, unlock, soundOn, setSound } from "./feel.js";
 import { I } from "./icons.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "3.7.0";
+export const VERSION = "3.7.1";
 const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 
 const KIND_LABEL = { link: "Link", note: "Note", quote: "Quote", photo: "Photo", pdf: "PDF", text: "Text", video: "Video", audio: "Audio", file: "File" };
@@ -107,21 +107,38 @@ function registerWorker() {
   }).catch(() => {});
 }
 
-/** Sample items, loaded once per device so a new install has something to show. */
+/**
+ * Samples: loaded on a phone's first launch, and swapped for the new set
+ * whenever samples.js changes (unless you removed them in Settings).
+ * `force` (Settings › Load samples) always replaces them with a fresh set.
+ */
 async function seedSamples({ force = false } = {}) {
-  if (!force && await db.meta.get("samplesLoaded", false)) return 0;
-  const have = new Set(state.items.map((i) => i.id));
-  const fresh = sampleItems().filter((i) => !have.has(i.id));
-  if (fresh.length) await db.items.putMany(fresh);
-  await db.meta.set("samplesLoaded", true);
+  const loaded = await db.meta.get("samplesLoaded", false);
+  const removed = await db.meta.get("samplesRemoved", false);
+  const version = await db.meta.get("samplesVersion", null);
+  if (!force && loaded && (removed || version === SAMPLES_VERSION)) return 0;
+  // Out with the old samples (and their place in today's edition), in with the current set.
+  const old = state.items.filter((i) => i.sample);
+  if (old.length) {
+    for (const it of old) await db.items.remove(it.id);
+    const gone = new Set(old.map((i) => i.id));
+    state.items = state.items.filter((i) => !gone.has(i.id));
+    if (state.edition) state.edition = { ...state.edition, ids: state.edition.ids.filter((id) => !gone.has(id)) };
+  }
+  const fresh = sampleItems();
+  await db.items.putMany(fresh);
   state.items = [...fresh, ...state.items];
-  if (fresh.length && state.edition && state.edition.date === dayKey() && !state.edition.ids.length) state.edition = null;
+  if (state.edition) await db.meta.set("edition", state.edition);
+  await db.meta.set("samplesLoaded", true);
+  await db.meta.set("samplesRemoved", false);
+  await db.meta.set("samplesVersion", SAMPLES_VERSION);
   return fresh.length;
 }
 
 async function removeSamples() {
   const list = state.items.filter((i) => i.sample);
   await removeItems(list);
+  await db.meta.set("samplesRemoved", true); // don't bring them back on the next sample update
   if (state.edition) {
     const ids = new Set(list.map((i) => i.id));
     state.edition = { ...state.edition, ids: state.edition.ids.filter((id) => !ids.has(id)) };
@@ -1708,7 +1725,7 @@ function openSettings() {
     <div class="section">
       <h3>Samples</h3>
       <div class="two">
-        <button class="btn" type="button" id="set-samples-load">Load samples</button>
+        <button class="btn" type="button" id="set-samples-load">Reload samples</button>
         <button class="btn" type="button" id="set-samples-clear" ${state.items.some((i) => i.sample) ? "" : "disabled"}>Remove samples</button>
       </div>
       <span class="st" id="set-sm-st" role="status"></span>
@@ -1798,9 +1815,9 @@ function openSettings() {
   $("#set-samples-load", wrap).addEventListener("click", async () => {
     const n = await seedSamples({ force: true });
     await ensureEdition();
-    $("#set-samples-clear", wrap).disabled = false;
-    say(smSt, n ? `Loaded ${n} sample items.` : "Samples are already loaded.");
-    renderFront();
+    closeSheet();
+    openFeed();
+    toast(`Loaded ${n} fresh samples. They're in your feed.`);
   });
   $("#set-samples-clear", wrap).addEventListener("click", async () => {
     const n = await removeSamples();

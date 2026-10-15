@@ -1,6 +1,10 @@
 /*
  * Sample items, so a fresh install shows what Edition does: links, YouTube
- * videos, quotes and photos across the inbox, queue, done and let go.
+ * videos, quotes and photos. All of them land in the feed: most as new saves,
+ * a few queued so today's edition has something in it.
+ *
+ * SAMPLES_VERSION changes whenever this list changes, and the app then swaps
+ * the old samples on each phone for the new ones (your own saves untouched).
  * Each carries `sample: true`; Settings › Samples removes them in one tap.
  * Photos are free stock images served by picsum.photos.
  */
@@ -12,7 +16,7 @@ const DAY = 86400000;
 // [status, days ago saved, draft, enrichment]
 const SAMPLES = [
   // ---- Inbox: waiting for a first verdict ----
-  [STATUS.ARCHIVED, 0, draftFromUrl("https://www.youtube.com/watch?v=UF8uR6Z6KLc"), {
+  [STATUS.INBOX, 0, draftFromUrl("https://www.youtube.com/watch?v=UF8uR6Z6KLc"), {
     title: "Steve Jobs' 2005 Stanford commencement address",
     summary: "Three short stories on connecting the dots, love and loss, and death. Fifteen minutes that hold up.",
     tags: ["career", "talks"], minutes: 15,
@@ -34,12 +38,12 @@ const SAMPLES = [
   }],
 
   // ---- Queue: kept for a future edition ----
-  [STATUS.ARCHIVED, 4, draftFromUrl("https://martinfowler.com/articles/is-quality-worth-cost.html"), {
+  [STATUS.INBOX, 4, draftFromUrl("https://martinfowler.com/articles/is-quality-worth-cost.html"), {
     title: "Is high quality software worth the cost?",
     summary: "Fowler's case that internal quality lowers cost within weeks, useful when trading off tech debt in planning.",
     tags: ["software", "planning"], minutes: 18,
   }],
-  [STATUS.ARCHIVED, 7, draftFromUrl("https://basecamp.com/shapeup"), {
+  [STATUS.INBOX, 7, draftFromUrl("https://basecamp.com/shapeup"), {
     title: "Shape Up",
     summary: "Basecamp's free book on six-week cycles and shaping work before betting on it. A useful contrast to sprints.",
     tags: ["product", "agile", "planning"], minutes: 120,
@@ -80,12 +84,20 @@ const SAMPLES = [
     summary: "Boarderie's classic birthday dessert board.",
     tags: ["shopping", "gifts"], minutes: 2,
   }],
-  [STATUS.DONE, 3, draftFromUrl("https://www.hikarustudio.co/products/kintsugi-repair-kit"), {
+  [STATUS.INBOX, 3, draftFromUrl("https://www.hikarustudio.co/products/kintsugi-repair-kit"), {
     title: "Hikaru kintsugi repair kit",
     summary: "A kintsugi kit for repairing broken ceramics, from Hikaru Studio.",
     tags: ["shopping", "crafts"], minutes: 2,
   }],
 ];
+
+/** A short fingerprint of the list above: any edit to it changes this. */
+export const SAMPLES_VERSION = (() => {
+  const text = JSON.stringify(SAMPLES);
+  let h = 2166136261;
+  for (let i = 0; i < text.length; i++) { h ^= text.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return (h >>> 0).toString(36);
+})();
 
 /** Build the sample items relative to now. */
 export function sampleItems(now = Date.now()) {

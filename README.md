@@ -52,7 +52,7 @@ Model: `claude-haiku-5-5`. Every AI action is a paid API call on your account.
 
 ## Samples
 
-A fresh install loads sixteen sample items (links, YouTube talks, quotes, a note and stock photos) across the inbox, queue and history so every screen has something to show. Settings › Samples removes them, or loads them again. Your own items are never touched.
+A fresh install loads sample items, and all of them land in the feed: most as new saves, three queued for today's edition. When `src/samples.js` changes, each phone swaps its old samples for the new set on the next launch (your own saves are untouched), unless you removed samples in Settings. Settings › Samples › Reload samples resets them any time.
 
 ## Install
 
