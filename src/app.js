@@ -29,7 +29,7 @@ import { tick, unlock, soundOn, setSound } from "./feel.js";
 import { I } from "./icons.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "3.7.1";
+export const VERSION = "3.7.2";
 const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 
 const KIND_LABEL = { link: "Link", note: "Note", quote: "Quote", photo: "Photo", pdf: "PDF", text: "Text", video: "Video", audio: "Audio", file: "File" };
@@ -68,6 +68,28 @@ const app = $("#app");
 const urls = new Map(); // blob id -> object URL
 
 /* ================= Boot ================= */
+
+/*
+ * Size the app to the real screen. On iOS 26, a Home Screen app can be handed
+ * a page shorter than the display, which left a band at the bottom and lifted
+ * everything. In standalone mode, when the screen is a little taller than the
+ * page, use the screen's height. Elsewhere this is just the window height.
+ */
+const fit = { inner: 0, screen: 0, used: 0, short: false };
+function fitScreen() {
+  const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+  const portrait = innerHeight >= innerWidth;
+  const screenH = portrait ? Math.max(screen.width, screen.height) : Math.min(screen.width, screen.height);
+  const gap = screenH - innerHeight;
+  const short = standalone && gap > 0 && gap < 140;
+  const h = short ? screenH : innerHeight;
+  Object.assign(fit, { inner: innerHeight, screen: screenH, used: h, short });
+  document.documentElement.style.setProperty("--app-h", `${h}px`);
+  document.documentElement.classList.toggle("short-vp", short);
+}
+fitScreen();
+addEventListener("resize", fitScreen);
+addEventListener("orientationchange", () => setTimeout(fitScreen, 300));
 
 async function boot() {
   const migrated = await db.migrateFromLocalStorage(migrateLegacy).catch(() => 0);
@@ -1316,19 +1338,20 @@ function bindFeedGestures(el) {
     y0 = null; feedDrag = false; lit = false;
     tip.style.opacity = ""; tip.classList.remove("go");
   };
-  card.addEventListener("pointerdown", (e) => {
+  // The whole screen listens, so a swipe can start anywhere, right down to the bottom edge.
+  el.addEventListener("pointerdown", (e) => {
     if (!state.feed || e.button > 0) return;
     if (card.classList.contains("end-card") && card.scrollTop > 0) return;
     if (e.target.closest(".rescue, .pill-btn, .tide-row button, .add-why, iframe, video, audio")) return;
     y0 = e.clientY; x0 = e.clientX; t0 = Date.now(); dy = 0; moved = false;
   });
-  card.addEventListener("pointermove", (e) => {
+  el.addEventListener("pointermove", (e) => {
     if (y0 == null) return;
     dy = e.clientY - y0;
     const dx = e.clientX - x0;
     if (!moved && Math.abs(dy) < 8) return;
     if (!moved && Math.abs(dx) > Math.abs(dy)) { reset(); return; }
-    if (!moved) { moved = true; feedDrag = true; try { card.setPointerCapture(e.pointerId); } catch { /* capture can fail mid-gesture */ } }
+    if (!moved) { moved = true; feedDrag = true; try { el.setPointerCapture(e.pointerId); } catch { /* capture can fail mid-gesture */ } }
     const f = state.feed;
     const atStart = f.index === 0, atEnd = f.index >= f.ids.length;
     const resist = (dy > 0 && atStart) || (dy < 0 && atEnd) ? 0.45 : 1;
@@ -1361,8 +1384,8 @@ function bindFeedGestures(el) {
     if (e.target.closest("[data-turn]")) turnCard();
     else if (e.target.closest("[data-open-card]")) { const id = state.feed?.ids[state.feed.index]; if (id) openStories("single", id); }
   });
-  card.addEventListener("pointerup", end);
-  card.addEventListener("pointercancel", () => { reset(); card.style.transform = ""; });
+  el.addEventListener("pointerup", end);
+  el.addEventListener("pointercancel", () => { reset(); card.style.transform = ""; });
   card.addEventListener("click", (e) => {
     if (Date.now() - dragEndedAt < 350) return;
     if (e.target.closest("[data-add-why]")) { const id = state.feed?.ids[state.feed.index]; if (id) askWhy(id); return; }
@@ -1906,7 +1929,7 @@ async function diagnostics() {
   return [
     `Edition ${VERSION}, ${new Date().toISOString()}`,
     navigator.userAgent,
-    `Home Screen app: ${matchMedia("(display-mode: standalone)").matches || navigator.standalone ? "yes" : "no"}; screen ${innerWidth}x${innerHeight}; offline copy: ${navigator.serviceWorker?.controller ? "yes" : "no"}`,
+    `Home Screen app: ${matchMedia("(display-mode: standalone)").matches || navigator.standalone ? "yes" : "no"}; window ${innerWidth}x${innerHeight}; screen height ${fit.screen}; app height ${fit.used}${fit.short ? " (page was short, sized to screen)" : ""}; bottom inset ${getComputedStyle(document.documentElement).getPropertyValue("--safe-b").trim() || "env"}; offline copy: ${navigator.serviceWorker?.controller ? "yes" : "no"}`,
     `Items: ${c.inbox} inbox, ${c.queued} queued, ${c.done} done, ${c.archived} let go; storage ${est ? `${mb(est.usage)} of ${mb(est.quota)}` : "unknown"}`,
     `Anthropic key: ${ai.settings.enabled() ? "set" : "none"}; Perplexity key: ${ai.settings.pplxEnabled() ? "set" : "none"}; relay: ${relay ? new URL(relay).host : "none"}`,
     `Problems (${problems.length}):`,

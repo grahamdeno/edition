@@ -42,7 +42,7 @@
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { margin: 0; height: 100%; width: 100%; overflow: hidden; overscroll-behavior: none; background: var(--bg); color: var(--text); }
 body {
-  position: fixed; inset: 0;
+  position: fixed; top: 0; left: 0; right: 0; height: var(--app-h, 100%);
   font: 400 15px/1.5 var(--sans);
   -webkit-text-size-adjust: 100%; text-size-adjust: 100%;
   -webkit-user-select: none; user-select: none; touch-action: manipulation;
@@ -171,7 +171,7 @@ a { color: inherit; text-decoration: none; }
 
 /* ================= Corner control (front page) ================= */
 .corner {
-  position: fixed; z-index: 21; right: calc(var(--safe-r) + 18px); bottom: calc(var(--safe-b) + 18px);
+  position: fixed; z-index: 21; right: calc(var(--safe-r) + 18px); bottom: auto; top: calc(var(--app-h, 100vh) - var(--safe-b) - 18px - 56px);
   display: flex; flex-direction: column; align-items: flex-end; gap: 10px;
   transition: opacity 0.6s ease, transform 0.6s ease;
 }
@@ -224,10 +224,10 @@ a { color: inherit; text-decoration: none; }
 .fab .i { width: 24px; height: 24px; transition: transform 0.2s ease; }
 .corner.open { z-index: 27; opacity: 1; transform: none; } /* + stays above the ring, as its close button */
 .corner.open .fab .i { transform: rotate(45deg); }
-.scrim { position: fixed; inset: 0; z-index: 20; background: rgba(0, 0, 0, 0.45); }
+.scrim { position: fixed; top: 0; left: 0; right: 0; height: var(--app-h, 100%); z-index: 20; background: rgba(0, 0, 0, 0.45); }
 
 /* ================= Reader (stories) ================= */
-.reader { position: fixed; inset: 0; z-index: 22; background: var(--bg); }
+.reader { position: fixed; top: 0; left: 0; right: 0; height: var(--app-h, 100%); z-index: 22; background: var(--bg); }
 .reader-inner { position: relative; height: 100%; max-width: 560px; margin: 0 auto; }
 .segs {
   position: absolute; z-index: 3; top: calc(var(--safe-t) + 10px); left: var(--gutter-l); right: var(--gutter-r);
@@ -304,7 +304,7 @@ a { color: inherit; text-decoration: none; }
 /* ================= Sheets ================= */
 /* The wrap keeps the sheet clear of the status bar and notch: a sheet is never taller than the space below it. */
 .sheet-wrap {
-  position: fixed; inset: 0; z-index: 30; background: rgba(0, 0, 0, 0.55);
+  position: fixed; top: 0; left: 0; right: 0; height: var(--app-h, 100%); z-index: 30; background: rgba(0, 0, 0, 0.55);
   display: flex; align-items: flex-end; justify-content: center; padding-top: calc(var(--safe-t) + 12px);
 }
 .sheet {
@@ -388,14 +388,14 @@ a { color: inherit; text-decoration: none; }
 
 /* ================= Toast and drop ================= */
 .toast {
-  position: fixed; z-index: 40; left: var(--gutter-l); right: calc(var(--safe-r) + 92px); bottom: calc(var(--safe-b) + 22px); max-width: 420px;
+  position: fixed; z-index: 40; left: var(--gutter-l); right: calc(var(--safe-r) + 92px); bottom: auto; top: calc(var(--app-h, 100vh) - var(--safe-b) - 22px); transform: translateY(-100%); max-width: 420px;
   min-height: 48px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-left: 16px;
   background: rgba(36, 37, 42, 0.96); border: 1px solid var(--line); border-radius: 24px; font-size: 14px;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
 }
-.reader ~ .toast, .toast.high { bottom: calc(var(--safe-b) + 92px); right: var(--gutter-r); }
+.reader ~ .toast, .toast.high { top: calc(var(--app-h, 100vh) - var(--safe-b) - 92px); right: var(--gutter-r); }
 .toast button { min-height: 48px; padding: 0 16px; font-size: 14px; font-weight: 600; color: var(--accent); }
-.dropzone { position: fixed; inset: 0; z-index: 50; display: none; place-items: center; background: rgba(14, 15, 17, 0.92); border: 2px dashed var(--accent); font: 400 34px var(--serif); color: var(--accent); }
+.dropzone { position: fixed; top: 0; left: 0; right: 0; height: var(--app-h, 100%); z-index: 50; display: none; place-items: center; background: rgba(14, 15, 17, 0.92); border: 2px dashed var(--accent); font: 400 34px var(--serif); color: var(--accent); }
 .dropzone.on { display: grid; }
 
 @media (prefers-reduced-motion: reduce) { .story, .corner, .verdicts, .reader-top { transition: none; } .fab.spin, .fab.spin::after { animation: none; } }
@@ -404,7 +404,8 @@ a { color: inherit; text-decoration: none; }
 .diag { width: 100%; padding: 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--panel); color: var(--muted); font: 400 16px/1.4 var(--mono); resize: none; }
 
 /* ================= Feed (the opening screen) ================= */
-.feed { position: fixed; inset: 0; z-index: 18; background: var(--bg); }
+.feed { position: fixed; top: 0; left: 0; right: 0; height: var(--app-h, 100%); z-index: 18; background: var(--bg); touch-action: none; }
+.feed:has(.end-card) { touch-action: pan-y; } /* the finish card scrolls */
 .feed-inner { position: relative; height: 100%; max-width: 560px; margin: 0 auto; overflow: hidden; }
 .feed .segs { top: calc(var(--safe-t) + 18px); }
 .feed-top {
@@ -457,7 +458,7 @@ a { color: inherit; text-decoration: none; }
 .fab { touch-action: none; -webkit-touch-callout: none; }
 .corner.open { z-index: 27; opacity: 1; transform: none; } /* + stays above the ring, as its close button */
 .corner.open .fab .i { transform: rotate(45deg); }
-.ringx { position: fixed; inset: 0; z-index: 26; opacity: 0; transition: opacity 0.14s; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.ringx { position: fixed; top: 0; left: 0; right: 0; height: var(--app-h, 100%); z-index: 26; opacity: 0; transition: opacity 0.14s; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 .ringx.on { opacity: 1; }
 .ring-bg {
   position: fixed; width: 400px; height: 400px; margin: -200px 0 0 -200px; border-radius: 50%;
@@ -521,3 +522,9 @@ a { color: inherit; text-decoration: none; }
 .sug-row .chips { margin: 0; padding: 0; flex-wrap: wrap; overflow: visible; }
 .chip.unlearn { display: inline-flex; align-items: center; gap: 6px; }
 .chip.unlearn .i { width: 14px; height: 14px; color: var(--muted); }
+
+/* iOS 26 Home Screen apps can get a page shorter than the screen. Edition then
+   sizes itself to the real screen (--app-h, set in app.js) and keeps clear of
+   the home bar itself. */
+html.short-vp { --safe-b: max(env(safe-area-inset-bottom, 0px), 30px); }
+html, body { height: var(--app-h, 100%); }
