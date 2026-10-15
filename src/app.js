@@ -27,7 +27,7 @@ import { tick, unlock, soundOn, setSound } from "./feel.js";
 import { I } from "./icons.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "3.3.1";
+export const VERSION = "3.4.0";
 const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 
 const KIND_LABEL = { link: "Link", note: "Note", quote: "Quote", photo: "Photo", pdf: "PDF", text: "Text", video: "Video", audio: "Audio", file: "File" };
@@ -56,6 +56,8 @@ const state = {
   libQuery: "",
   enriching: new Set(),
   reader: null,      // { mode: "edition" | "inbox" | "single", ids: [], index }
+  feed: null,        // { ids: [], index, total, turned: Set, tally }
+  capWhy: "",
 };
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -76,9 +78,9 @@ async function boot() {
   if (migrated) toast(`Brought over ${migrated} saved item${migrated === 1 ? "" : "s"} from the old version.`);
   else if (seeded) toast(`Loaded ${seeded} sample items. Remove them in Settings.`);
   wireGlobal();
+  openFeed(); // new saves (including anything just shared) come first in the feed
   startCoin();
   enrichPending();
-  if (shared || linked) openStories("inbox");
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 }
 
@@ -209,6 +211,12 @@ async function afterCapture(list) {
   list = list.filter(Boolean);
   if (!list.length) return;
   list.forEach((it) => { state.items = [it, ...state.items.filter((i) => i.id !== it.id)]; });
+  // New saves show up in the feed right where you are.
+  if (state.feed) {
+    const f = state.feed;
+    f.ids.splice(f.index, 0, ...list.map((i) => i.id));
+    f.total += list.length;
+  }
   tick(true);
   refresh();
   toast(`Saved ${list.length === 1 ? "1 item" : list.length + " items"} to your inbox.`, {
@@ -283,6 +291,7 @@ async function enrichPending() {
         state.enriching.delete(next.id);
         // Refresh the story only if it is the one on screen, so reading is never interrupted.
         if (state.reader && state.reader.ids[state.reader.index] === next.id) renderStory();
+        if (state.feed && state.feed.ids[state.feed.index] === next.id && !feedDrag) renderFeed();
       }
     }
   } finally {
@@ -319,6 +328,7 @@ async function findNew(statusEl) {
 
 function refresh() {
   if (state.reader) renderStory();
+  if (state.feed) renderFeed();
   renderFront();
 }
 
@@ -368,6 +378,7 @@ function renderFront() {
     <header class="masthead">
       <h1>The Edition</h1>
       <p>Today's front page, built from your saves. Finish it and you're done.</p>
+      <button class="pill-btn feed-btn" type="button" data-act="feed">${I.read}Back to the feed</button>
     </header>
     ${c.inbox ? `<button class="banner" type="button" data-act="sort"><span class="dot"></span><span class="t">${c.inbox} new save${c.inbox === 1 ? "" : "s"} to sort</span>${I.next}</button>` : ""}
     ${open.length > 1 ? `<div class="chips" role="group" aria-label="Time you have">${TIME.map((t, i) => `<button class="chip" type="button" data-time="${i}" aria-pressed="${state.time === i}">${t.label}</button>`).join("")}</div>` : ""}
@@ -386,19 +397,15 @@ function renderFront() {
       <span class="label">Tideline</span>
       <h2>Fading</h2>
       <p class="rising">Untouched for ${FADE_DAYS / 7} weeks, a save fades out of your editions. It waits here until you decide.</p>
-      <div class="tide">${waiting.map(({ item, days, left, faded }) => `<div class="tide-row ${faded ? "faded" : ""}">
-        <span class="bar" style="opacity:${faded ? 0.18 : Math.max(0.3, left / 7).toFixed(2)}"></span>
-        <button class="txt" type="button" data-open="${esc(item.id)}"><span class="t">${esc(headline(item))}</span>
-          <span class="s">${faded ? "Faded. Your call." : `Fades in ${left} day${left === 1 ? "" : "s"}`}</span></button>
-        ${faded
-          ? `<button class="rescue ghost" type="button" data-letgo="${esc(item.id)}">Let go</button><button class="rescue" type="button" data-keep="${esc(item.id)}">Keep</button>`
-          : `<button class="rescue" type="button" data-rescue="${esc(item.id)}">Read today</button>`}</div>`).join("")}</div>
+      ${tideHtml(waiting)}
     </section>` : ""}
   </main>
   <div class="corner" id="corner">
     <div class="fan" id="fan">
       <button type="button" class="primary" data-act="add">${I.plus}Add</button>
-      <button type="button" data-act="sort">${I.inbox}Sort inbox${c.inbox ? ` <span class="count">${c.inbox}</span>` : ""}</button>
+      ${state.feed
+        ? `<button type="button" data-act="front">${I.edition}Front page</button>`
+        : `<button type="button" data-act="feed">${I.read}Back to the feed</button>`}
       <button type="button" data-act="library">${I.search}Search</button>
       <button type="button" data-act="settings">${I.settings}Settings</button>
     </div>
@@ -408,6 +415,40 @@ function renderFront() {
   front.scrollTop = scrollTop;
   hydrate(front);
   bindFront();
+}
+
+/** Tideline rows: faded saves wait for Keep or Let go; ones close to fading offer Read today. */
+function tideHtml(waiting) {
+  return `<div class="tide">${waiting.map(({ item, left, faded }) => `<div class="tide-row ${faded ? "faded" : ""}">
+    <span class="bar" style="opacity:${faded ? 0.18 : Math.max(0.3, left / 7).toFixed(2)}"></span>
+    <button class="txt" type="button" data-open="${esc(item.id)}"><span class="t">${esc(headline(item))}</span>
+      <span class="s">${faded ? "Faded. Your call." : `Fades in ${left} day${left === 1 ? "" : "s"}`}</span></button>
+    ${faded
+      ? `<button class="rescue ghost" type="button" data-letgo="${esc(item.id)}">Let go</button><button class="rescue" type="button" data-keep="${esc(item.id)}">Keep</button>`
+      : `<button class="rescue" type="button" data-rescue="${esc(item.id)}">Read today</button>`}</div>`).join("")}</div>`;
+}
+
+function bindTide(root, rerender) {
+  root.querySelectorAll("[data-rescue]").forEach((b) => b.addEventListener("click", async () => {
+    await addToEdition(b.dataset.rescue);
+    tick(true);
+    rerender();
+    toast("Added to today's edition.");
+  }));
+  root.querySelectorAll("[data-keep]").forEach((b) => b.addEventListener("click", async () => {
+    const before = byId(b.dataset.keep);
+    await saveItem(restore(before));
+    tick(true);
+    rerender();
+    toast("Kept. Back in your queue for three more weeks.", { action: "Undo", onAction: async () => { await saveItem(before); rerender(); } });
+  }));
+  root.querySelectorAll("[data-letgo]").forEach((b) => b.addEventListener("click", async () => {
+    const before = byId(b.dataset.letgo);
+    await saveItem(applyVerdict(before, VERDICT.LET_GO, { stage: "edition" }));
+    tick(true);
+    rerender();
+    toast("Let go.", { action: "Undo", onAction: async () => { await saveItem(before); rerender(); } });
+  }));
 }
 
 function leadStory(item) {
@@ -455,26 +496,7 @@ function bindFront() {
   front.querySelectorAll("[data-open]").forEach((b) => b.addEventListener("click", () => openStories("single", b.dataset.open)));
   front.querySelectorAll("[data-time]").forEach((b) => b.addEventListener("click", () => { state.time = +b.dataset.time; renderFront(); }));
   front.querySelectorAll("[data-theme]").forEach((b) => b.addEventListener("click", () => { state.libQuery = b.dataset.theme; state.libFilter = 4; openLibrary(); }));
-  front.querySelectorAll("[data-rescue]").forEach((b) => b.addEventListener("click", async () => {
-    await addToEdition(b.dataset.rescue);
-    tick(true);
-    renderFront();
-    toast("Added to today's edition.");
-  }));
-  front.querySelectorAll("[data-keep]").forEach((b) => b.addEventListener("click", async () => {
-    const before = byId(b.dataset.keep);
-    await saveItem(restore(before));
-    tick(true);
-    renderFront();
-    toast("Kept. Back in your queue for three more weeks.", { action: "Undo", onAction: async () => { await saveItem(before); renderFront(); } });
-  }));
-  front.querySelectorAll("[data-letgo]").forEach((b) => b.addEventListener("click", async () => {
-    const before = byId(b.dataset.letgo);
-    await saveItem(applyVerdict(before, VERDICT.LET_GO, { stage: "edition" }));
-    tick(true);
-    renderFront();
-    toast("Let go.", { action: "Undo", onAction: async () => { await saveItem(before); renderFront(); } });
-  }));
+  bindTide(front, renderFront);
   const more = $('[data-act="one-more"]', front);
   if (more) more.addEventListener("click", oneMore);
   const disc = $('[data-act="discover"]', front);
@@ -483,6 +505,8 @@ function bindFront() {
   app.querySelectorAll('[data-act="add"]').forEach((b) => b.addEventListener("click", () => { closeMenu(); openAdd(); }));
   app.querySelectorAll('[data-act="library"]').forEach((b) => b.addEventListener("click", () => { closeMenu(); state.libQuery = ""; openLibrary(); }));
   app.querySelectorAll('[data-act="settings"]').forEach((b) => b.addEventListener("click", () => { closeMenu(); openSettings(); }));
+  app.querySelectorAll('[data-act="front"]').forEach((b) => b.addEventListener("click", () => { closeMenu(); closeFeed(); }));
+  app.querySelectorAll('[data-act="feed"]').forEach((b) => b.addEventListener("click", () => { closeMenu(); openFeed(); }));
 
   // The corner button: tap to open the menu; it dims while you scroll and after a few idle seconds.
   const corner = $("#corner"), fab = $("#fab");
@@ -583,7 +607,7 @@ function openStories(mode, startId) {
   document.body.appendChild(el);
   el.querySelector("[data-close]").addEventListener("click", closeReader);
   bindStoryGestures(el);
-  bindPull({ scroller: $("#story", el), target: $("#story", el), host: $(".reader-inner", el), label: "Release for the front page", onBack: closeReader });
+  bindPull({ scroller: $("#story", el), target: $("#story", el), host: $(".reader-inner", el), label: state.feed ? "Release to go back" : "Release for the front page", onBack: closeReader });
   el.addEventListener("pointerdown", wakeReader, true);
   renderStory();
   wakeReader();
@@ -594,6 +618,7 @@ function closeReader() {
   state.reader = null;
   clearTimeout(readerTimer);
   renderFront();
+  if (state.feed) renderFeed();
 }
 
 let readerTimer = 0;
@@ -697,6 +722,15 @@ async function storyVerdict(id, verdict) {
   const r = state.reader;
   const before = byId(id);
   if (!r || !before) return;
+  // Opened from the feed: the verdict closes the reader and the feed moves on.
+  if (r.mode === "single" && state.feed && state.feed.ids.includes(id)) {
+    $(".reader")?.remove();
+    state.reader = null;
+    clearTimeout(readerTimer);
+    renderFront();
+    feedVerdict(id, verdict);
+    return;
+  }
   const stage = before.status === STATUS.INBOX ? "inbox" : "edition";
   // Keeping a faded item resets its clock instead of counting another deferral.
   const after = verdict === VERDICT.LATER && isFaded(before) ? restore(before) : applyVerdict(before, verdict, { stage });
@@ -773,6 +807,324 @@ function bindStoryGestures(el) {
   });
 }
 
+/* ================= Feed (the opening screen) =================
+ * The app opens on a feed: one card at a time, new saves first, then today's
+ * edition, then a finish card. Each card starts face down on why you saved it
+ * (your words when you gave them) and turns over with a tap. Swipe up for the
+ * next card and down for the one before; on the first card, pull down for the
+ * front page. The verdicts sit in a rail on the right.
+ */
+
+const FEED_STEP = 70;
+let feedDrag = false, dragEndedAt = 0;
+
+function feedIds() {
+  const inbox = state.items.filter((i) => i.status === STATUS.INBOX).sort((a, b) => a.created - b.created).map((i) => i.id);
+  const today = editionView(state.items, state.edition).open.map((i) => i.id).filter((id) => !inbox.includes(id));
+  return [...inbox, ...today];
+}
+
+function openFeed() {
+  topUpEdition();
+  const ids = feedIds();
+  state.feed = { ids, index: 0, total: ids.length, turned: new Set(), tally: { done: 0, later: 0, letGo: 0 } };
+  $(".feed")?.remove();
+  const el = document.createElement("div");
+  el.className = "feed";
+  el.innerHTML = `<div class="feed-inner">
+    <div class="segs" id="feed-segs" aria-hidden="true"></div>
+    <div class="feed-top"><span class="where" id="feed-where"></span><span class="left" id="feed-left"></span></div>
+    <div class="feed-card" id="feed-card"></div>
+    <div class="rail" id="rail" role="group" aria-label="Verdict"></div>
+    <div class="pull-tip" id="feed-tip" aria-hidden="true">${I.down}<span>Release for the front page</span></div>
+  </div>`;
+  document.body.appendChild(el);
+  bindFeedGestures(el);
+  renderFeed();
+  renderFront(); // the menu now offers the front page
+}
+
+function closeFeed() {
+  $(".feed")?.remove();
+  state.feed = null;
+  renderFront();
+}
+
+/** What a face-down card says: your reason first, else what you saved it for. */
+function hookFor(item) {
+  const what = {
+    read: "Something you meant to read.", watch: "Something you meant to watch.", listen: "Something you meant to listen to.",
+    reference: "Something you kept for reference.", idea: "An idea you wanted to come back to.", task: "Something you meant to act on.",
+  };
+  const byKind = {
+    quote: "Words you wanted to keep.", note: "A thought you wrote down.", photo: "A picture you kept.", video: what.watch,
+    audio: what.listen, pdf: "A document you saved.", text: "A document you saved.", file: "A file you saved.", link: what.read,
+  };
+  const since = item.status === STATUS.INBOX ? (ago(item.created) === "today" ? "Saved today" : `Saved ${ago(item.created)}`) : `From ${ago(item.created)}`;
+  const sub = item.ai?.why || item.summary || "";
+  if (item.why) return { kicker: since, lead: "You wrote when you saved it:", big: `“${item.why}”`, mine: true, sub };
+  return { kicker: since, lead: "", big: what[item.intent] || byKind[item.kind] || "Something you saved.", mine: false, sub };
+}
+
+function feedMeta(item) {
+  return [KIND_LABEL[item.kind] || "Item", `${estimateMinutes(item)} min`, item.url ? host(item.url) : item.author || ""].filter(Boolean).join(" · ");
+}
+
+function renderFeed() {
+  const f = state.feed;
+  const el = $(".feed");
+  if (!f || !el) return;
+  const card = $("#feed-card", el), rail = $("#rail", el);
+  const settled = f.total - f.ids.length;
+  $("#feed-segs", el).innerHTML = f.total > 1 ? Array.from({ length: f.total }, (_, i) => `<span class="${i < settled + f.index + 1 ? "on" : ""}"></span>`).join("") : "";
+  const id = f.ids[f.index];
+  const item = id && byId(id);
+  card.style.transition = "none";
+  card.style.transform = "";
+  card.style.opacity = "";
+
+  if (!item) {
+    $("#feed-where", el).textContent = dateLabel();
+    $("#feed-left", el).textContent = "";
+    rail.innerHTML = "";
+    card.className = "feed-card end-card";
+    card.innerHTML = feedEnd();
+    bindFeedEnd(card);
+    return;
+  }
+
+  const inbox = item.status === STATUS.INBOX;
+  const left = f.ids.slice(f.index).reduce((s, x) => s + estimateMinutes(byId(x) || {}), 0);
+  $("#feed-where", el).textContent = inbox ? "New save" : "Today's edition";
+  $("#feed-left", el).textContent = `${settled + f.index + 1} of ${f.total} · ${left} min left`;
+
+  const turned = f.turned.has(id);
+  const h = hookFor(item);
+  const pic = picFor(item);
+  const words = item.kind === KIND.QUOTE || item.kind === KIND.NOTE;
+  card.className = "feed-card" + (turned ? " turned" : "");
+  card.innerHTML = `<div class="flip">
+    <button class="face hook-face" type="button" data-turn aria-label="Turn the card over" ${turned ? 'tabindex="-1"' : ""}>
+      <span class="kicker">${esc(h.kicker)}</span>
+      <span class="hook-mid">
+        ${h.lead ? `<span class="lead-in">${esc(h.lead)}</span>` : ""}
+        <span class="big ${h.mine ? "mine" : ""}">${esc(h.big)}</span>
+        ${h.sub ? `<span class="sub">${esc(h.sub)}</span>` : ""}
+      </span>
+      <span class="hook-foot"><span>${esc(feedMeta(item))}</span><span class="turn">Tap to turn ${I.requeue}</span></span>
+    </button>
+    <button class="face card-face" type="button" data-open-card aria-label="Open ${esc(headline(item))}" ${turned ? "" : 'tabindex="-1"'}>
+      ${pic ? `<span class="pic">${pic}</span>` : ""}
+      <span class="kicker">${esc(feedMeta(item))}</span>
+      ${words
+        ? `<span class="said ${String(item.text || "").length > 160 ? "long" : ""}">${esc(headline(item))}</span>${item.author ? `<span class="who">${esc(item.author)}</span>` : ""}`
+        : `<span class="ttl">${esc(item.title)}</span>`}
+      ${item.summary && !words ? `<span class="sub">${esc(item.summary)}</span>` : ""}
+      ${item.why ? `<span class="mine-line">You: “${esc(item.why)}”</span>` : ""}
+      <span class="open-hint">Tap to open ${I.next}</span>
+    </button>
+  </div>`;
+  hydrate(card);
+  requestAnimationFrame(() => { card.style.transition = ""; });
+
+  const keep = inbox || isFaded(item);
+  const b = (act, label, icon, primary) => `<span class="rail-item"><button type="button" class="${primary ? "primary" : ""}" data-rail="${act}" aria-label="${label}">${icon}</button><span>${label}</span></span>`;
+  rail.innerHTML = b("read", "Read", I.read, true) + b(VERDICT.DONE, "Done", I.done) + b(VERDICT.LATER, keep ? "Keep" : "Later", keep ? I.keep : I.later) + b(VERDICT.LET_GO, "Let go", I.letGo);
+  rail.querySelectorAll("[data-rail]").forEach((x) => x.addEventListener("click", () => {
+    if (x.dataset.rail === "read") openStories("single", id);
+    else feedVerdict(id, x.dataset.rail);
+  }));
+}
+
+function turnCard() {
+  const f = state.feed;
+  const id = f && f.ids[f.index];
+  if (!id) return;
+  f.turned.add(id);
+  const card = $("#feed-card");
+  card.classList.add("turned");
+  card.querySelector("[data-turn]")?.setAttribute("tabindex", "-1");
+  card.querySelector("[data-open-card]")?.removeAttribute("tabindex");
+  tick();
+}
+
+function feedEnd() {
+  const f = state.feed;
+  const c = counts(state.items);
+  const t = f.tally;
+  const waiting = fading(state.items, state.edition);
+  if (!state.items.length) {
+    return `<div class="end-inner"><h1>Nothing here yet.</h1>
+      <p class="summary">Save a link, a thought, a photo or a file, and say why if you like. It comes back here as a card.</p>
+      <button class="pill-btn" type="button" data-end="add">Add something</button></div>`;
+  }
+  const said = [t.done && `${t.done} done`, t.later && `${t.later} kept for later`, t.letGo && `${t.letGo} let go`].filter(Boolean).join(", ");
+  return `<div class="end-inner">
+    <span class="label">${esc(dateLabel())}</span>
+    <h1>${f.total ? "You're done." : "Nothing new today."}</h1>
+    <p class="summary">${said ? `${cap(said)}. ` : ""}${f.total ? "That's today's feed. Tomorrow's is set in the morning." : "Your edition is clear and nothing new is waiting."}</p>
+    ${waiting.length ? `<section class="end-sec"><span class="label">Fading</span>
+      <p class="note">Untouched for ${FADE_DAYS / 7} weeks, a save fades out of your editions. It waits here until you decide.</p>
+      ${tideHtml(waiting)}</section>` : ""}
+    <div class="end-acts">
+      ${c.queued ? `<button class="pill-btn" type="button" data-end="more">Read one more</button>` : ""}
+      ${ai.settings.canDiscover() ? `<button class="pill-btn ghost" type="button" data-end="discover">Find something new</button>` : ""}
+      <button class="pill-btn ghost" type="button" data-end="front">Front page</button>
+    </div>
+    <span class="st" id="feed-st" role="status"></span>
+  </div>`;
+}
+
+function bindFeedEnd(card) {
+  bindTide(card, renderFeed);
+  card.querySelectorAll("[data-open]").forEach((b) => b.addEventListener("click", () => openStories("single", b.dataset.open)));
+  card.querySelector('[data-end="add"]')?.addEventListener("click", openAdd);
+  card.querySelector('[data-end="front"]')?.addEventListener("click", closeFeed);
+  card.querySelector('[data-end="more"]')?.addEventListener("click", async () => {
+    const ids = new Set(state.edition.ids);
+    const extra = buildEdition(state.items.filter((i) => !ids.has(i.id)), null, { size: 1 });
+    if (!extra.ids.length) { toast("The queue is empty."); return; }
+    await addToEdition(extra.ids[0]);
+    const f = state.feed;
+    f.ids.push(extra.ids[0]);
+    f.total += 1;
+    renderFeed();
+  });
+  const disc = card.querySelector('[data-end="discover"]');
+  if (disc) disc.addEventListener("click", async () => {
+    disc.disabled = true;
+    const before = new Set(state.items.map((i) => i.id));
+    await findNew($("#feed-st"));
+    disc.disabled = false;
+    const fresh = state.items.filter((i) => !before.has(i.id)).map((i) => i.id);
+    if (fresh.length && state.feed) { state.feed.ids.push(...fresh); state.feed.total += fresh.length; renderFeed(); }
+  });
+}
+
+async function feedVerdict(id, verdict) {
+  const f = state.feed;
+  const before = byId(id);
+  if (!f || !before) return;
+  const stage = before.status === STATUS.INBOX ? "inbox" : "edition";
+  const after = verdict === VERDICT.LATER && isFaded(before) ? restore(before) : applyVerdict(before, verdict, { stage });
+  await saveItem(after);
+  tick(true);
+  const key = verdict === VERDICT.DONE ? "done" : verdict === VERDICT.LET_GO ? "letGo" : "later";
+  f.tally[key]++;
+  const at = f.ids.indexOf(id);
+  if (at >= 0) f.ids.splice(at, 1);
+  if (f.index > f.ids.length) f.index = f.ids.length;
+  slideFeed(verdict === VERDICT.LET_GO ? "left" : "up");
+  const words = {
+    [VERDICT.LET_GO]: "Let go.",
+    [VERDICT.LATER]: stage === "inbox" ? "Kept for a future edition." : after.fadedAt ? "Moved later eight times. It's waiting under Fading." : "Moved to a later edition.",
+    [VERDICT.DONE]: "Marked done.",
+  };
+  toast(words[verdict], {
+    action: "Undo",
+    onAction: async () => {
+      await saveItem(before);
+      f.tally[key]--;
+      if (state.feed === f) { f.ids.splice(at, 0, id); f.index = at; renderFeed(); }
+      renderFront();
+    },
+  });
+  renderFront();
+}
+
+/** Animate the current card away, then show whatever card is now current. */
+function slideFeed(dir) {
+  const card = $("#feed-card");
+  if (!card) { renderFeed(); return; }
+  card.style.transition = "transform 0.16s ease, opacity 0.16s ease";
+  card.style.opacity = "0";
+  card.style.transform = dir === "left" ? "translateX(-60px)" : dir === "down" ? "translateY(80px)" : "translateY(-80px)";
+  setTimeout(() => {
+    renderFeed();
+    const next = $("#feed-card");
+    if (!next) return;
+    next.style.transition = "none";
+    next.style.opacity = "0";
+    next.style.transform = dir === "down" ? "translateY(-50px)" : "translateY(50px)";
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      next.style.transition = "transform 0.2s ease, opacity 0.2s ease";
+      next.style.opacity = "";
+      next.style.transform = "";
+    }));
+  }, 150);
+}
+
+function stepFeed(step) {
+  const f = state.feed;
+  if (!f) return false;
+  const to = f.index + step;
+  if (to < 0 || to > f.ids.length) return false;
+  f.index = to;
+  slideFeed(step > 0 ? "up" : "down");
+  return true;
+}
+
+/*
+ * Vertical swipes, TikTok style: up for next, down for the one before. On the
+ * first card a pull down lights "Release for the front page" past 90px. Taps
+ * on a card turn it (face down) or open it (face up), unless the finger moved.
+ */
+function bindFeedGestures(el) {
+  const card = $("#feed-card", el), tip = $("#feed-tip", el);
+  let y0 = null, x0 = 0, t0 = 0, dy = 0, lit = false, moved = false;
+  const reset = () => {
+    y0 = null; feedDrag = false; lit = false;
+    tip.style.opacity = ""; tip.classList.remove("go");
+  };
+  card.addEventListener("pointerdown", (e) => {
+    if (!state.feed || e.button > 0) return;
+    if (card.classList.contains("end-card") && card.scrollTop > 0) return;
+    if (e.target.closest(".rescue, .pill-btn, .tide-row button, iframe, video, audio")) return;
+    y0 = e.clientY; x0 = e.clientX; t0 = Date.now(); dy = 0; moved = false;
+  });
+  card.addEventListener("pointermove", (e) => {
+    if (y0 == null) return;
+    dy = e.clientY - y0;
+    const dx = e.clientX - x0;
+    if (!moved && Math.abs(dy) < 8) return;
+    if (!moved && Math.abs(dx) > Math.abs(dy)) { reset(); return; }
+    if (!moved) { moved = true; feedDrag = true; try { card.setPointerCapture(e.pointerId); } catch { /* capture can fail mid-gesture */ } }
+    const f = state.feed;
+    const atStart = f.index === 0, atEnd = f.index >= f.ids.length;
+    const resist = (dy > 0 && atStart) || (dy < 0 && atEnd) ? 0.45 : 1;
+    card.style.transition = "none";
+    card.style.transform = `translateY(${dy * resist}px)`;
+    if (atStart && dy > 0) {
+      tip.style.opacity = String(Math.min(1, dy / PULL));
+      const go = dy >= PULL;
+      if (go && !lit) tick();
+      lit = go;
+      tip.classList.toggle("go", go);
+    }
+  });
+  const end = () => {
+    if (y0 == null) return;
+    const f = state.feed;
+    const fast = Math.abs(dy) > 30 && Math.abs(dy) / Math.max(1, Date.now() - t0) > 0.5;
+    const wasMoved = moved, d = dy, go = lit;
+    reset();
+    if (!wasMoved) return;
+    card.style.transition = "transform 0.2s ease";
+    card.style.transform = "";
+    dragEndedAt = Date.now(); // the click that follows a drag must not turn or open the card
+    if (f.index === 0 && go) { closeFeed(); return; }
+    if (d < -FEED_STEP || (fast && d < 0)) stepFeed(1);
+    else if (d > FEED_STEP || (fast && d > 0)) stepFeed(-1);
+  };
+  card.addEventListener("pointerup", end);
+  card.addEventListener("pointercancel", () => { reset(); card.style.transform = ""; });
+  card.addEventListener("click", (e) => {
+    if (Date.now() - dragEndedAt < 350) return;
+    if (e.target.closest("[data-turn]")) turnCard();
+    else if (e.target.closest("[data-open-card]")) { const id = state.feed?.ids[state.feed.index]; if (id) openStories("single", id); }
+  });
+}
+
 /* ================= Add (sheet) ================= */
 
 function openAdd() {
@@ -783,6 +1135,8 @@ function openAdd() {
       <label class="sr-only" for="cap-text">Link, note, quote or anything</label>
       <textarea id="cap-text" placeholder="Paste a link or a quote, or type a thought.">${esc(state.capText)}</textarea>
     </div>
+    <div class="field why-field"><label for="cap-why">Why are you saving this? <span>Optional. It's the first thing you'll see when it comes back.</span></label>
+      <input id="cap-why" type="text" autocomplete="off" maxlength="140" placeholder="Read this before the roadmap review" value="${esc(state.capWhy)}"></div>
     <div class="tray" id="cap-tray"></div>
     <ul class="detect" id="cap-detect" aria-live="polite"></ul>
     <span class="st" id="cap-st" role="status">${c.inbox ? `${c.inbox} waiting in your inbox.` : ""}</span>
@@ -802,6 +1156,8 @@ function openAdd() {
     e.preventDefault();
     stageFiles(files);
   });
+  $("#cap-why", wrap).addEventListener("input", (e) => { state.capWhy = e.target.value; });
+  $("#cap-why", wrap).addEventListener("keydown", (e) => { if (e.key === "Enter") saveCapture(); });
   $("#cap-save", wrap).addEventListener("click", saveCapture);
   $("#cap-attach", wrap).addEventListener("click", () => { unlock(); $("#in-any", wrap).click(); });
   $("#cap-paste", wrap).addEventListener("click", pasteIntoBox);
@@ -906,8 +1262,11 @@ async function saveCapture() {
     out.push(await captureFile(f.file, "drop"));
     if (f.url) URL.revokeObjectURL(f.url);
   }
+  const why = (state.capWhy || "").trim().slice(0, 140);
+  if (why) for (const it of out) if (it) { it.why = why; await db.items.put(it); }
   state.capText = "";
   state.capFiles = [];
+  state.capWhy = "";
   closeSheet();
   afterCapture(out);
 }
@@ -1305,6 +1664,12 @@ function wireGlobal() {
     afterCapture(await captureTransfer(e.dataTransfer, "drop"));
   });
   document.addEventListener("keydown", (e) => {
+    // Feed keys on a keyboard: arrows or j/k to move, space to turn the card.
+    if (state.feed && !state.reader && !$(".sheet-wrap") && !e.target.closest?.("input, textarea")) {
+      if (e.key === "ArrowDown" || e.key === "j") { e.preventDefault(); stepFeed(1); return; }
+      if (e.key === "ArrowUp" || e.key === "k") { e.preventDefault(); stepFeed(-1); return; }
+      if (e.key === " " && !e.target.closest?.("button")) { e.preventDefault(); turnCard(); return; }
+    }
     if (e.key !== "Escape") return;
     if ($(".sheet-wrap")) closeSheet();
     else if (state.reader) closeReader();
