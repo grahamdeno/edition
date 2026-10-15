@@ -117,7 +117,11 @@ const ENRICH_SHAPE =
   '"summary": string (one sentence, max 140 chars, on why this might be worth their time; for a photo, what it shows and why it might have been kept), ' +
   '"tags": array of 1-3 lowercase topic words, "minutes": integer time to read or watch, ' +
   '"intent": one of "read", "watch", "listen", "reference", "idea", "task" (what the person most likely saved it for), ' +
-  '"points": array of 0-3 short key points (only for documents, PDFs, long notes or photos of pages; otherwise []), ' +
+  '"points": array of 0-4 short key points (for articles, web pages and documents whose text you have, PDFs, long notes or photos of pages; otherwise []), ' +
+  '"extended": string (only when you have the text of an article, web page or document: a fuller summary in 2 or 3 short paragraphs, 120 to 220 words in all, ' +
+  'covering its argument, its key facts and what it concludes, plainly, separated by a blank line; otherwise ""), ' +
+  '"photo_query": string (2 to 4 concrete words naming a photograph that would represent this well, something a camera could take: ' +
+  'objects, places, scenes; no text, logos or people\'s names; e.g. "whiteboard sticky notes", "mountain road dawn", "stack of books"), ' +
   '"transcript": string (for a photo or screenshot with readable text such as a whiteboard, page, slide or sign: that text, cleaned up, max 1500 chars; otherwise ""), ' +
   '"quote": null, or {"text": string, "author": string} when the item is really a quotation worth keeping as one, ' +
   '"hook": string (see Hook), ' +
@@ -173,12 +177,13 @@ const INTENTS = new Set(["read", "watch", "listen", "reference", "idea", "task"]
  * Enrich one item: title, why it matters, tags, time, what it was saved for,
  * key points, any text in a photo, and whether a note is really a quote.
  * `blob` is the original file for photos, PDFs and text files.
- * Links are judged from the URL and any note; the browser can't fetch the page.
+ * Links are judged from their page's text when the relay could read it,
+ * else from the URL and any note.
  */
 export async function enrich(item, blob, { vocab = [], context = null } = {}) {
   const { parts, item: it } = await contentParts(item, blob);
   parts.push({ type: "text", text: [...describe(it), ...contextLines(context), "", vocabLine(vocab), ENRICH_SHAPE, HOOK_RULE].join("\n") });
-  const out = parseJson(textOf(await call({ content: parts, system: ENRICH_SYSTEM, maxTokens: 1200 })));
+  const out = parseJson(textOf(await call({ content: parts, system: ENRICH_SYSTEM, maxTokens: 2000 })));
   const quote = out.quote && typeof out.quote === "object" && out.quote.text ? { text: clip(out.quote.text, 600), author: clip(out.quote.author, 80) } : null;
   return {
     title: clip(out.title, 120) || item.title,
@@ -191,6 +196,8 @@ export async function enrich(item, blob, { vocab = [], context = null } = {}) {
     quote,
     hook: cleanHook(out.hook),
     book: out.book && typeof out.book === "object" && out.book.title ? { title: clip(out.book.title, 140), author: clip(out.book.author, 80) } : null,
+    extended: clip(out.extended, 1800),
+    photoQuery: clip(String(out.photo_query || "").replace(/["']/g, ""), 60),
   };
 }
 
@@ -240,6 +247,7 @@ function describe(item) {
     item.why && `Why they saved it: ${item.why}`,
     item.summary && `Summary: ${item.summary}`,
     item.text && `Text:\n${item.text.slice(0, 12000)}`,
+    item.pageText && `Text of the page:\n${String(item.pageText).slice(0, 12000)}`,
   ].filter(Boolean);
 }
 

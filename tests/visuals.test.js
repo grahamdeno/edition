@@ -39,3 +39,34 @@ test("relay preview: fetches public pages for Edition only", async () => {
   const other = await relay.fetch(new Request("https://w.test/preview?url=https://a.test", { headers: { origin: "https://evil.test" } }));
   assert.equal(other.status, 403);
 });
+
+import { pageText, pickPhotos } from "../relay/perplexity-relay.js";
+
+test("page text keeps the article and drops menus, scripts and footers", () => {
+  const t = pageText(`<body><nav><p>Home About Contact and other menu items here</p></nav><main><article><h2>Why cycles</h2>
+    <p>Six weeks is long enough to build something meaningful and short enough to feel the deadline.</p>
+    <script>var x = 1</script><p>Teams shape work before betting on it, which keeps scope honest &amp; clear.</p></article></main>
+    <footer><p>Copyright notice that is long enough to be a paragraph</p></footer></body>`);
+  assert.equal(t, "Why cycles\n\nSix weeks is long enough to build something meaningful and short enough to feel the deadline.\n\nTeams shape work before betting on it, which keeps scope honest & clear.");
+});
+
+test("photo picks: big enough, upright first, credited", () => {
+  const out = pickPhotos([
+    { url: "https://x/wide.jpg", width: 2000, height: 1000, creator: "A", provider: "flickr", license: "by", license_version: "2.0", foreign_landing_url: "https://f/1" },
+    { url: "https://x/tiny.jpg", width: 200, height: 300 },
+    { url: "https://x/huge.jpg", thumbnail: "https://t/huge", width: 6000, height: 8000, creator: "B", license: "cc0" },
+  ]);
+  assert.deepEqual(out.map((p) => p.src), ["https://t/huge", "https://x/wide.jpg"]);
+  assert.equal(out[0].license, "CC0");
+  assert.equal(out[1].credit, "A · flickr");
+  assert.equal(out[1].license, "CC BY 2.0");
+});
+
+test("relay photo search goes to Openverse and returns picks", async () => {
+  const seen = [];
+  globalThis.fetch = async (url) => { seen.push(String(url)); return new Response(JSON.stringify({ results: [{ url: "https://x/a.jpg", width: 1200, height: 1600, creator: "C", license: "by" }] }), { status: 200, headers: { "content-type": "application/json" } }); };
+  const res = await relay.fetch(new Request("https://w.test/photo?q=stack%20of%20books", { headers: { origin: "https://grahamdeno.github.io" } }));
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).photos[0].src, "https://x/a.jpg");
+  assert.match(seen[0], /^https:\/\/api\.openverse\.org\/v1\/images\/\?q=stack%20of%20books/);
+});

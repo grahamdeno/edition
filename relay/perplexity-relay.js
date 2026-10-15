@@ -3,7 +3,10 @@
  *
  *   POST /v1/agent      forwards Perplexity calls (below)
  *   GET  /preview?url=  reads a page's preview image, title and description
- *                       (its Open Graph tags), so link cards can show a picture
+ *                       (its Open Graph tags), so link cards can show a picture;
+ *                       with &text=1 also the page's readable text, for a summary
+ *   GET  /photo?q=      finds openly licensed photos for a few words (Openverse),
+ *                       for cards that have no picture of their own
  *
  * Perplexity relay for Edition.
  *
@@ -46,7 +49,8 @@ export default {
     if (!allowed(origin)) return json(403, "This relay only serves Edition.", cors);
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
     const { pathname, searchParams } = new URL(request.url);
-    if (request.method === "GET" && pathname === "/preview") return preview(searchParams.get("url"), cors);
+    if (request.method === "GET" && pathname === "/preview") return preview(searchParams.get("url"), cors, searchParams.get("text") === "1");
+    if (request.method === "GET" && pathname === "/photo") return photo(searchParams.get("q"), cors);
     if (request.method !== "POST" || !PATHS.has(pathname)) return json(404, "Not found.", cors);
     const auth = request.headers.get("authorization");
     if (!auth) return json(401, "No Perplexity key was sent.", cors);
@@ -101,7 +105,7 @@ function decode(s) {
     .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(+n)).replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16)));
 }
 
-async function preview(target, cors) {
+async function preview(target, cors, wantText = false) {
   const out = (status, body) => new Response(JSON.stringify(body), { status, headers: { ...cors, "content-type": "application/json", "cache-control": "public, max-age=86400" } });
   let url;
   try { url = new URL(target); } catch { return out(400, { error: { message: "Not a link." } }); }
@@ -121,12 +125,72 @@ async function preview(target, cors) {
   const reader = res.body.getReader();
   const dec = new TextDecoder();
   let html = "";
-  while (html.length < 400000) {
+  const limit = wantText ? 1500000 : 400000;
+  while (html.length < limit) {
     const { done, value } = await reader.read();
     if (done) break;
     html += dec.decode(value, { stream: true });
-    if (/<\/head>/i.test(html)) break;
+    if (!wantText && /<\/head>/i.test(html)) break;
   }
   try { reader.cancel(); } catch { /* already closed */ }
-  return out(200, parseMeta(html, res.url || url.href));
+  const meta = parseMeta(html, res.url || url.href);
+  return out(200, wantText ? { ...meta, text: pageText(html) } : meta);
+}
+
+/**
+ * The readable text of a page: its article (or main, or body), without
+ * scripts, menus, headers, footers and asides, as paragraphs. Max 15,000 chars.
+ */
+export function pageText(html) {
+  let h = String(html)
+    .replace(/<(script|style|noscript|svg|nav|header|footer|aside|form|iframe|template)\b[\s\S]*?<\/\1>/gi, " ")
+    .replace(/<!--[\s\S]*?-->/g, " ");
+  const pick = (tag) => { const m = h.match(new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)<\\/${tag}>`, "i")); return m ? m[1] : ""; };
+  const scope = pick("article") || pick("main") || pick("body") || h;
+  const paras = [];
+  const re = /<(p|h[1-4]|li|blockquote)\b[^>]*>([\s\S]*?)<\/\1>/gi;
+  let m;
+  while ((m = re.exec(scope)) && paras.join("\n\n").length < 15000) {
+    const t = decode(m[2].replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
+    if (t.length >= 30 || /^h/i.test(m[1]) && t.length > 3) paras.push(t);
+  }
+  const text = paras.length ? paras.join("\n\n") : decode(scope.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
+  return text.slice(0, 15000) || null;
+}
+
+/* ---- Photos for cards without one: Openverse (openly licensed, no key) ----
+ * Returns up to 8 candidates, largest-usable first, each with its credit and
+ * licence so the card can show them as the licence asks.
+ */
+async function photo(q, cors) {
+  const out = (status, body) => new Response(JSON.stringify(body), { status, headers: { ...cors, "content-type": "application/json", "cache-control": "public, max-age=86400" } });
+  const query = String(q || "").trim().slice(0, 100);
+  if (!query) return out(400, { error: { message: "No search words." } });
+  let res;
+  try {
+    res = await fetch(`https://api.openverse.org/v1/images/?q=${encodeURIComponent(query)}&page_size=20&mature=false`, {
+      headers: { "user-agent": "EditionRelay/1.0 (personal reading app)", accept: "application/json" },
+      cf: { cacheTtl: 86400, cacheEverything: true },
+    });
+  } catch {
+    return out(200, { photos: [] });
+  }
+  const data = await res.json().catch(() => ({}));
+  return out(200, { photos: pickPhotos(data.results || []) });
+}
+
+/** Keep photos big enough to fill a phone screen; prefer upright and square ones. */
+export function pickPhotos(results) {
+  return results
+    .filter((r) => r && (r.url || r.thumbnail) && (r.width || 0) >= 500)
+    .map((r) => ({
+      src: (r.width || 0) <= 2600 && r.url ? r.url : r.thumbnail,
+      thumb: r.thumbnail || r.url,
+      credit: [r.creator, r.provider].filter(Boolean).join(" · ") || null,
+      license: r.license ? `CC ${String(r.license).toUpperCase()}${r.license_version ? " " + r.license_version : ""}`.replace("CC CC0", "CC0").replace("CC PDM", "Public domain") : null,
+      link: r.foreign_landing_url || null,
+      tall: (r.height || 0) >= (r.width || 1) * 0.9,
+    }))
+    .sort((a, b) => Number(b.tall) - Number(a.tall))
+    .slice(0, 8);
 }
