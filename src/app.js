@@ -27,7 +27,7 @@ import { tick, unlock, soundOn, setSound } from "./feel.js";
 import { I } from "./icons.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "3.4.0";
+export const VERSION = "3.4.1";
 const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 
 const KIND_LABEL = { link: "Link", note: "Note", quote: "Quote", photo: "Photo", pdf: "PDF", text: "Text", video: "Video", audio: "Audio", file: "File" };
@@ -904,25 +904,26 @@ function renderFeed() {
   const words = item.kind === KIND.QUOTE || item.kind === KIND.NOTE;
   card.className = "feed-card" + (turned ? " turned" : "");
   card.innerHTML = `<div class="flip">
-    <button class="face hook-face" type="button" data-turn aria-label="Turn the card over" ${turned ? 'tabindex="-1"' : ""}>
+    <div class="face hook-face" data-turn role="button" tabindex="${turned ? -1 : 0}" aria-label="Turn the card over">
       <span class="kicker">${esc(h.kicker)}</span>
-      <span class="hook-mid">
-        ${h.lead ? `<span class="lead-in">${esc(h.lead)}</span>` : ""}
-        <span class="big ${h.mine ? "mine" : ""}">${esc(h.big)}</span>
-        ${h.sub ? `<span class="sub">${esc(h.sub)}</span>` : ""}
-      </span>
-      <span class="hook-foot"><span>${esc(feedMeta(item))}</span><span class="turn">Tap to turn ${I.requeue}</span></span>
-    </button>
-    <button class="face card-face" type="button" data-open-card aria-label="Open ${esc(headline(item))}" ${turned ? "" : 'tabindex="-1"'}>
+      ${h.lead ? `<span class="lead-in">${esc(h.lead)}</span>` : ""}
+      <span class="big ${h.mine ? "mine" : ""}">${esc(h.big)}</span>
+      ${h.sub ? `<span class="sub">${esc(h.sub)}</span>` : ""}
+      <span class="meta">${esc(feedMeta(item))}</span>
+      <span class="turn">Tap to turn ${I.requeue}</span>
+    </div>
+    <div class="face card-face" data-open-card role="button" tabindex="${turned ? 0 : -1}" aria-label="Open ${esc(headline(item))}">
       ${pic ? `<span class="pic">${pic}</span>` : ""}
       <span class="kicker">${esc(feedMeta(item))}</span>
       ${words
         ? `<span class="said ${String(item.text || "").length > 160 ? "long" : ""}">${esc(headline(item))}</span>${item.author ? `<span class="who">${esc(item.author)}</span>` : ""}`
         : `<span class="ttl">${esc(item.title)}</span>`}
       ${item.summary && !words ? `<span class="sub">${esc(item.summary)}</span>` : ""}
-      ${item.why ? `<span class="mine-line">You: “${esc(item.why)}”</span>` : ""}
+      ${item.why
+        ? `<span class="mine-line"><span class="k">Why you saved it</span><span class="w">“${esc(item.why)}”</span></span>`
+        : `<button class="add-why" type="button" data-add-why>${I.plus}Add why you saved it</button>`}
       <span class="open-hint">Tap to open ${I.next}</span>
-    </button>
+    </div>
   </div>`;
   hydrate(card);
   requestAnimationFrame(() => { card.style.transition = ""; });
@@ -934,6 +935,29 @@ function renderFeed() {
     if (x.dataset.rail === "read") openStories("single", id);
     else feedVerdict(id, x.dataset.rail);
   }));
+}
+
+/** Add or change your reason for a save; it becomes the face of its card. */
+function askWhy(id) {
+  const item = byId(id);
+  if (!item) return;
+  const wrap = sheet(`
+    <div class="sheet-head"><h2>Why you saved it</h2><button class="x" type="button" data-close aria-label="Close">${I.close}</button></div>
+    <p class="note">${esc(headline(item))}</p>
+    <div class="field"><label for="why-in">In your words</label>
+      <input id="why-in" type="text" autocomplete="off" maxlength="140" placeholder="Read this before the roadmap review" value="${esc(item.why || "")}"></div>
+    <button class="btn primary" type="button" id="why-save">Save</button>`, { label: "Why you saved it" });
+  const input = $("#why-in", wrap);
+  const save = async () => {
+    const why = input.value.trim().slice(0, 140);
+    await saveItem({ ...byId(id), why });
+    closeSheet();
+    renderFeed();
+    if (why) toast("Saved. You'll see it first next time.");
+  };
+  $("#why-save", wrap).addEventListener("click", save);
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter") save(); });
+  input.focus();
 }
 
 function turnCard() {
@@ -1079,7 +1103,7 @@ function bindFeedGestures(el) {
   card.addEventListener("pointerdown", (e) => {
     if (!state.feed || e.button > 0) return;
     if (card.classList.contains("end-card") && card.scrollTop > 0) return;
-    if (e.target.closest(".rescue, .pill-btn, .tide-row button, iframe, video, audio")) return;
+    if (e.target.closest(".rescue, .pill-btn, .tide-row button, .add-why, iframe, video, audio")) return;
     y0 = e.clientY; x0 = e.clientX; t0 = Date.now(); dy = 0; moved = false;
   });
   card.addEventListener("pointermove", (e) => {
@@ -1116,10 +1140,16 @@ function bindFeedGestures(el) {
     if (d < -FEED_STEP || (fast && d < 0)) stepFeed(1);
     else if (d > FEED_STEP || (fast && d > 0)) stepFeed(-1);
   };
+  card.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" || e.target.closest("button")) return;
+    if (e.target.closest("[data-turn]")) turnCard();
+    else if (e.target.closest("[data-open-card]")) { const id = state.feed?.ids[state.feed.index]; if (id) openStories("single", id); }
+  });
   card.addEventListener("pointerup", end);
   card.addEventListener("pointercancel", () => { reset(); card.style.transform = ""; });
   card.addEventListener("click", (e) => {
     if (Date.now() - dragEndedAt < 350) return;
+    if (e.target.closest("[data-add-why]")) { const id = state.feed?.ids[state.feed.index]; if (id) askWhy(id); return; }
     if (e.target.closest("[data-turn]")) turnCard();
     else if (e.target.closest("[data-open-card]")) { const id = state.feed?.ids[state.feed.index]; if (id) openStories("single", id); }
   });

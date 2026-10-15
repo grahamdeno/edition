@@ -414,47 +414,50 @@ a { color: inherit; text-decoration: none; }
 /* ================= Feed (the opening screen) ================= */
 .feed { position: fixed; inset: 0; z-index: 18; background: var(--bg); }
 .feed-inner { position: relative; height: 100%; max-width: 560px; margin: 0 auto; overflow: hidden; }
+.feed .segs { top: calc(var(--safe-t) + 18px); }
 .feed-top {
-  position: absolute; z-index: 3; top: calc(var(--safe-t) + 22px); left: var(--gutter-l); right: var(--gutter-r);
+  position: absolute; z-index: 3; top: calc(var(--safe-t) + 30px); left: var(--gutter-l); right: var(--gutter-r);
   display: flex; justify-content: space-between; gap: 10px; font: 500 11px/1.3 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted);
 }
+/* No visible card: the words sit on the page, low on the screen where the thumb is, as in H3. */
 .feed-card {
-  position: absolute; top: calc(var(--safe-t) + 50px); left: 12px; right: 12px; bottom: calc(var(--safe-b) + 86px);
+  position: absolute; top: calc(var(--safe-t) + 64px); left: 0; right: 0; bottom: calc(var(--safe-b) + 92px);
   perspective: 1400px; touch-action: none; transition: transform 0.2s ease, opacity 0.2s ease;
 }
 .flip { position: relative; width: 100%; height: 100%; transform-style: preserve-3d; transition: transform 0.5s cubic-bezier(0.3, 0.7, 0.2, 1); }
 .feed-card.turned .flip { transform: rotateY(180deg); }
 .face {
-  position: absolute; inset: 0; border-radius: 24px; padding: 24px 92px 26px 22px; text-align: left;
-  display: flex; flex-direction: column; gap: 12px; overflow: hidden;
+  position: absolute; inset: 0; padding: 0 92px 8px var(--gutter-l); text-align: left;
+  display: flex; flex-direction: column; justify-content: flex-end; gap: 14px; overflow: hidden;
   -webkit-backface-visibility: hidden; backface-visibility: hidden;
 }
 .feed-card.turned .hook-face, .feed-card:not(.turned) .card-face { pointer-events: none; }
 .face .kicker { font: 500 11px/1.3 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); }
-.face .sub { font-size: 15px; line-height: 1.5; color: var(--muted); }
+.face .sub { font-size: 16px; line-height: 1.5; color: #B9B2A9; }
+.face .meta { font-size: 13px; color: var(--muted); }
 
 /* Face down: why you saved it */
-.hook-face { background: #1C1915; border: 1px solid rgba(217, 149, 95, 0.45); justify-content: space-between; }
-.hook-mid { display: flex; flex-direction: column; gap: 14px; }
 .lead-in { font-size: 14px; color: var(--muted); }
-.big { font: 400 40px/1.05 var(--serif); text-wrap: balance; overflow-wrap: anywhere; }
-.big.mine { font-style: italic; font-size: 38px; }
-.hook-foot { display: flex; flex-direction: column; gap: 10px; font-size: 13px; color: var(--muted); }
-.hook-foot .turn { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 600; color: #F0C49A; }
-.hook-foot .turn .i { width: 18px; height: 18px; }
+.big { font: 400 46px/1 var(--serif); text-wrap: balance; overflow-wrap: anywhere; }
+.big.mine { font-style: italic; font-size: 42px; line-height: 1.05; }
+.turn { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 600; color: #F0C49A; }
+.turn .i { width: 18px; height: 18px; }
 
-/* Face up: what it is */
-.card-face { background: #17181C; border: 1px solid var(--line); transform: rotateY(180deg); justify-content: flex-end; }
-.card-face:not(:has(.pic)) { justify-content: center; }
-.card-face .pic { position: relative; flex: 1 1 auto; min-height: 0; max-height: 46%; border-radius: 16px; overflow: hidden; background: #1E1F23; margin-right: -70px; }
+/* Face up: what it is, with your reason in small type */
+.card-face { transform: rotateY(180deg); }
+.card-face .pic { position: relative; flex: 0 1 auto; min-height: 0; max-height: 44%; border-radius: 16px; overflow: hidden; background: #1E1F23; margin-right: -72px; }
 .card-face .pic img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .card-face .pic .play { position: absolute; inset: 0; display: grid; place-items: center; color: #fff; }
-.card-face .ttl { font: 400 40px/1.02 var(--serif); text-wrap: balance; overflow-wrap: anywhere; }
+.card-face .ttl { font: 400 48px/0.98 var(--serif); text-wrap: balance; overflow-wrap: anywhere; }
 .card-face .said { font: 400 34px/1.12 var(--serif); overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 9; -webkit-box-orient: vertical; overflow: hidden; }
 .card-face .said.long { font-size: 26px; line-height: 1.25; }
 .card-face .who { font-size: 14px; color: var(--accent); }
 .card-face .sub { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
-.mine-line { font-size: 14px; font-style: italic; color: #D9CBB9; }
+.mine-line { display: flex; flex-direction: column; gap: 2px; padding-left: 12px; border-left: 2px solid rgba(217, 149, 95, 0.6); }
+.mine-line .k { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.mine-line .w { font-size: 15px; font-style: italic; color: #E2D3C0; }
+.add-why { align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 12px; border-radius: 18px; border: 1px dashed rgba(217, 149, 95, 0.55); font-size: 13px; color: #E2C3A3; }
+.add-why .i { width: 16px; height: 16px; }
 .open-hint { display: inline-flex; align-items: center; gap: 4px; font-size: 14px; font-weight: 600; color: var(--text); }
 .open-hint .i { width: 16px; height: 16px; }
 
