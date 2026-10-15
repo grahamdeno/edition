@@ -60,3 +60,47 @@ test("relay: forwards only Edition's POST /v1/agent with the key, and adds CORS"
   assert.equal(nokey.status, 401);
   assert.equal(seen.length, 1);
 });
+
+/* ---- Tag jobs, against a stubbed API ---- */
+import { enrich, retag, tagItems, vocabLine } from "../src/ai.js";
+
+function stubApi(reply) {
+  const store = { "edition.apiKey": "sk-test" };
+  globalThis.localStorage = { getItem: (k) => store[k] ?? null, setItem: (k, v) => { store[k] = v; }, removeItem: (k) => { delete store[k]; } };
+  const sent = [];
+  globalThis.fetch = async (url, opts) => {
+    sent.push(JSON.parse(opts.body));
+    return { ok: true, status: 200, json: async () => ({ content: [{ type: "text", text: JSON.stringify(reply) }] }) };
+  };
+  return sent;
+}
+const promptOf = (body) => {
+  const c = body.messages[0].content;
+  return typeof c === "string" ? c : c.filter((p) => p.type === "text").map((p) => p.text).join("\n");
+};
+
+test("enrich shows the model your tags and asks it to reuse them", async () => {
+  const sent = stubApi({ title: "T", summary: "S", tags: ["Scrum", "AI"], minutes: 5, intent: "read", points: [], transcript: "", quote: null });
+  const out = await enrich({ kind: "link", url: "https://a.test/x", title: "x" }, null, { vocab: ["scrum", "leadership"] });
+  assert.deepEqual(out.tags, ["scrum", "ai"]);
+  assert.match(promptOf(sent[0]), /Tags already in use: scrum, leadership\. Reuse one/);
+});
+
+test("with no tags yet, no vocabulary line is sent", () => {
+  assert.equal(vocabLine([]), "");
+});
+
+test("retag returns tags only", async () => {
+  const sent = stubApi({ tags: ["Product", "roadmaps", "x", "y"] });
+  assert.deepEqual(await retag({ kind: "note", text: "Roadmap review notes" }, null, { vocab: ["product"] }), ["product", "roadmaps", "x"]);
+  assert.match(promptOf(sent[0]), /Tags already in use: product/);
+  assert.equal(sent[0].max_tokens, 200);
+});
+
+test("untagged picks are tagged in one call, by index, ignoring bad rows", async () => {
+  const sent = stubApi({ tags: [{ i: 0, tags: ["AI"] }, { i: 1, tags: ["scrum", "teams"] }, { i: 9, tags: ["nope"] }, null] });
+  const out = await tagItems([{ title: "A", url: "https://a.test" }, { title: "B", why: "Because", url: "https://b.test" }], { vocab: ["ai"] });
+  assert.deepEqual(out, { 0: ["ai"], 1: ["scrum", "teams"] });
+  assert.equal(sent.length, 1);
+  assert.match(promptOf(sent[0]), /1 \| B \| Because \| https:\/\/b\.test/);
+});
