@@ -54,13 +54,13 @@ The first version kept everything in `localStorage['edition-v0']`. On first laun
 
 | Route | Where it works |
 | --- | --- |
-| Drop sheet: type or paste, Paste tile, Photo tile, File tile | Everywhere |
+| Capture screen: mode wheel (Note, Paste, Camera, Photos, Files) and shutter | Everywhere |
 | Paste anywhere outside a text field | Desktop, iPad with keyboard |
 | Drag and drop onto the window | Desktop |
 | Share target (`manifest.share_target` → `sw.js`) | Android, desktop Chrome |
 | `?url=` / `?text=` / `?title=` query | Bookmarklets, desktop shortcuts |
 
-iOS Safari has no Web Share Target, and home-screen apps don't share storage with Safari, so on iPhone the drop sheet is the way in.
+iOS Safari has no Web Share Target, and home-screen apps don't share storage with Safari, so on iPhone the Capture screen is the way in.
 
 ## Not yet
 

@@ -4,7 +4,7 @@
  * Bump VERSION with each release so phones pick up the new shell.
  */
 
-const VERSION = "2.0.0";
+const VERSION = "2.1.0";
 const CACHE = `edition-${VERSION}`;
 const SHELL = [
   "./",
@@ -16,6 +16,8 @@ const SHELL = [
   "src/db.js",
   "src/capture.js",
   "src/ai.js",
+  "src/wheel.js",
+  "src/feel.js",
   "icons/icon-192.png",
   "icons/icon-512.png",
   "icons/apple-touch-icon.png",
