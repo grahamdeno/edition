@@ -18,6 +18,8 @@ import {
   VERDICT, STATUS, KIND, dayKey, applyVerdict, restore, buildEdition, editionView,
   interestProfile, estimateMinutes, counts, migrateLegacy, createItem, EDITION_SIZE,
   detectText, draftFromFile, describeDraft, fitToTime, circling, fading, isFaded, FADE_DAYS, youtubeId,
+  SUGGESTIONS_PER_DAY, WHY_NOT, WHY_NOT_LABEL, emptySuggestProfile, learnFromSuggestion, suggestionGuide,
+  screenSuggestions, suggestMaxMinutes,
 } from "./model.js";
 import * as db from "./db.js";
 import { captureText, captureFile, captureTransfer, readClipboard, captureShares } from "./capture.js";
@@ -27,7 +29,7 @@ import { tick, unlock, soundOn, setSound } from "./feel.js";
 import { I } from "./icons.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "3.6.0";
+export const VERSION = "3.7.0";
 const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 
 const KIND_LABEL = { link: "Link", note: "Note", quote: "Quote", photo: "Photo", pdf: "PDF", text: "Text", video: "Video", audio: "Audio", file: "File" };
@@ -57,6 +59,7 @@ const state = {
   enriching: new Set(),
   reader: null,      // { mode: "edition" | "inbox" | "single", ids: [], index }
   feed: null,        // { ids: [], index, total, turned: Set, tally }
+  suggest: null,     // what your answers to suggestions taught (see model.js)
   capWhy: "",
 };
 
@@ -70,6 +73,7 @@ async function boot() {
   const migrated = await db.migrateFromLocalStorage(migrateLegacy).catch(() => 0);
   state.items = await db.items.all();
   state.edition = await db.meta.get("edition", null);
+  state.suggest = await db.meta.get("suggest", null) || emptySuggestProfile();
   const seeded = await seedSamples();
   const shared = await importShares();
   const linked = await importFromUrl();
@@ -325,17 +329,18 @@ async function findNew(statusEl) {
   set(ai.settings.pplxEnabled() ? "Searching Perplexity for something worth your time…" : "Searching for something worth your time…");
   try {
     const known = new Set(state.items.map((i) => i.url).filter(Boolean));
-    const picks = await ai.discover(interestProfile(state.items), { known });
-    const fresh = picks.filter((p) => !known.has(p.url));
+    const picks = await ai.discover(interestProfile(state.items), { known, guide: suggestionGuide(state.suggest) });
+    const fresh = screenSuggestions(picks.filter((p) => !known.has(p.url)), state.suggest);
     for (const p of fresh) {
       const item = createItem(
         { kind: KIND.LINK, url: p.url, title: p.title, summary: p.why, tags: p.tags, minutes: p.minutes },
         { id: db.newId(), source: "ai" },
       );
+      item.suggestReason = p.why;
       item.enrichedAt = Date.now();
       await saveItem(item);
     }
-    set(fresh.length ? `${fresh.length} suggestion${fresh.length === 1 ? "" : "s"} added to your inbox.` : "Nothing new turned up. Try again later.");
+    set(fresh.length ? `${fresh.length} suggestion${fresh.length === 1 ? "" : "s"} found. They come after your own saves, two a day.` : "Nothing new turned up. Try again later.");
     if (fresh.length) { closeSheet(); renderFront(); }
   } catch (e) {
     noteError(e, { quiet: true, where: ai.settings.pplxEnabled() ? "discover (Perplexity)" : "discover (Claude)" });
@@ -582,7 +587,7 @@ function ringItems() {
     const keep = item.status === STATUS.INBOX || isFaded(item);
     // Listed left to up: Read sits straight up, nearest the thumb's natural sweep.
     inner.push(
-      { id: "letgo", label: "Let go", icon: I.letGo, run: () => feedVerdict(id, VERDICT.LET_GO) },
+      { id: "letgo", label: item.suggested ? "Not for me" : "Let go", icon: I.letGo, run: () => feedVerdict(id, VERDICT.LET_GO) },
       { id: "later", label: keep ? "Keep" : "Later", icon: keep ? I.keep : I.later, run: () => feedVerdict(id, VERDICT.LATER) },
       { id: "done", label: "Done", icon: I.done, run: () => feedVerdict(id, VERDICT.DONE) },
       { id: "read", label: "Read", icon: I.read, primary: true, run: () => openStories("single", id) },
@@ -856,6 +861,62 @@ function updateTimeLeft(item) {
   left.textContent = s >= 60 ? `${Math.ceil(s / 60)} min left` : s > 0 ? "Under a minute" : "";
 }
 
+/*
+ * Record a verdict. On a suggestion, Let go first asks "Not for me" with an
+ * optional reason, and every verdict on a suggestion trains the suggestion
+ * profile. Returns null if you backed out, else { after, undo } where undo
+ * puts back the item and what was learned.
+ */
+async function recordVerdict(before, verdict) {
+  let whyNot = null;
+  if (verdict === VERDICT.LET_GO && before.suggested) {
+    whyNot = await askWhyNot(before);
+    if (whyNot === undefined) return null;
+  }
+  const stage = before.status === STATUS.INBOX ? "inbox" : "edition";
+  // Keeping a faded item resets its clock instead of counting another deferral.
+  const after = verdict === VERDICT.LATER && isFaded(before) ? restore(before) : applyVerdict(before, verdict, { stage });
+  if (whyNot) after.whyNot = whyNot;
+  await saveItem(after);
+  const prevSuggest = state.suggest;
+  if (before.suggested) {
+    state.suggest = learnFromSuggestion(state.suggest, before, verdict, whyNot);
+    await db.meta.set("suggest", state.suggest);
+  }
+  tick(true);
+  return {
+    after, stage, whyNot,
+    undo: async () => {
+      await saveItem(before);
+      if (before.suggested) { state.suggest = prevSuggest; await db.meta.set("suggest", prevSuggest); }
+    },
+  };
+}
+
+/** "Not for me": one tap says why, or let it go without a reason. Resolves undefined if closed. */
+function askWhyNot(item) {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (v) => { if (done) return; done = true; resolve(v); };
+    const host = item.url ? item.url.replace(/^https?:\/\/(www\.)?/, "").split("/")[0] : "";
+    const wrap = sheet(`
+      <div class="sheet-head"><h2>Not for me</h2><button class="x" type="button" data-close aria-label="Close">${I.close}</button></div>
+      <p class="note">${esc(headline(item))}. Say why and future suggestions change. It's optional.</p>
+      <div class="why-not">
+        <button class="btn" type="button" data-why="${WHY_NOT.TOPIC}"><b>${WHY_NOT_LABEL.topic}</b><span>Fewer suggestions on ${esc((item.tags || []).slice(0, 2).join(" and ") || "this topic")}</span></button>
+        <button class="btn" type="button" data-why="${WHY_NOT.KNOWN}"><b>${WHY_NOT_LABEL.known}</b><span>Only deeper pieces on this from now on</span></button>
+        <button class="btn" type="button" data-why="${WHY_NOT.LONG}"><b>${WHY_NOT_LABEL.long}</b><span>Lean toward shorter pieces</span></button>
+        ${host ? `<button class="btn" type="button" data-why="${WHY_NOT.SITE}"><b>${WHY_NOT_LABEL.site}</b><span>Never suggest from ${esc(host)}</span></button>` : ""}
+      </div>
+      <button class="btn ghost" type="button" data-why="">Just let it go</button>`, { label: "Not for me" });
+    wrap._onClose = () => finish(undefined);
+    wrap.querySelectorAll("[data-why]").forEach((b) => b.addEventListener("click", () => {
+      finish(b.dataset.why || null);
+      closeSheet();
+    }));
+  });
+}
+
 async function storyVerdict(id, verdict) {
   const r = state.reader;
   const before = byId(id);
@@ -869,11 +930,9 @@ async function storyVerdict(id, verdict) {
     feedVerdict(id, verdict);
     return;
   }
-  const stage = before.status === STATUS.INBOX ? "inbox" : "edition";
-  // Keeping a faded item resets its clock instead of counting another deferral.
-  const after = verdict === VERDICT.LATER && isFaded(before) ? restore(before) : applyVerdict(before, verdict, { stage });
-  await saveItem(after);
-  tick(true);
+  const rec = await recordVerdict(before, verdict);
+  if (!rec) return;
+  const { after, stage } = rec;
   const at = r.ids.indexOf(id);
   r.ids.splice(at, 1);
   if (r.index >= r.ids.length) r.index = Math.max(0, r.ids.length - (r.ids.length ? 1 : 0));
@@ -890,7 +949,7 @@ async function storyVerdict(id, verdict) {
     high: true,
     action: "Undo",
     onAction: async () => {
-      await saveItem(before);
+      await rec.undo();
       if (state.reader === r) { r.ids.splice(at, 0, id); r.index = at; renderStory(); }
       else renderFront();
     },
@@ -956,10 +1015,13 @@ function bindStoryGestures(el) {
 const FEED_STEP = 70;
 let feedDrag = false, dragEndedAt = 0;
 
+/** Your own new saves, then today's edition, then at most two suggestions: AI picks never cut in line. */
 function feedIds() {
-  const inbox = state.items.filter((i) => i.status === STATUS.INBOX).sort((a, b) => a.created - b.created).map((i) => i.id);
-  const today = editionView(state.items, state.edition).open.map((i) => i.id).filter((id) => !inbox.includes(id));
-  return [...inbox, ...today];
+  const inboxAll = state.items.filter((i) => i.status === STATUS.INBOX).sort((a, b) => a.created - b.created);
+  const mine = inboxAll.filter((i) => !i.suggested).map((i) => i.id);
+  const today = editionView(state.items, state.edition).open.map((i) => i.id).filter((id) => !mine.includes(id));
+  const suggested = inboxAll.filter((i) => i.suggested && !today.includes(i.id)).slice(0, SUGGESTIONS_PER_DAY).map((i) => i.id);
+  return [...mine, ...today, ...suggested];
 }
 
 function openFeed() {
@@ -997,6 +1059,10 @@ function hookFor(item) {
     quote: "Words you wanted to keep.", note: "A thought you wrote down.", photo: "A picture you kept.", video: what.watch,
     audio: what.listen, pdf: "A document you saved.", text: "A document you saved.", file: "A file you saved.", link: what.read,
   };
+  if (item.suggested) {
+    const because = item.suggestReason || item.summary || "";
+    return { kicker: "Suggested for you", lead: because ? "" : "Something Edition found for you.", big: because || "A new find, picked from what you finish.", mine: false, sub: "", suggestion: true };
+  }
   const since = item.status === STATUS.INBOX ? (ago(item.created) === "today" ? "Saved today" : `Saved ${ago(item.created)}`) : `From ${ago(item.created)}`;
   const sub = item.ai?.why || item.summary || "";
   if (item.why) return { kicker: since, lead: "You wrote when you saved it:", big: `“${item.why}”`, mine: true, sub };
@@ -1032,14 +1098,14 @@ function renderFeed() {
 
   const inbox = item.status === STATUS.INBOX;
   const left = f.ids.slice(f.index).reduce((s, x) => s + estimateMinutes(byId(x) || {}), 0);
-  $("#feed-where", el).textContent = inbox ? "New save" : "Today's edition";
+  $("#feed-where", el).textContent = item.suggested ? "Suggested" : inbox ? "New save" : "Today's edition";
   $("#feed-left", el).textContent = `${settled + f.index + 1} of ${f.total} · ${left} min left`;
 
   const turned = f.turned.has(id);
   const h = hookFor(item);
   const pic = picFor(item);
   const words = item.kind === KIND.QUOTE || item.kind === KIND.NOTE;
-  card.className = "feed-card" + (turned ? " turned" : "");
+  card.className = "feed-card" + (turned ? " turned" : "") + (item.suggested ? " suggested" : "");
   card.innerHTML = `<div class="flip">
     <div class="face hook-face" data-turn role="button" tabindex="${turned ? -1 : 0}" aria-label="Turn the card over">
       <span class="kicker">${esc(h.kicker)}</span>
@@ -1056,9 +1122,11 @@ function renderFeed() {
         ? `<span class="said ${String(item.text || "").length > 160 ? "long" : ""}">${esc(headline(item))}</span>${item.author ? `<span class="who">${esc(item.author)}</span>` : ""}`
         : `<span class="ttl">${esc(item.title)}</span>`}
       ${item.summary && !words ? `<span class="sub">${esc(item.summary)}</span>` : ""}
-      ${item.why
-        ? `<span class="mine-line"><span class="k">Why you saved it</span><span class="w">“${esc(item.why)}”</span></span>`
-        : `<button class="add-why" type="button" data-add-why>${I.plus}Add why you saved it</button>`}
+      ${item.suggested
+        ? `<span class="mine-line sug"><span class="k">Suggested because</span><span class="w">${esc(item.suggestReason || "it fits what you finish")}</span></span>`
+        : item.why
+          ? `<span class="mine-line"><span class="k">Why you saved it</span><span class="w">“${esc(item.why)}”</span></span>`
+          : `<button class="add-why" type="button" data-add-why>${I.plus}Add why you saved it</button>`}
       <span class="open-hint">Tap to open ${I.next}</span>
     </div>
   </div>`;
@@ -1150,8 +1218,10 @@ function bindFeedEnd(card) {
     const before = new Set(state.items.map((i) => i.id));
     await findNew($("#feed-st"));
     disc.disabled = false;
-    const fresh = state.items.filter((i) => !before.has(i.id)).map((i) => i.id);
-    if (fresh.length && state.feed) { state.feed.ids.push(...fresh); state.feed.total += fresh.length; renderFeed(); }
+    const f = state.feed;
+    const shown = f ? f.ids.filter((x) => byId(x)?.suggested).length : 0;
+    const fresh = state.items.filter((i) => !before.has(i.id)).map((i) => i.id).slice(0, Math.max(0, SUGGESTIONS_PER_DAY - shown));
+    if (fresh.length && f) { f.ids.push(...fresh); f.total += fresh.length; renderFeed(); }
   });
 }
 
@@ -1159,10 +1229,9 @@ async function feedVerdict(id, verdict) {
   const f = state.feed;
   const before = byId(id);
   if (!f || !before) return;
-  const stage = before.status === STATUS.INBOX ? "inbox" : "edition";
-  const after = verdict === VERDICT.LATER && isFaded(before) ? restore(before) : applyVerdict(before, verdict, { stage });
-  await saveItem(after);
-  tick(true);
+  const rec = await recordVerdict(before, verdict);
+  if (!rec || state.feed !== f) return;
+  const { after, stage } = rec;
   const key = verdict === VERDICT.DONE ? "done" : verdict === VERDICT.LET_GO ? "letGo" : "later";
   f.tally[key]++;
   const at = f.ids.indexOf(id);
@@ -1170,14 +1239,14 @@ async function feedVerdict(id, verdict) {
   if (f.index > f.ids.length) f.index = f.ids.length;
   slideFeed(verdict === VERDICT.LET_GO ? "left" : "up");
   const words = {
-    [VERDICT.LET_GO]: "Let go.",
+    [VERDICT.LET_GO]: rec.whyNot ? `Let go. ${{ topic: "Fewer like it.", known: "Deeper ones next time.", long: "Shorter ones next time.", site: "That site is blocked." }[rec.whyNot]}` : "Let go.",
     [VERDICT.LATER]: stage === "inbox" ? "Kept for a future edition." : after.fadedAt ? "Moved later eight times. It's waiting under Fading." : "Moved to a later edition.",
     [VERDICT.DONE]: "Marked done.",
   };
   toast(words[verdict], {
     action: "Undo",
     onAction: async () => {
-      await saveItem(before);
+      await rec.undo();
       f.tally[key]--;
       if (state.feed === f) { f.ids.splice(at, 0, id); f.index = at; renderFeed(); }
       renderFront();
@@ -1625,6 +1694,10 @@ function openSettings() {
       <span class="st" id="set-ed-st" role="status"></span>
     </div>
     <div class="section">
+      <h3>Suggestions</h3>
+      <div id="sug-profile"></div>
+    </div>
+    <div class="section">
       <h3>Sounds</h3>
       <div class="chips" role="group" aria-label="Sounds" style="margin:0;padding:0">
         <button class="chip" type="button" data-sound="1" aria-pressed="${soundOn()}">On</button>
@@ -1684,6 +1757,7 @@ function openSettings() {
     $("#set-key", wrap).value = "";
     say(st, "Key removed. Edition works without AI.");
   });
+  renderSuggestProfile(wrap);
   refreshProblems(wrap);
   $("#set-pr-copy", wrap).addEventListener("click", copyDiagnostics);
   $("#set-pr-clear", wrap).addEventListener("click", () => { clearProblems(); refreshProblems(wrap); });
@@ -1760,6 +1834,40 @@ function openSettings() {
   });
 }
 
+/* What your answers to suggestions taught, with a way to undo any of it. */
+function renderSuggestProfile(wrap) {
+  const box = $("#sug-profile", wrap);
+  if (!box) return;
+  const p = { ...emptySuggestProfile(), ...state.suggest };
+  const list = (map, sign) => Object.entries(map).filter(([, v]) => sign * v > 0).sort((a, b) => sign * (b[1] - a[1]));
+  const welcome = list(p.topics, 1), avoid = list(p.topics, -1), deeper = list(p.deeper, 1);
+  const chips = (rows, kind) => rows.map(([t]) => `<button class="chip unlearn" type="button" data-unlearn="${kind}" data-key="${esc(t)}" aria-label="Forget ${esc(t)}">${esc(t)} ${I.close}</button>`).join("");
+  const max = suggestMaxMinutes(p);
+  const row = (label, body) => body ? `<div class="sug-row"><span class="k">${label}</span><div class="chips">${body}</div></div>` : "";
+  const any = welcome.length || avoid.length || deeper.length || p.blocked.length || max;
+  box.innerHTML = any ? `
+    ${row("More of", chips(welcome, "topics"))}
+    ${row("Less of", chips(avoid, "topics"))}
+    ${row("Only deeper pieces on", chips(deeper, "deeper"))}
+    ${row("Never from", p.blocked.map((h) => `<button class="chip unlearn" type="button" data-unlearn="blocked" data-key="${esc(h)}" aria-label="Unblock ${esc(h)}">${esc(h)} ${I.close}</button>`).join(""))}
+    ${row("Length", max ? `<button class="chip unlearn" type="button" data-unlearn="shorter" aria-label="Any length again">Under ${max} min ${I.close}</button>` : "")}
+    <p class="note">Learned from your answers to suggestions, never from your own saves. Tap one to forget it.</p>
+    <button class="btn" type="button" id="sug-reset">Forget all of it</button>`
+    : `<p class="note">Suggestions come after your own saves, two a day. When one isn't for you, Let go asks why (optional). What it learns shows here, and you can undo any of it.</p>`;
+  const save = async () => { await db.meta.set("suggest", state.suggest); renderSuggestProfile(wrap); };
+  box.querySelectorAll("[data-unlearn]").forEach((b) => b.addEventListener("click", async () => {
+    const k = b.dataset.unlearn, key = b.dataset.key;
+    const next = { ...emptySuggestProfile(), ...state.suggest, topics: { ...state.suggest.topics }, deeper: { ...state.suggest.deeper } };
+    if (k === "topics") delete next.topics[key];
+    else if (k === "deeper") delete next.deeper[key];
+    else if (k === "blocked") next.blocked = (next.blocked || []).filter((h) => h !== key);
+    else if (k === "shorter") next.shorter = 0;
+    state.suggest = next;
+    await save();
+  }));
+  $("#sug-reset", box)?.addEventListener("click", async () => { state.suggest = emptySuggestProfile(); await save(); toast("Forgotten. Suggestions start fresh."); });
+}
+
 /* ================= Problems and diagnostics ================= */
 
 function refreshProblems(wrap) {
@@ -1825,7 +1933,7 @@ function sheet(html, { tall = false, label = "" } = {}) {
 
 function closeSheet() {
   const s = $(".sheet-wrap");
-  if (s) s.remove();
+  if (s) { const cb = s._onClose; s._onClose = null; s.remove(); if (cb) cb(); }
   if (lastFocus && lastFocus.focus && document.contains(lastFocus)) lastFocus.focus();
   lastFocus = null;
 }
