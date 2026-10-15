@@ -14,14 +14,14 @@ Built like [Scales](https://github.com/grahamdeno/scales) and [Tabs](https://git
                         Read now
 ```
 
-Every control sits in the bottom half of the screen or on the right edge, so the whole app works with one thumb. Choices are made with scroll wheels that click as they pass each option; a tap on any option selects it directly.
+Every screen has the same shape: a top bar, one card, one row of actions and the tab bar. Everything you touch sits in the bottom third, within reach of one thumb, and every verdict is a single tap.
 
-1. **Capture.** Tap **+** and drop anything into one box: type a thought, paste a link, a list of links, a YouTube URL or a quote, or tap **Attach** for photos, the camera or files. Edition works out what each thing is (link, video, quote, note, photo, PDF, file) and lists it under the box before you save, so you never pick a type. The round shutter saves everything at once. On a computer, paste or drag anywhere. On Android and desktop Chrome, Edition appears in the share sheet.
-2. **Triage.** Everything new lands in the inbox first, one card at a time. Sweep your thumb across the corner dial to choose Let go, Later, Done or Read, then press Set. Swiping the card left, right or up works too.
-3. **Read the edition.** Kept items come back as today's pages. The knurled wheel on the right edge rolls between them; the verdict wheel at the bottom sets what happens next, and Press confirms.
-4. **Read.** The reader's right-edge wheel shows progress and scrolls the text when you turn it, with the time left at the top.
-5. **Library.** Two drum pickers, status and kind, filter everything you have saved. Find searches it.
-6. **Let things go.** "Later" on an edition page moves it to a future edition. Do that eight times and it washes out of the queue. Nothing is deleted; the Library can requeue it.
+1. **Add.** Tap **+**. One box takes a link, a YouTube URL, a quote or a thought; Paste and Attach sit either side of Save. Edition lists what it found before it saves. On a computer, paste or drag anywhere in the window. On Android and desktop Chrome, Edition appears in the share sheet.
+2. **Triage.** New saves land in the Inbox one card at a time. Tap Let go, Later, Done or Read, or swipe the card: left to let go, right to read, up for later.
+3. **Read the edition.** The items you keep come back as today's edition, one card at a time, with the same four actions. The bar under the title shows how far through you are.
+4. **Read.** The reader shows the whole item with the time left at the top. The thin line on the right edge shows progress; drag it to jump.
+5. **Library.** Search everything and filter by Queue, Inbox, Done, Let go or All. Anything let go can be requeued.
+6. **Let things go.** "Later" on an edition card moves it to a future edition. Do that eight times and it washes out of the queue. Nothing is deleted.
 
 ## AI (optional)
 
@@ -58,8 +58,8 @@ src/db.js             IndexedDB storage, migration from v1, backup
 src/capture.js        every way in: text, files, clipboard, drag-drop, share target
 src/samples.js        example items for a fresh install
 src/ai.js             Anthropic API: enrich, rank, discover
-src/wheel.js          scroll wheels, drum pickers and the corner dial
-src/feel.js           detent clicks (audio, and vibration where supported)
+src/icons.js          the icon set (SVG only, no text glyphs)
+src/feel.js           soft click on verdicts and saves (audio, and vibration where supported)
 sw.js                 offline shell and share target
 tests/                node --test unit tests for the model
 docs/ARCHITECTURE.md  data model and decisions
@@ -76,8 +76,8 @@ Bump `VERSION` in `sw.js` and `src/app.js` with each release so installed copies
 
 ## Design
 
-Tech tactical: matte graphite surfaces, titanium-gray text and one safety-orange accent, with condensed uppercase headlines (Barlow Condensed), a readable body face (Barlow) and monospace spec labels (IBM Plex Mono). Depth comes from knurled wheel textures and corner brackets, not shadows. One deliberate dark look.
+Calm tactical: graphite surfaces, warm off-white text and one orange accent kept for the main action. Barlow for text, Barlow Condensed for titles in sentence case, IBM Plex Mono for the small metadata line. One icon set drawn as SVG at a single stroke weight.
 
-iPhone web apps can't vibrate, so each wheel detent plays a short synthesized click instead. Settings › Wheel clicks turns it off.
+The page itself never scrolls, pans or zooms: only the card and lists scroll inside it, text fields use 16px type so iOS doesn't zoom on focus, and double-tap zoom is off.
 
 MIT.

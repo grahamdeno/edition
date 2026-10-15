@@ -1,9 +1,11 @@
 /*
- * Edition app shell: the five screens (Edition, Inbox, Capture, Reader,
- * Library), their wheels, and the glue between capture, storage, the model
- * and the AI. Rendering is plain template strings; every value from an item
- * goes through esc(). Wheels are created after each render and update only
- * the part of the screen they drive, so a turn is never interrupted.
+ * Edition app shell: four screens (Edition, Inbox, Library, Add) plus the
+ * reader and settings, and the glue between capture, storage, the model and
+ * the AI. Rendering is plain template strings; every value from an item goes
+ * through esc(). Icons come from icons.js only, never text glyphs.
+ *
+ * Layout rule for every screen: top bar, one content pane, one action bar,
+ * tab bar. Every verdict is one tap.
  */
 
 import {
@@ -15,61 +17,30 @@ import * as db from "./db.js";
 import { captureText, captureFile, captureTransfer, readClipboard, captureShares } from "./capture.js";
 import { sampleItems } from "./samples.js";
 import * as ai from "./ai.js";
-import { createWheel, createDial } from "./wheel.js";
 import { tick, unlock, soundOn, setSound } from "./feel.js";
+import { I } from "./icons.js";
 
-export const VERSION = "2.2.0";
+export const VERSION = "2.3.0";
 
 const KIND_LABEL = { link: "Link", note: "Note", quote: "Quote", photo: "Photo", pdf: "PDF", text: "Text", video: "Video", audio: "Audio", file: "File" };
-const GEAR = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><path d="M14 4v6M6 14v6"/></svg>';
-
-// The bottom verdict wheel on edition pages, and the corner dial in triage.
-const WHEEL_VERDICTS = [
-  { label: "Let go", v: VERDICT.LET_GO },
-  { label: "Later", v: VERDICT.LATER },
-  { label: "Read", v: VERDICT.READ_NOW },
-  { label: "Done", v: VERDICT.DONE },
-];
-const DIAL_VERDICTS = [
-  { label: "Let go", v: VERDICT.LET_GO },
-  { label: "Later", v: VERDICT.LATER },
-  { label: "Done", v: VERDICT.DONE },
-  { label: "Read", v: VERDICT.READ_NOW },
-];
 const INTENT_LABEL = { read: "To read", watch: "To watch", listen: "To listen", reference: "Reference", idea: "Idea", task: "Task" };
-const LIB_STATUS = [
-  { label: "Inbox", id: STATUS.INBOX },
+const LIB_FILTERS = [
   { label: "Queue", id: STATUS.QUEUED },
+  { label: "Inbox", id: STATUS.INBOX },
   { label: "Done", id: STATUS.DONE },
   { label: "Let go", id: STATUS.ARCHIVED },
   { label: "All", id: "all" },
-];
-const LIB_KIND = [
-  { label: "All", kinds: null },
-  { label: "Links", kinds: [KIND.LINK] },
-  { label: "Notes", kinds: [KIND.NOTE, KIND.TEXT] },
-  { label: "Quotes", kinds: [KIND.QUOTE] },
-  { label: "Video", kinds: [KIND.VIDEO] },
-  { label: "Photos", kinds: [KIND.PHOTO] },
-  { label: "PDFs", kinds: [KIND.PDF] },
-  { label: "Files", kinds: [KIND.FILE, KIND.AUDIO] },
 ];
 
 const state = {
   items: [],
   edition: null,
   view: "edition",
-  back: "edition",          // where Capture returns to
-  edPage: 0,                // index into today's open pages
-  edVerdict: 2,             // Read
-  dialVerdict: 3,           // Read
+  back: "edition",          // where Add returns to
   capText: "",              // what is in the capture box
   capFiles: [],             // files staged in the capture box: { file, url }
-  lastSaved: null,
-  libStatus: 1,             // Queue
-  libKind: 0,               // All
+  libFilter: 0,
   libQuery: "",
-  showFind: false,
   enriching: new Set(),
 };
 
@@ -125,7 +96,6 @@ async function ensureEdition({ force = false } = {}) {
   const next = buildEdition(state.items, force ? null : state.edition);
   if (next !== state.edition) {
     state.edition = next;
-    state.edPage = 0;
     await db.meta.set("edition", next);
   }
 }
@@ -216,14 +186,11 @@ async function afterCapture(list) {
   list = list.filter(Boolean);
   if (!list.length) return;
   list.forEach((it) => { state.items = [it, ...state.items.filter((i) => i.id !== it.id)]; });
-  state.lastSaved = list[list.length - 1];
   tick(true);
   render();
-  const st = $("#cap-st");
-  if (st) { st.classList.remove("err"); st.textContent = `Saved ${list.length === 1 ? "1 item" : list.length + " items"} to your inbox.`; }
   toast(`Saved ${list.length === 1 ? "1 item" : list.length + " items"} to your inbox.`, {
     action: "Undo",
-    onAction: async () => { await removeItems(list); state.lastSaved = null; render(); },
+    onAction: async () => { await removeItems(list); render(); },
   });
   enrichPending();
 }
@@ -298,7 +265,7 @@ async function enrichPending() {
   }
 }
 
-/** Redraw just the card if it is the item being shown, leaving wheels alone. */
+/** Redraw just the card if it is the item being shown. */
 function refreshCard(id) {
   const card = $(`[data-card="${CSS.escape(id)}"]`);
   if (!card || document.querySelector(".sheet-wrap, .reader")) return;
@@ -338,17 +305,18 @@ async function giveVerdict(id, verdict, stage) {
   if (!before) return;
   const after = applyVerdict(before, verdict, { stage });
   await saveItem(after);
+  tick(true);
   render();
   if (verdict === VERDICT.READ_NOW) { openReader(after); return; }
   const words = {
     [VERDICT.LET_GO]: after.washedOut ? "Washed out." : "Let go.",
-    [VERDICT.LATER]: stage === "inbox" ? "Queued for a future edition." : after.washedOut ? "Deferred too often. Washed out." : "Moved to a later edition.",
+    [VERDICT.LATER]: stage === "inbox" ? "Kept for a future edition." : after.washedOut ? "Moved later too often. Washed out." : "Moved to a later edition.",
     [VERDICT.DONE]: "Marked done.",
   };
   toast(words[verdict], { action: "Undo", onAction: async () => { await saveItem(before); render(); } });
 }
 
-/* ================= Rendering ================= */
+/* ================= Shared pieces ================= */
 
 function go(view) {
   if (view === "capture" && state.view !== "capture") state.back = state.view;
@@ -362,27 +330,43 @@ function render() {
   (views[state.view] || renderEdition)();
 }
 
-function statusBar(left, right) {
-  return `<div class="status mono"><span>${left}</span><span class="right"><span>${right}</span>
-    <button class="icon-btn" type="button" data-act="settings" aria-label="Settings">${GEAR}</button></span></div>`;
+function topBar(title, { sub = "", count = "", settings = true, lead = "", trail = "" } = {}) {
+  return `<header class="top">
+    ${lead}
+    <h1>${esc(title)}</h1>${sub ? `<span class="sub">${esc(sub)}</span>` : ""}
+    <span class="right">${count ? `<span class="count">${count}</span>` : ""}${trail}
+      ${settings ? `<button class="icon-btn" type="button" data-act="settings" aria-label="Settings">${I.settings}</button>` : ""}</span>
+  </header>`;
 }
 
-function navBar(active, { find = false } = {}) {
+function tabBar(active) {
   const c = counts(state.items);
-  const b = (view, name, extra = "") => `<button class="btn" type="button" data-go="${view}" ${active === view ? 'aria-current="page"' : ""}>${name}${extra}</button>`;
-  return `<nav class="nav" aria-label="Sections">
-    ${b("edition", "Edition")}
-    ${b("inbox", "Inbox", c.inbox ? `<span class="count">${c.inbox}</span>` : "")}
-    ${b("library", "Library")}
-    ${find
-      ? `<button class="btn" type="button" data-act="find" aria-pressed="${state.showFind}" style="font:500 12px var(--mono)">Find</button>`
-      : `<button class="btn add" type="button" data-go="capture" aria-label="Add something">+</button>`}
+  const t = (view, name, icon, badge = 0) => `<button class="tab" type="button" data-go="${view}" ${active === view ? 'aria-current="page"' : ""}>
+      ${icon}<span>${name}</span>${badge ? `<span class="badge" aria-label="${badge} waiting">${badge > 99 ? "99+" : badge}</span>` : ""}</button>`;
+  return `<nav class="tabs" aria-label="Sections">
+    ${t("edition", "Edition", I.edition)}
+    ${t("inbox", "Inbox", I.inbox, c.inbox)}
+    ${t("library", "Library", I.library)}
+    <button class="add" type="button" data-go="capture" aria-label="Add something">${I.plus}</button>
   </nav>`;
+}
+
+/** The one-tap verdict bar used by Edition, Inbox and the reader. */
+function actionBar(id, stage) {
+  const a = (v, label, icon, primary = false) =>
+    `<button class="act ${primary ? "primary" : ""}" type="button" data-verdict="${v}" data-id="${esc(id)}" data-stage="${stage}">${icon}<span>${label}</span></button>`;
+  return `<div class="actions" role="group" aria-label="Verdict">
+    ${a(VERDICT.LET_GO, "Let go", I.letGo)}
+    ${a(VERDICT.LATER, "Later", I.later)}
+    ${a(VERDICT.DONE, "Done", I.done)}
+    ${a(VERDICT.READ_NOW, "Read", I.read, true)}
+  </div>`;
 }
 
 function bindCommon(root = app) {
   root.querySelectorAll("[data-go]").forEach((b) => b.addEventListener("click", () => go(b.dataset.go)));
   root.querySelectorAll('[data-act="settings"]').forEach((b) => b.addEventListener("click", openSettings));
+  root.querySelectorAll("[data-verdict]").forEach((b) => b.addEventListener("click", () => giveVerdict(b.dataset.id, b.dataset.verdict, b.dataset.stage)));
   const disc = $('[data-act="discover"]', root);
   if (disc) disc.addEventListener("click", () => { disc.disabled = true; findNew($("#discover-st")).finally(() => { disc.disabled = false; }); });
   const more = $('[data-act="one-more"]', root);
@@ -390,211 +374,153 @@ function bindCommon(root = app) {
 }
 
 function dateLabel() {
-  const d = new Date();
-  return `${d.toLocaleDateString("en-US", { weekday: "short" })} ${pad(d.getDate())}.${pad(d.getMonth() + 1)}`;
+  return new Date().toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
 }
 
-/* ---------- G1 · Edition ---------- */
+/* ================= Edition ================= */
 
 function renderEdition() {
   const v = editionView(state.items, state.edition);
   const c = counts(state.items);
-  const open = v.open;
-  state.edPage = Math.max(0, Math.min(state.edPage, open.length - 1));
+  const item = v.open[0];
+  const progress = v.total
+    ? `<div class="progress" aria-hidden="true">${v.pages.map((p) => `<span class="${v.open.includes(p) ? "" : "on"}"></span>`).join("")}</div>`
+    : "";
 
-  if (!open.length) {
+  if (!item) {
     let body;
     if (!v.total) {
       body = `<div class="state">
-        <span class="mono accent">${c.queued || c.inbox ? "Nothing set yet" : "Start here"}</span>
-        <h1 class="headline">${c.inbox ? "Triage first." : "Drop something in."}</h1>
-        <p>${c.inbox ? "New saves wait in your inbox. Each one you keep comes back here as a page of your daily edition." : "Tap + to save a link, a thought, a photo or a file. It goes to your inbox for a verdict, then comes back here."}</p>
+        <h2>${c.inbox ? "Triage your inbox first." : "Nothing here yet."}</h2>
+        <p>${c.inbox ? "New saves wait in your inbox. The ones you keep come back here as today's edition." : "Tap + to save a link, a thought, a photo or a file. It goes to your inbox first, then comes back here."}</p>
         <div class="stack">${c.inbox
-          ? `<button class="btn primary" type="button" data-go="inbox">Triage inbox <span>${c.inbox}</span></button>`
-          : `<button class="btn primary" type="button" data-go="capture">Add something <span>+</span></button>`}</div></div>`;
+          ? `<button class="btn primary" type="button" data-go="inbox">Open inbox ${I.arrow}</button>`
+          : `<button class="btn primary" type="button" data-go="capture">Add something ${I.plus}</button>`}</div></div>`;
     } else {
       const done = v.pages.filter((p) => p.status === STATUS.DONE).length;
       const gone = v.pages.filter((p) => p.status === STATUS.ARCHIVED).length;
       body = `<div class="state">
-        <span class="mono accent">Edition complete · ${v.total} / ${v.total}</span>
-        <h1 class="headline">Done.</h1>
-        <p>${done} read, ${gone} let go, ${v.total - done - gone} moved later. The next edition is set tomorrow.</p>
+        <h2>You're done for today.</h2>
+        <p>${done} read, ${gone} let go, ${v.total - done - gone} moved later. Tomorrow's edition is set in the morning.</p>
         <div class="stack">
-          ${c.inbox ? `<button class="btn" type="button" data-go="inbox">Triage inbox <span class="accent">${c.inbox}</span></button>` : ""}
-          ${c.queued ? `<button class="btn" type="button" data-act="one-more">Read one more <span class="mono">From queue</span></button>` : ""}
-          ${ai.settings.enabled() ? `<button class="btn primary" type="button" data-act="discover">Find something new <span class="mono">AI</span></button><span class="st" id="discover-st" role="status"></span>` : ""}
+          ${c.inbox ? `<button class="btn" type="button" data-go="inbox">Triage inbox (${c.inbox}) ${I.arrow}</button>` : ""}
+          ${c.queued ? `<button class="btn" type="button" data-act="one-more">Read one more ${I.arrow}</button>` : ""}
+          ${ai.settings.enabled() ? `<button class="btn" type="button" data-act="discover">Find something new ${I.search}</button><span class="st" id="discover-st" role="status"></span>` : ""}
         </div></div>`;
     }
-    app.innerHTML = `<div class="screen s-edition idle" style="grid-template-rows:auto minmax(0,1fr) auto">
-      ${statusBar(`EDN / ${esc(dateLabel())}`, v.total ? `<span class="dot"></span>${pad(v.settled)} / ${pad(v.total)}` : "")}
-      <section class="panel brackets card">${body}</section>
-      ${navBar("edition")}
+    app.innerHTML = `<div class="screen no-actions">
+      <div>${topBar("Edition", { sub: dateLabel(), count: v.total ? `${v.settled} of ${v.total}` : "" })}${progress}</div>
+      <section class="card"><div class="card-body">${body}</div></section>
+      ${tabBar("edition")}
     </div>`;
     bindCommon();
     return;
   }
 
-  const minutes = open.reduce((s, p) => s + estimateMinutes(p), 0);
-  const item = open[state.edPage];
-  app.innerHTML = `<div class="screen s-edition">
-    ${statusBar(`EDN / ${esc(dateLabel())}`, `<span class="dot"></span><span id="ed-count">${pad(pageNo(item))} / ${pad(v.total)}</span> · ${minutes} MIN`)}
-    <div class="edition-main">
-      <article class="panel brackets card" data-card="${esc(item.id)}" id="ed-card">${cardBody(item)}</article>
-      <div class="vwheel" id="page-wheel"></div>
-    </div>
-    <div class="verdict-row">
-      <div class="hwheel" id="verdict-wheel"><span class="notch" aria-hidden="true"></span><span class="fade" aria-hidden="true"></span></div>
-      <button class="btn primary press" type="button" id="press">Press<small>To set</small></button>
-    </div>
-    ${navBar("edition")}
+  app.innerHTML = `<div class="screen">
+    <div>${topBar("Edition", { sub: dateLabel(), count: `${pageNo(item)} of ${v.total}` })}${progress}</div>
+    <article class="card" data-card="${esc(item.id)}">${cardBody(item)}</article>
+    ${actionBar(item.id, "edition")}
+    ${tabBar("edition")}
   </div>`;
   bindCommon();
-  hydrate($("#ed-card"));
-
-  createWheel($("#page-wheel"), {
-    id: "page-wheel",
-    items: open.map((p) => ({ label: pad(pageNo(p)) })),
-    index: state.edPage,
-    axis: "y",
-    spacing: 58,
-    label: "Pages in today's edition",
-    onChange: (i) => {
-      state.edPage = i;
-      const it = open[i];
-      const card = $("#ed-card");
-      card.dataset.card = it.id;
-      card.innerHTML = cardBody(it);
-      hydrate(card);
-      $("#ed-count").textContent = `${pad(pageNo(it))} / ${pad(v.total)}`;
-    },
-  });
-  const vw = createWheel($("#verdict-wheel"), {
-    items: WHEEL_VERDICTS,
-    index: state.edVerdict,
-    axis: "x",
-    spacing: 76,
-    label: "Verdict",
-    onChange: (i) => { state.edVerdict = i; },
-    onCommit: (i) => giveVerdict(open[state.edPage].id, WHEEL_VERDICTS[i].v, "edition"),
-  });
-  $("#press").addEventListener("click", () => {
-    tick(true);
-    giveVerdict(open[state.edPage].id, WHEEL_VERDICTS[vw.index].v, "edition");
-  });
+  hydrate(app);
 }
 
 function pageNo(item) {
   return (state.edition?.ids || []).indexOf(item.id) + 1;
 }
 
-/** The inside of a card: tags, headline, body set for the kind, and facts. */
+/** The inside of a card: one meta line, the title, the body for its kind, and why it's here. */
 function cardBody(item) {
   const busy = state.enriching.has(item.id);
-  const len = (item.title || "").length;
-  const hClass = len > 60 ? "headline s" : len > 34 ? "headline m" : "headline";
-  const tags = [
-    `<span class="tag kind">${KIND_LABEL[item.kind] || "Item"}</span>`,
-    `<span class="tag">${estimateMinutes(item)} min</span>`,
-    item.url ? `<span class="tag">${esc(host(item.url))}</span>` : item.fileName ? `<span class="tag">${esc(ext(item.fileName))}${item.size ? " · " + size(item.size) : ""}</span>` : "",
-    item.intent && INTENT_LABEL[item.intent] ? `<span class="tag">${INTENT_LABEL[item.intent]}</span>` : "",
-    item.suggested ? '<span class="tag ai">AI pick</span>' : "",
-    item.sample ? '<span class="tag">Sample</span>' : "",
-  ].join("");
-  const points = item.points && item.points.length ? `<ul class="points">${item.points.map((p) => `<li>${esc(p)}</li>`).join("")}</ul>` : "";
-  const summary = busy ? '<p class="lede mono accent">Reading it…</p>' : item.summary ? `<p class="lede">${esc(item.summary)}</p>` : "";
+  const where = item.url ? host(item.url) : item.fileName ? ext(item.fileName) : "";
+  const meta = [
+    KIND_LABEL[item.kind] || "Item",
+    where,
+    `${estimateMinutes(item)} min`,
+    item.intent && INTENT_LABEL[item.intent],
+    item.suggested && "AI pick",
+    item.sample && "Sample",
+  ].filter(Boolean).map(esc).join(" · ");
+  const summary = busy ? '<p class="summary accent">Reading it…</p>' : item.summary ? `<p class="summary">${esc(item.summary)}</p>` : "";
+  const points = item.points && item.points.length ? `<ul class="points">${item.points.slice(0, 4).map((p) => `<li>${esc(p)}</li>`).join("")}</ul>` : "";
   let body = "";
   switch (item.kind) {
     case KIND.NOTE: {
       const t = item.text || item.title;
-      body = `<blockquote class="quote ${t.length > 220 ? "l" : ""}">${esc(t)}</blockquote>${summary}${item.url ? linkOut(item.url) : ""}`;
+      body = `<blockquote class="quote ${t.length > 220 ? "long" : ""}">${esc(t)}</blockquote>${summary}${item.url ? linkRow(item.url) : ""}`;
       break;
     }
     case KIND.QUOTE: {
       const t = item.text || item.title;
-      body = `<blockquote class="quote ${t.length > 220 ? "l" : ""}">${esc(t)}</blockquote>${item.author ? `<p class="cite mono">${esc(item.author)}</p>` : ""}${summary}`;
+      body = `<blockquote class="quote ${t.length > 220 ? "long" : ""}">${esc(t)}</blockquote>${item.author ? `<p class="cite">${esc(item.author)}</p>` : ""}${summary}`;
       break;
     }
     case KIND.LINK:
-      body = `<h1 class="${hClass}">${esc(item.title)}</h1>${summary}${item.text ? `<p class="lede">${esc(item.text)}</p>` : ""}${points}${linkOut(item.url)}`;
+      body = `<h2 class="title">${esc(item.title)}</h2>${summary}${item.text ? `<p class="summary">${esc(item.text)}</p>` : ""}${points}${linkRow(item.url)}`;
       break;
     case KIND.PHOTO:
-      body = `<div class="figure">${imgTag(item, true)}</div><h1 class="headline s">${esc(item.title)}</h1>${summary}`;
+      body = `<div class="media">${imgTag(item, true)}</div><h2 class="title">${esc(item.title)}</h2>${summary}`;
       break;
     case KIND.VIDEO:
       body = item.blobId
-        ? `<div class="figure"><video controls playsinline preload="metadata" data-blob="${esc(item.blobId)}"></video></div><h1 class="headline s">${esc(item.title)}</h1>${summary}`
-        : `<div class="figure poster">${item.imageUrl ? `<img alt="" src="${esc(item.imageUrl)}" loading="lazy">` : ""}<span class="play" aria-hidden="true"></span></div>
-           <h1 class="headline s">${esc(item.title)}</h1>${item.author ? `<p class="cite mono">${esc(item.author)}</p>` : ""}${summary}${item.url ? linkOut(item.url, item.videoId ? "Watch" : "Open source") : ""}`;
+        ? `<div class="media"><video controls playsinline preload="metadata" data-blob="${esc(item.blobId)}"></video></div><h2 class="title">${esc(item.title)}</h2>${summary}`
+        : `<div class="media wide">${item.imageUrl ? `<img alt="" onerror="this.remove()" src="${esc(item.imageUrl)}" loading="lazy">` : ""}<span class="play">${I.play}</span></div>
+           <h2 class="title">${esc(item.title)}</h2>${item.author ? `<p class="cite">${esc(item.author)}</p>` : ""}${summary}${item.url ? linkRow(item.url, item.videoId ? "Watch" : "Open") : ""}`;
       break;
-    default: {
-      const glyph = item.kind === KIND.PDF ? "PDF" : item.kind === KIND.TEXT ? "TXT" : item.kind === KIND.AUDIO ? "AUD" : ext(item.fileName);
-      body = `<div class="slab"><span class="mono muted">${esc(item.fileName || "")}</span><span class="glyph">${esc(glyph)}</span></div><h1 class="${hClass}">${esc(item.title)}</h1>${summary}${points}`;
-    }
+    default:
+      body = `<h2 class="title">${esc(item.title)}</h2>
+        <div class="file-tag"><span class="ext">${esc(item.kind === KIND.PDF ? "PDF" : ext(item.fileName))}</span><span class="name">${esc(item.fileName || "")}${item.size ? " · " + size(item.size) : ""}</span></div>
+        ${summary}${points}`;
   }
-  const facts = [
-    item.ai && item.ai.why ? `<dt>Why today</dt><dd>${esc(item.ai.why)}</dd>` : "",
-    `<dt>Saved</dt><dd>${ago(item.created)}${item.skips ? ` · moved later ${item.skips}×` : ""}</dd>`,
-    item.tags && item.tags.length ? `<dt>Tags</dt><dd>${esc(item.tags.join(", "))}</dd>` : "",
-  ].join("");
-  return `<div class="card-body"><div class="tags">${tags}</div>${body}<dl class="facts">${facts}</dl></div>`;
+  const why = item.ai && item.ai.why ? `<p class="why"><b>Why today</b>${esc(item.ai.why)}</p>` : "";
+  return `<div class="card-body"><span class="meta">${meta}</span>${body}${why}</div>`;
 }
 
-function linkOut(url, label = "Open source") {
-  return `<a class="link-out" href="${esc(url)}" target="_blank" rel="noopener">${label} <span class="mono muted">${esc(host(url))} ↗</span></a>`;
+function linkRow(url, label = "Open") {
+  return `<a class="link-row" href="${esc(url)}" target="_blank" rel="noopener">${I.open}<span>${label}</span><span class="host">${esc(host(url))}</span></a>`;
 }
 
 /** An <img> for a photo item: a stored file (hydrated later) or a web image. */
 function imgTag(item, thumb = false) {
-  if (item.blobId) return `<img alt="${esc(item.title)}" data-blob="${esc(thumb ? item.thumbId || item.blobId : item.blobId)}">`;
-  return item.imageUrl ? `<img alt="${esc(item.title)}" src="${esc(item.imageUrl)}" loading="lazy">` : "";
+  // A picture that can't load (offline, moved) removes its frame instead of showing a broken box.
+  const gone = `onerror="this.closest('.media')?.remove()"`;
+  if (item.blobId) return `<img alt="${esc(item.title)}" ${gone} data-blob="${esc(thumb ? item.thumbId || item.blobId : item.blobId)}">`;
+  return item.imageUrl ? `<img alt="${esc(item.title)}" ${gone} src="${esc(item.imageUrl)}" loading="lazy">` : "";
 }
 
-/* ---------- G2 · Inbox triage ---------- */
+/* ================= Inbox ================= */
 
 function renderInbox() {
   const inbox = state.items.filter((i) => i.status === STATUS.INBOX).sort((a, b) => a.created - b.created);
-  if (!inbox.length) {
-    app.innerHTML = `<div class="screen s-inbox idle" style="grid-template-rows:auto minmax(0,1fr) auto">
-      ${statusBar("Inbox / triage", "0 waiting")}
-      <section class="panel brackets card"><div class="state">
-        <span class="mono accent">Inbox zero</span>
-        <h1 class="headline">All clear.</h1>
-        <p>New saves land here first. Each gets one verdict: let go, keep for later, already done, or read it now.</p>
-        <div class="stack"><button class="btn primary" type="button" data-go="capture">Add something <span>+</span></button>
-        <button class="btn" type="button" data-go="edition">Back to the edition <span>→</span></button></div>
-      </div></section>
-      ${navBar("inbox")}
+  const item = inbox[0];
+  if (!item) {
+    app.innerHTML = `<div class="screen no-actions">
+      ${topBar("Inbox", { count: "0 waiting" })}
+      <section class="card"><div class="card-body"><div class="state">
+        <h2>Inbox clear.</h2>
+        <p>New saves land here first. Each gets one tap: let go, later, done or read.</p>
+        <div class="stack"><button class="btn primary" type="button" data-go="capture">Add something ${I.plus}</button>
+        <button class="btn" type="button" data-go="edition">Go to today's edition ${I.arrow}</button></div>
+      </div></div></section>
+      ${tabBar("inbox")}
     </div>`;
     bindCommon();
     return;
   }
-  const item = inbox[0];
-  app.innerHTML = `<div class="screen s-inbox">
-    ${statusBar("Inbox / triage", `<span class="accent">01</span> / ${pad(inbox.length)} waiting`)}
-    <article class="panel brackets card tcard" data-card="${esc(item.id)}" data-id="${esc(item.id)}">${cardBody(item)}</article>
-    <div class="inbox-foot">
-      <div class="stack-nav">
-        <span class="mono muted" style="font-size:10px;line-height:1.5;margin-bottom:2px">Turn the dial.<br>Press set.</span>
-        <button class="btn" type="button" data-go="edition">Edition</button>
-        <button class="btn" type="button" data-go="inbox" aria-current="page">Inbox <span class="accent">${inbox.length}</span></button>
-        <button class="btn" type="button" data-go="library">Library</button>
-        <button class="btn" type="button" data-go="capture">+ Add</button>
-      </div>
-      <div id="dial"></div>
-    </div>
+  app.innerHTML = `<div class="screen">
+    ${topBar("Inbox", { count: `1 of ${inbox.length}` })}
+    <article class="card tcard" data-card="${esc(item.id)}" data-id="${esc(item.id)}">${cardBody(item)}</article>
+    ${actionBar(item.id, "inbox")}
+    ${tabBar("inbox")}
   </div>`;
   bindCommon();
   hydrate(app);
-  createDial($("#dial"), {
-    items: DIAL_VERDICTS,
-    index: state.dialVerdict,
-    onChange: (i) => { state.dialVerdict = i; },
-    onCommit: (i) => giveVerdict(item.id, DIAL_VERDICTS[i].v, "inbox"),
-  });
   bindSwipe();
 }
 
-/** Swipe the triage card: left lets go, right reads now, up keeps for later. */
+/** Swipe the triage card: left lets go, right reads, up keeps for later. */
 function bindSwipe() {
   const card = $(".tcard", app);
   if (!card) return;
@@ -604,83 +530,78 @@ function bindSwipe() {
   card.appendChild(stamp);
   let x0 = 0, y0 = 0, dx = 0, dy = 0, active = false;
   const decide = () => {
-    if (Math.abs(dx) > 90 && Math.abs(dx) > Math.abs(dy)) return dx > 0 ? VERDICT.READ_NOW : VERDICT.LET_GO;
-    if (dy < -90 && Math.abs(dy) > Math.abs(dx)) return VERDICT.LATER;
+    if (Math.abs(dx) > 90 && Math.abs(dx) > Math.abs(dy) * 1.5) return dx > 0 ? VERDICT.READ_NOW : VERDICT.LET_GO;
+    if (dy < -110 && Math.abs(dy) > Math.abs(dx) * 1.5) return VERDICT.LATER;
     return null;
   };
   const words = { [VERDICT.READ_NOW]: "Read", [VERDICT.LET_GO]: "Let go", [VERDICT.LATER]: "Later" };
   card.addEventListener("pointerdown", (e) => {
     if (e.target.closest("a, button, video, input")) return;
     active = true; x0 = e.clientX; y0 = e.clientY; dx = dy = 0;
-    card.classList.add("dragging");
   });
   card.addEventListener("pointermove", (e) => {
     if (!active) return;
     dx = e.clientX - x0; dy = e.clientY - y0;
-    if (Math.abs(dx) > 8 && !card.hasPointerCapture(e.pointerId)) card.setPointerCapture(e.pointerId);
-    card.style.transform = `translate(${dx}px, ${Math.min(dy, 30)}px) rotate(${dx / 26}deg)`;
+    // Only follow the finger once the gesture is clearly a swipe, so scrolling the card stays smooth.
+    if (Math.abs(dx) < 12 && dy > -12) return;
+    if (!card.hasPointerCapture(e.pointerId)) { card.setPointerCapture(e.pointerId); card.classList.add("dragging"); }
+    card.style.transform = `translate(${dx}px, ${Math.min(0, dy)}px) rotate(${dx / 30}deg)`;
     const v = decide();
     stamp.textContent = v ? words[v] : "";
     stamp.style.opacity = v ? "1" : "0";
     stamp.style.color = v === VERDICT.READ_NOW ? "var(--accent)" : v === VERDICT.LET_GO ? "var(--warn)" : "var(--text)";
   });
-  const end = () => {
+  const reset = () => { card.classList.remove("dragging"); card.style.transform = ""; stamp.style.opacity = "0"; };
+  card.addEventListener("pointerup", () => {
     if (!active) return;
     active = false;
-    card.classList.remove("dragging");
     const v = decide();
-    if (!v) { card.style.transform = ""; stamp.style.opacity = "0"; return; }
-    tick(true);
-    card.style.transform = v === VERDICT.LATER ? "translate(0, -120%)" : `translate(${dx > 0 ? 140 : -140}%, ${dy}px) rotate(${dx / 12}deg)`;
+    if (!v) { reset(); return; }
+    card.classList.remove("dragging");
+    card.style.transform = v === VERDICT.LATER ? "translate(0, -110%)" : `translate(${dx > 0 ? 110 : -110}%, 0) rotate(${dx / 20}deg)`;
     card.style.opacity = "0";
-    setTimeout(() => giveVerdict(card.dataset.id, v, "inbox"), 180);
-  };
-  card.addEventListener("pointerup", end);
-  card.addEventListener("pointercancel", () => { active = false; card.classList.remove("dragging"); card.style.transform = ""; stamp.style.opacity = "0"; });
+    setTimeout(() => giveVerdict(card.dataset.id, v, "inbox"), 160);
+  });
+  card.addEventListener("pointercancel", () => { active = false; reset(); });
 }
 
-/* ---------- G3 · Capture ---------- */
+/* ================= Add ================= */
 
 /*
  * One box takes anything. Type, paste or drop a link, a YouTube URL, a
  * quote, a thought, a photo or a file; Edition works out what each one is
- * and shows it before saving. Attach opens the system picker, which on a
- * phone already offers the photo library, the camera and files.
+ * and lists it before saving. Attach opens the system picker, which on a
+ * phone offers the photo library, the camera and files.
  */
-const CLIP = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11.5l-8.2 8.2a5 5 0 0 1-7.1-7.1l8.6-8.6a3.4 3.4 0 0 1 4.8 4.8l-8.6 8.6a1.7 1.7 0 0 1-2.4-2.4l7.9-7.9"/></svg>';
-const PASTE = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V3h6v1M9 10h6M9 14h6M9 18h3"/></svg>';
-
 function renderCapture() {
   const c = counts(state.items);
-  app.innerHTML = `<div class="screen s-capture">
-    <div class="status mono"><span>Capture · to inbox${c.inbox ? ` · <span class="accent">${c.inbox}</span> waiting` : ""}</span>
-      <button class="icon-btn" type="button" id="cap-close" aria-label="Close" style="font:500 15px var(--body)">✕</button></div>
-    <section class="panel brackets capture-panel" id="cap-panel">
-      <label class="mono accent" for="cap-text">Drop anything</label>
-      <textarea id="cap-text" placeholder="Paste a link, a YouTube URL or a quote. Type a thought. Attach photos or files.">${esc(state.capText)}</textarea>
+  app.innerHTML = `<div class="screen no-actions" style="padding-bottom:calc(var(--safe-b) + 12px)">
+    ${topBar("Add", { sub: c.inbox ? `${c.inbox} in inbox` : "", settings: false,
+      trail: `<button class="icon-btn" type="button" id="cap-close" aria-label="Close">${I.close}</button>` })}
+    <section class="capture">
+      <label class="sr-only" for="cap-text">Link, note, quote or anything</label>
+      <textarea id="cap-text" placeholder="Paste a link or a quote, or type a thought.">${esc(state.capText)}</textarea>
       <div class="tray" id="cap-tray"></div>
       <ul class="detect" id="cap-detect" aria-live="polite"></ul>
       <span class="st" id="cap-st" role="status"></span>
     </section>
-    <div class="shutter-row">
-      <button class="square tool" type="button" id="cap-paste" aria-label="Paste from clipboard">${PASTE}<span class="mono">Paste</span></button>
-      <button class="shutter" type="button" id="shutter" aria-label="Save to inbox"><span></span></button>
-      <button class="square tool" type="button" id="cap-attach" aria-label="Attach photos or files">${CLIP}<span class="mono">Attach</span></button>
+    <div class="cap-bar">
+      <button class="tool" type="button" id="cap-paste" aria-label="Paste from clipboard">${I.paste}</button>
+      <button class="save" type="button" id="cap-save">Save to inbox</button>
+      <button class="tool" type="button" id="cap-attach" aria-label="Attach photos or files">${I.attach}</button>
     </div>
-    <div class="hint mono" id="cap-hint" style="font-size:10px">Edition sorts it for you</div>
     <input type="file" id="in-any" multiple hidden>
   </div>`;
-  bindCommon();
   const ta = $("#cap-text");
   ta.addEventListener("input", () => { state.capText = ta.value; updateDetect(); });
-  ta.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) shutter(); });
+  ta.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) saveCapture(); });
   ta.addEventListener("paste", (e) => {
     const files = Array.from(e.clipboardData?.files || []);
     if (!files.length) return;
     e.preventDefault();
     stageFiles(files);
   });
-  $("#shutter").addEventListener("click", shutter);
+  $("#cap-save").addEventListener("click", saveCapture);
   $("#cap-close").addEventListener("click", () => go(state.back || "edition"));
   $("#cap-attach").addEventListener("click", () => { unlock(); $("#in-any").click(); });
   $("#cap-paste").addEventListener("click", pasteIntoBox);
@@ -704,10 +625,13 @@ function updateDetect() {
   const list = $("#cap-detect");
   if (!list) return;
   const drafts = stagedDrafts();
-  list.innerHTML = drafts.map((d) => `<li><span class="arrow">→</span><span class="what">${esc(describeDraft(d))}</span><span class="title">${esc(d.kind === KIND.NOTE || d.kind === KIND.QUOTE ? "" : d.fileName || (d.videoId ? "" : d.url) || "")}</span></li>`).join("");
-  const hint = $("#cap-hint");
-  if (hint) hint.textContent = drafts.length > 1 ? `Saves as ${drafts.length} items` : drafts.length ? "Press to save" : "Edition sorts it for you";
-  $("#shutter").classList.toggle("ready", drafts.length > 0);
+  list.innerHTML = drafts.map((d) => {
+    const detail = d.kind === KIND.NOTE || d.kind === KIND.QUOTE ? "" : d.fileName || (d.videoId ? "" : d.url) || "";
+    return `<li>${I.arrow}<span class="what">${esc(describeDraft(d))}</span><span class="title-sm">${esc(detail)}</span></li>`;
+  }).join("");
+  const save = $("#cap-save");
+  save.classList.toggle("ready", drafts.length > 0);
+  save.textContent = drafts.length > 1 ? `Save ${drafts.length} items` : "Save to inbox";
 }
 
 function stageFiles(files) {
@@ -720,8 +644,8 @@ function renderTray() {
   const tray = $("#cap-tray");
   if (!tray) return;
   tray.innerHTML = state.capFiles.map((f, i) => `<div class="chip">
-      ${f.url ? `<img alt="" src="${f.url}">` : `<span class="glyph mono">${esc(ext(f.file.name))}</span>`}
-      <button type="button" data-unstage="${i}" aria-label="Remove ${esc(f.file.name)}">✕</button></div>`).join("");
+      ${f.url ? `<img alt="" src="${f.url}">` : `<span class="ext">${esc(ext(f.file.name))}</span>`}
+      <button type="button" data-unstage="${i}" aria-label="Remove ${esc(f.file.name)}">${I.close}</button></div>`).join("");
   tray.hidden = !state.capFiles.length;
   tray.querySelectorAll("[data-unstage]").forEach((b) => b.addEventListener("click", () => {
     const [gone] = state.capFiles.splice(+b.dataset.unstage, 1);
@@ -738,9 +662,8 @@ async function pasteIntoBox() {
     const { text, files } = await readClipboard();
     if (!text && !files.length) { setCapStatus("The clipboard is empty.", true); return; }
     if (text) {
-      const ta = $("#cap-text");
       state.capText = state.capText.trim() ? `${state.capText.trim()}\n${text}` : text;
-      ta.value = state.capText;
+      $("#cap-text").value = state.capText;
     }
     if (files.length) stageFiles(files);
     else updateDetect();
@@ -752,7 +675,7 @@ async function pasteIntoBox() {
   }
 }
 
-/** On the capture screen, paste and drop fill the box instead of saving straight away. */
+/** On the Add screen, paste and drop fill the box instead of saving straight away. */
 function stageTransfer(dt) {
   const files = Array.from(dt.files || []);
   if (files.length) { stageFiles(files); return; }
@@ -771,7 +694,7 @@ function setCapStatus(msg, err) {
   st.classList.toggle("err", !!err);
 }
 
-async function shutter() {
+async function saveCapture() {
   unlock();
   const text = (state.capText || "").trim();
   if (!text && !state.capFiles.length) {
@@ -791,7 +714,7 @@ async function shutter() {
   afterCapture(out);
 }
 
-/* ---------- G4 · Reader ---------- */
+/* ================= Reader ================= */
 
 function openReader(item) {
   if (!item) return;
@@ -802,51 +725,49 @@ function openReader(item) {
   el.setAttribute("aria-modal", "true");
   el.setAttribute("aria-label", item.title);
   const open = item.status === STATUS.QUEUED || item.status === STATUS.INBOX;
-  const page = pageNo(item);
   let content = "";
   switch (item.kind) {
     case KIND.NOTE: content = `<div class="prose">${esc(item.text || item.title)}</div>`; break;
-    case KIND.QUOTE: content = `<blockquote class="quote">${esc(item.text || item.title)}</blockquote>${item.author ? `<p class="cite mono">${esc(item.author)}</p>` : ""}`; break;
+    case KIND.QUOTE: content = `<blockquote class="quote">${esc(item.text || item.title)}</blockquote>${item.author ? `<p class="cite">${esc(item.author)}</p>` : ""}`; break;
     case KIND.LINK: content = item.text ? `<div class="prose">${esc(item.text)}</div>` : ""; break;
-    case KIND.PHOTO: content = imgTag(item); break;
+    case KIND.PHOTO: content = `<div class="media">${imgTag(item)}</div>`; break;
     case KIND.VIDEO: content = item.videoId
       ? `<div class="yt"><iframe title="${esc(item.title)}" src="https://www.youtube-nocookie.com/embed/${esc(item.videoId)}?playsinline=1&rel=0" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen></iframe></div>`
-      : item.blobId ? `<video controls playsinline data-blob="${esc(item.blobId)}"></video>` : ""; break;
+      : item.blobId ? `<div class="media"><video controls playsinline data-blob="${esc(item.blobId)}"></video></div>` : ""; break;
     case KIND.AUDIO: content = `<audio controls data-blob="${esc(item.blobId)}"></audio>`; break;
     case KIND.TEXT: content = `<div class="prose" data-textblob="${esc(item.blobId)}">Loading…</div>`; break;
-    case KIND.PDF: content = `<iframe title="${esc(item.title)}" data-blob="${esc(item.blobId)}"></iframe>`; break;
-    default: content = `<div class="slab"><span class="mono muted">${esc(item.fileName || "")}</span><span class="glyph">${esc(ext(item.fileName))}</span></div>`;
+    case KIND.PDF: content = `<iframe class="doc" title="${esc(item.title)}" data-blob="${esc(item.blobId)}"></iframe>`; break;
+    default: content = `<div class="file-tag"><span class="ext">${esc(ext(item.fileName))}</span><span class="name">${esc(item.fileName || "")}</span></div>`;
   }
-  const source = item.blobId
-    ? `<a class="btn" data-blob="${esc(item.blobId)}" href="#" target="_blank" rel="noopener">Open ↗</a>`
-    : item.url ? `<a class="btn" href="${esc(item.url)}" target="_blank" rel="noopener">Source ↗</a>` : `<button class="btn" type="button" disabled>Source</button>`;
+  const sourceHref = item.blobId ? `data-blob="${esc(item.blobId)}" href="#"` : item.url ? `href="${esc(item.url)}"` : "";
+  const openBtn = sourceHref
+    ? `<a class="act" ${sourceHref} target="_blank" rel="noopener">${I.open}<span>Open</span></a>`
+    : `<button class="act" type="button" disabled>${I.open}<span>Open</span></button>`;
   const actions = open
-    ? `<button class="btn" type="button" data-rv="${VERDICT.LET_GO}">Let go</button>
-       <button class="btn" type="button" data-rv="${VERDICT.LATER}">Later</button>
-       ${source}
-       <button class="btn primary" type="button" data-rv="${VERDICT.DONE}" style="font-size:22px">Done</button>`
-    : `<button class="btn" type="button" data-close>Close</button>
-       <button class="btn" type="button" data-requeue>Requeue</button>
-       ${source}
-       <button class="btn primary" type="button" data-close style="font-size:22px">${item.status === STATUS.DONE ? "Done ✓" : "Close"}</button>`;
+    ? `<button class="act" type="button" data-rv="${VERDICT.LET_GO}">${I.letGo}<span>Let go</span></button>
+       <button class="act" type="button" data-rv="${VERDICT.LATER}">${I.later}<span>Later</span></button>
+       ${openBtn}
+       <button class="act primary" type="button" data-rv="${VERDICT.DONE}">${I.done}<span>Done</span></button>`
+    : `<button class="act" type="button" data-requeue>${I.requeue}<span>Requeue</span></button>
+       ${openBtn}
+       <span></span>
+       <button class="act primary" type="button" data-close>${I.done}<span>Close</span></button>`;
   el.innerHTML = `<div class="screen">
-    <div class="status mono">
-      <button class="icon-btn" type="button" data-close aria-label="Back" style="width:auto;padding:0 10px;font:500 11px var(--mono)">‹ Back</button>
-      <span>${page ? `Reading · ${pad(page)} / ${pad(state.edition.ids.length)}` : esc(KIND_LABEL[item.kind] || "")}</span>
-      <span class="accent" id="time-left"></span>
-    </div>
+    ${topBar(KIND_LABEL[item.kind] || "Item", { settings: false,
+      lead: `<button class="icon-btn" type="button" data-close aria-label="Back" style="margin-left:-12px">${I.back}</button>`,
+      count: `<span id="time-left"></span>` })}
     <div class="reader-main">
       <div class="reader-scroll" id="reader-scroll">
-        <span class="mono muted">${esc(item.url ? host(item.url) : item.fileName || KIND_LABEL[item.kind])} · ${estimateMinutes(item)} min</span>
-        <h1 class="headline">${esc(item.title)}</h1>
-        ${item.summary ? `<p class="lede">${esc(item.summary)}</p>` : ""}
-        ${item.points && item.points.length ? `<ul class="points">${item.points.map((p) => `<li>${esc(p)}</li>`).join("")}</ul>` : ""}
+        <span class="meta">${esc(item.url ? host(item.url) : item.fileName || KIND_LABEL[item.kind])} · ${estimateMinutes(item)} min</span>
+        ${item.kind === KIND.QUOTE || item.kind === KIND.NOTE ? "" : `<h2 class="title">${esc(item.title)}</h2>`}
         ${content}
-        ${item.transcript ? `<span class="mono accent">Text in the image</span><div class="prose">${esc(item.transcript)}</div>` : ""}
+        ${item.summary ? `<p class="summary">${esc(item.summary)}</p>` : ""}
+        ${item.points && item.points.length ? `<ul class="points">${item.points.map((p) => `<li>${esc(p)}</li>`).join("")}</ul>` : ""}
+        ${item.transcript ? `<span class="meta">Text in the image</span><div class="prose">${esc(item.transcript)}</div>` : ""}
       </div>
-      <div class="swheel" id="swheel" role="slider" tabindex="0" aria-label="Scroll" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span class="fill" id="sfill"></span></div>
+      <div class="rail" id="rail" role="slider" tabindex="0" aria-label="Reading position" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span class="fill" id="rail-fill"></span></div>
     </div>
-    <div class="reader-actions">${actions}</div>
+    <div class="actions">${actions}</div>
   </div>`;
   document.body.appendChild(el);
   hydrate(el);
@@ -857,39 +778,35 @@ function openReader(item) {
   }));
   const rq = $("[data-requeue]", el);
   if (rq) rq.addEventListener("click", async () => { await saveItem(restore(item)); closeReader(); render(); toast("Back in the queue."); });
-  bindScrollWheel(el, item);
+  bindRail(el, item);
   $("[data-close]", el).focus();
 }
 
-/** The knurled wheel on the reader's right edge: shows progress and scrolls when turned. */
-function bindScrollWheel(el, item) {
-  const sc = $("#reader-scroll", el), wheel = $("#swheel", el), fill = $("#sfill", el), left = $("#time-left", el);
+/** The thin rail on the reader's right edge: shows progress, and scrolls when dragged. */
+function bindRail(el, item) {
+  const sc = $("#reader-scroll", el), rail = $("#rail", el), fill = $("#rail-fill", el), left = $("#time-left", el);
   const total = estimateMinutes(item) * 60;
-  let lastStep = 0;
   const update = () => {
     const max = sc.scrollHeight - sc.clientHeight;
+    rail.hidden = max <= 4; // nothing to scroll, nothing to show
     const p = max > 0 ? sc.scrollTop / max : 1;
     fill.style.height = `${Math.round(p * 100)}%`;
-    wheel.setAttribute("aria-valuenow", String(Math.round(p * 100)));
+    rail.setAttribute("aria-valuenow", String(Math.round(p * 100)));
     const s = Math.round(total * (1 - p));
-    left.textContent = `${pad(Math.floor(s / 60))}:${pad(s % 60)} left`;
-    const step = Math.floor(p * 12);
-    if (step !== lastStep) { lastStep = step; tick(); }
+    left.textContent = s > 0 ? `${Math.floor(s / 60)}:${pad(s % 60)} left` : "End";
   };
   sc.addEventListener("scroll", update, { passive: true });
-  let drag = null;
-  wheel.addEventListener("pointerdown", (e) => {
-    drag = { y: e.clientY, top: sc.scrollTop };
-    wheel.setPointerCapture(e.pointerId);
-  });
-  wheel.addEventListener("pointermove", (e) => {
-    if (!drag) return;
-    // Turning the wheel moves the text three times faster than the thumb.
-    sc.scrollTop = drag.top + (e.clientY - drag.y) * 3;
-  });
-  wheel.addEventListener("pointerup", () => { drag = null; });
-  wheel.addEventListener("pointercancel", () => { drag = null; });
-  wheel.addEventListener("keydown", (e) => {
+  const seek = (clientY) => {
+    const r = rail.getBoundingClientRect();
+    const p = Math.max(0, Math.min(1, (clientY - r.top) / r.height));
+    sc.scrollTop = p * (sc.scrollHeight - sc.clientHeight);
+  };
+  let dragging = false;
+  rail.addEventListener("pointerdown", (e) => { dragging = true; rail.setPointerCapture(e.pointerId); seek(e.clientY); });
+  rail.addEventListener("pointermove", (e) => { if (dragging) seek(e.clientY); });
+  rail.addEventListener("pointerup", () => { dragging = false; });
+  rail.addEventListener("pointercancel", () => { dragging = false; });
+  rail.addEventListener("keydown", (e) => {
     if (e.key === "ArrowDown") { e.preventDefault(); sc.scrollBy({ top: sc.clientHeight * 0.8, behavior: "smooth" }); }
     if (e.key === "ArrowUp") { e.preventDefault(); sc.scrollBy({ top: -sc.clientHeight * 0.8, behavior: "smooth" }); }
   });
@@ -901,59 +818,50 @@ function closeReader() {
   if (r) r.remove();
 }
 
-/* ---------- G5 · Library ---------- */
+/* ================= Library ================= */
 
 function libraryMatches() {
-  const status = LIB_STATUS[state.libStatus].id;
-  const kinds = LIB_KIND[state.libKind].kinds;
+  const status = LIB_FILTERS[state.libFilter].id;
   const q = state.libQuery.trim().toLowerCase();
   return state.items
     .filter((i) => status === "all" || i.status === status)
-    .filter((i) => !kinds || kinds.includes(i.kind))
     .filter((i) => !q || [i.title, i.text, i.url, i.summary, i.fileName, i.author, i.transcript, ...(i.points || []), ...(i.tags || [])].some((s) => s && s.toLowerCase().includes(q)))
     .sort((a, b) => (b.doneAt || b.archivedAt || b.created) - (a.doneAt || a.archivedAt || a.created));
 }
 
 function renderLibrary() {
-  app.innerHTML = `<div class="screen s-library">
-    ${statusBar("Library", `<span id="lib-count"></span>`)}
+  app.innerHTML = `<div class="screen">
+    ${topBar("Library", { count: `<span id="lib-count"></span>` })}
     <div class="list" id="lib-list"></div>
-    <div>${state.showFind ? `<label class="sr-only" for="lib-q">Search</label><input class="find" id="lib-q" type="search" placeholder="Search everything you saved" value="${esc(state.libQuery)}">` : ""}</div>
-    <div class="drums">
-      <div class="drum" id="drum-status"><span class="window" aria-hidden="true"></span><span class="drum-label mono muted" style="font-size:9px">Status</span></div>
-      <div class="drum" id="drum-kind"><span class="window" aria-hidden="true"></span><span class="drum-label mono muted" style="font-size:9px">Kind</span></div>
+    <div class="lib-tools">
+      <div class="find-wrap">${I.search}<label class="sr-only" for="lib-q">Search</label>
+        <input class="find" id="lib-q" type="search" placeholder="Search everything" value="${esc(state.libQuery)}" enterkeyhint="search"></div>
+      <div class="seg" role="group" aria-label="Show">
+        ${LIB_FILTERS.map((f, i) => `<button type="button" data-filter="${i}" aria-pressed="${state.libFilter === i}">${f.label}</button>`).join("")}
+      </div>
     </div>
-    ${navBar("library", { find: true })}
+    ${tabBar("library")}
   </div>`;
   bindCommon();
   renderList();
-  createWheel($("#drum-status"), {
-    items: LIB_STATUS, index: state.libStatus, axis: "y", drum: true, spacing: 40, label: "Status",
-    onChange: (i) => { state.libStatus = i; renderList(); },
-  });
-  createWheel($("#drum-kind"), {
-    items: LIB_KIND, index: state.libKind, axis: "y", drum: true, spacing: 40, label: "Kind",
-    onChange: (i) => { state.libKind = i; renderList(); },
-  });
-  $('[data-act="find"]').addEventListener("click", () => {
-    state.showFind = !state.showFind;
-    if (!state.showFind) state.libQuery = "";
-    render();
-    if (state.showFind) $("#lib-q").focus();
-  });
   const q = $("#lib-q");
-  if (q) q.addEventListener("input", () => { state.libQuery = q.value; renderList(); });
+  q.addEventListener("input", () => { state.libQuery = q.value; renderList(); });
+  app.querySelectorAll("[data-filter]").forEach((b) => b.addEventListener("click", () => {
+    state.libFilter = +b.dataset.filter;
+    app.querySelectorAll("[data-filter]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+    renderList();
+  }));
 }
 
 function renderList() {
   const list = libraryMatches();
-  $("#lib-count").innerHTML = `<span class="accent">${list.length}</span> match · ${state.items.length} total`;
+  $("#lib-count").textContent = `${list.length} of ${state.items.length}`;
   $("#lib-list").innerHTML = list.length
     ? list.map((i) => `<button class="row" type="button" data-open="${esc(i.id)}">
-        <span class="k ${i.status === STATUS.QUEUED ? "hot" : ""}">${esc((KIND_LABEL[i.kind] || "").toUpperCase())}</span>
         <span class="t">${esc(i.title)}</span>
-        <span class="a">${i.washedOut ? "WASHED · " : ""}${shortAgo(i.created)}</span></button>`).join("")
-    : '<p class="empty">Nothing matches. Turn the drums or clear the search.</p>';
+        <span class="a">${ago(i.created, true)}</span>
+        <span class="k">${esc(KIND_LABEL[i.kind] || "")}${i.washedOut ? " · washed out" : ""}</span></button>`).join("")
+    : '<p class="empty">Nothing matches.</p>';
   $("#lib-list").querySelectorAll("[data-open]").forEach((b) => b.addEventListener("click", () => openReader(byId(b.dataset.open))));
 }
 
@@ -971,45 +879,44 @@ async function oneMore() {
 function openSettings() {
   const c = counts(state.items);
   const wrap = sheet(`
-    <div class="sheet-head"><h2>Settings</h2><button class="icon-btn" type="button" data-close aria-label="Close">✕</button></div>
+    ${topBar("Settings", { settings: false, trail: `<button class="icon-btn" type="button" data-close aria-label="Close">${I.close}</button>` })}
     <div class="section">
-      <span class="mono accent">AI · Anthropic API</span>
-      <div class="field"><label class="mono" for="set-key">API key</label>
+      <h3>AI (Anthropic API)</h3>
+      <div class="field"><label for="set-key">API key</label>
         <input id="set-key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-ant-…" value="${esc(ai.settings.key())}"></div>
-      <div class="field"><label class="mono" for="set-model">Model</label>
-        <input id="set-model" type="text" autocomplete="off" spellcheck="false" value="${esc(ai.settings.model())}"></div>
+      <div class="field"><label for="set-model">Model</label>
+        <input id="set-model" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" value="${esc(ai.settings.model())}"></div>
       <div class="two">
         <button class="btn primary" type="button" id="set-save">Save and test</button>
         <button class="btn" type="button" id="set-clear">Remove key</button>
       </div>
       <span class="st" id="set-st" role="status"></span>
-      <p class="note">The key stays on this device and is sent only to Anthropic. With it, Edition reads each new save (photos and PDFs too) to title and tag it, ranks your queue from what you finish and let go, and can search for new reading. Each is a paid API call on your account.</p>
+      <p class="note">The key stays on this device and is sent only to Anthropic. With it, Edition titles and tags each new save (photos and PDFs too), ranks your queue from what you finish and let go, and can search for new reading. Each is a paid API call on your account.</p>
     </div>
     <div class="section">
-      <span class="mono accent">Edition</span>
-      <button class="btn" type="button" id="set-rebuild">Rebuild today's edition</button>
-      <button class="btn" type="button" id="set-discover" ${ai.settings.enabled() ? "" : "disabled"}>Find something new</button>
+      <h3>Edition</h3>
+      <button class="btn" type="button" id="set-rebuild">Rebuild today's edition ${I.requeue}</button>
+      <button class="btn" type="button" id="set-discover" ${ai.settings.enabled() ? "" : "disabled"}>Find something new ${I.search}</button>
       <span class="st" id="set-ed-st" role="status"></span>
     </div>
     <div class="section">
-      <span class="mono accent">Wheel clicks</span>
-      <div class="two" role="group" aria-label="Wheel click sound">
-        <button class="btn ${soundOn() ? "outline" : ""}" type="button" data-sound="1" aria-pressed="${soundOn()}">Sound on</button>
-        <button class="btn ${soundOn() ? "" : "outline"}" type="button" data-sound="0" aria-pressed="${!soundOn()}">Silent</button>
+      <h3>Sounds</h3>
+      <div class="two seg" role="group" aria-label="Sounds" style="grid-template-columns:repeat(2,minmax(0,1fr))">
+        <button type="button" data-sound="1" aria-pressed="${soundOn()}">On</button>
+        <button type="button" data-sound="0" aria-pressed="${!soundOn()}">Off</button>
       </div>
-      <p class="note">iPhone web apps can't vibrate, so each detent plays a short click instead.</p>
+      <p class="note">A soft click when you give a verdict or save something.</p>
     </div>
     <div class="section">
-      <span class="mono accent">Samples</span>
+      <h3>Samples</h3>
       <div class="two">
         <button class="btn" type="button" id="set-samples-load">Load samples</button>
         <button class="btn" type="button" id="set-samples-clear" ${state.items.some((i) => i.sample) ? "" : "disabled"}>Remove samples</button>
       </div>
       <span class="st" id="set-sm-st" role="status"></span>
-      <p class="note">Example links, YouTube videos, quotes, notes and stock photos across the inbox, queue and history. Your own items are never touched.</p>
     </div>
     <div class="section">
-      <span class="mono accent">Backup</span>
+      <h3>Backup</h3>
       <div class="two">
         <button class="btn" type="button" id="set-export">Export</button>
         <button class="btn" type="button" id="set-import">Import</button>
@@ -1017,7 +924,7 @@ function openSettings() {
       <input type="file" id="set-import-file" accept="application/json,.json" hidden>
       <p class="note">Exports titles, notes, links and history as JSON. Photos and files stay on this device.</p>
     </div>
-    <p class="mono muted">Edition ${VERSION} · ${c.inbox} inbox · ${c.queued} queued · ${c.done} done · ${c.archived} let go</p>`);
+    <p class="version">Edition ${VERSION} · ${c.inbox} inbox · ${c.queued} queued · ${c.done} done · ${c.archived} let go</p>`);
 
   const st = $("#set-st", wrap);
   const say = (el, msg, err) => { el.textContent = msg; el.classList.toggle("err", !!err); };
@@ -1064,11 +971,7 @@ function openSettings() {
   });
   wrap.querySelectorAll("[data-sound]").forEach((b) => b.addEventListener("click", () => {
     setSound(b.dataset.sound === "1");
-    wrap.querySelectorAll("[data-sound]").forEach((x) => {
-      const on = x === b;
-      x.classList.toggle("outline", on);
-      x.setAttribute("aria-pressed", String(on));
-    });
+    wrap.querySelectorAll("[data-sound]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
     if (soundOn()) { unlock(); tick(true); }
   }));
   $("#set-export", wrap).addEventListener("click", async () => {
@@ -1100,7 +1003,7 @@ function sheet(html) {
   lastFocus = document.activeElement;
   const wrap = document.createElement("div");
   wrap.className = "sheet-wrap";
-  wrap.innerHTML = `<div class="sheet" role="dialog" aria-modal="true">${html}</div>`;
+  wrap.innerHTML = `<div class="sheet" role="dialog" aria-modal="true" aria-label="Settings">${html}</div>`;
   wrap.addEventListener("click", (e) => { if (e.target === wrap) closeSheet(); });
   wrap.querySelectorAll("[data-close]").forEach((b) => b.addEventListener("click", closeSheet));
   document.body.appendChild(wrap);
@@ -1125,12 +1028,14 @@ function toast(msg, { action, onAction } = {}) {
   el.innerHTML = `<span>${esc(msg)}</span>${action ? `<button type="button">${esc(action)}</button>` : ""}`;
   if (action) $("button", el).addEventListener("click", () => { el.remove(); onAction && onAction(); });
   document.body.appendChild(el);
-  toastTimer = setTimeout(() => el.remove(), action ? 6000 : 3000);
+  toastTimer = setTimeout(() => el.remove(), action ? 5000 : 2500);
 }
 
 function wireGlobal() {
-  // The first touch anywhere unlocks wheel click sounds on iOS.
+  // The first touch anywhere unlocks sounds on iOS.
   window.addEventListener("pointerdown", unlock, { once: true });
+  // iOS ignores the viewport's zoom limits; block pinch gestures on the page itself.
+  document.addEventListener("gesturestart", (e) => e.preventDefault());
   // Paste anywhere outside a text field captures straight to the inbox.
   document.addEventListener("paste", async (e) => {
     const t = e.target;
@@ -1179,16 +1084,16 @@ function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 function pad(n) { return String(n).padStart(2, "0"); }
-function ago(ts) {
+function ago(ts, short = false) {
   const d = Math.floor((Date.now() - ts) / 86400000);
+  if (short) return d <= 0 ? "today" : `${d}d`;
   return d <= 0 ? "today" : d === 1 ? "yesterday" : `${d} days ago`;
 }
-function shortAgo(ts) { return `${Math.max(0, Math.floor((Date.now() - ts) / 86400000))}D`; }
 function host(url) { try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return ""; } }
 function ext(name) { const e = String(name || "").split(".").pop(); return e && e !== name ? e.slice(0, 4).toUpperCase() : "FILE"; }
 function size(b) { return b > 1048576 ? (b / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(b / 1024)) + " KB"; }
 function withTimeout(p, ms) { return Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error("Timed out")), ms))]); }
 
 boot().catch((e) => {
-  app.innerHTML = `<div class="screen"><div class="state"><h1 class="headline">Something broke.</h1><p>${esc(e && e.message)}</p></div></div>`;
+  app.innerHTML = `<div class="screen no-actions"><div class="state"><h2>Something broke.</h2><p>${esc(e && e.message)}</p></div></div>`;
 });
