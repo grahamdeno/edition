@@ -14,14 +14,15 @@ Built like [Scales](https://github.com/grahamdeno/scales) and [Tabs](https://git
                         Read now
 ```
 
-Two screens and no tab bar. The front page scrolls; the reader is full screen. Add, Search and Settings open as sheets from one corner button, which dims after three idle seconds so the page is all reading space.
+Edition opens on a feed, not a menu: one card at a time, nothing to choose before you start. The front page and the reader sit behind it; Add, Search and Settings open as sheets from one corner button, which dims after three idle seconds.
 
-1. **Front page.** Today's edition set like a newspaper: a lead story, two smaller ones, then rows. Tap *I have 10 min*, *30 min* or *An evening* and it shows only what fits. Below it: the themes you keep circling (tap one to see everything on it) and the items that have waited longest in your queue, each with *Read today*.
-2. **Sort.** When new saves arrive, a line at the top says how many. Tap it and they open full screen, one at a time. Tap Let go, Keep or Done in the bottom-right pill. Swipe left or right to skip ahead or go back.
-3. **Read.** Tap any story on the front page to read it full screen. The same pill gives Let go, Later or Done, and the next story slides in. The pill and the close button dim while you read and wake when you touch the screen.
-4. **Add.** Corner button, then Add. One box takes a link, a YouTube URL, a quote or a thought; Paste and Attach sit either side of Save, and Edition lists what it found before saving. On a computer, paste or drag anywhere.
-5. **Fading.** A save left untouched for three weeks, or moved later eight times, fades: it stops appearing in editions and waits in the Tideline at the bottom of the front page. Nothing is let go without your verdict: tap Keep for three more weeks, or Let go. Items within a week of fading show the days left and a *Read today* button.
-6. **Back.** In the reader, pull down from the top and release to go back to the front page, as in Tabs. Sheets close with a plain drag down.
+1. **Feed.** New saves first, then today's edition, then a finish card. Each card starts face down on why you saved it: your own words if you gave a reason when saving, otherwise what you saved it for and why it might matter. Tap to turn it over and see what it is; tap again to open it. Read, Done, Keep or Later, and Let go sit in a rail on the right. Swipe up for the next card, down for the one before. On the first card, pull down for the front page. The finish card says what you did and shows anything fading.
+2. **Front page.** Today's edition set like a newspaper, with the themes you keep circling and anything fading. Reach it by pulling down on the first card, or from the menu.
+3. **Sort.** When new saves arrive, a line at the top says how many. Tap it and they open full screen, one at a time. Tap Let go, Keep or Done in the bottom-right pill. Swipe left or right to skip ahead or go back.
+4. **Read.** Tap any story on the front page to read it full screen. The same pill gives Let go, Later or Done, and the next story slides in. The pill and the close button dim while you read and wake when you touch the screen.
+5. **Add.** Corner button, then Add. One box takes a link, a YouTube URL, a quote or a thought; Paste and Attach sit either side of Save, and Edition lists what it found before saving. An optional line asks why you're saving it; that reason is the first thing you see when the card comes back. On a computer, paste or drag anywhere.
+6. **Fading.** A save left untouched for three weeks, or moved later eight times, fades: it stops appearing in editions and waits in the Tideline at the bottom of the front page. Nothing is let go without your verdict: tap Keep for three more weeks, or Let go. Items within a week of fading show the days left and a *Read today* button.
+7. **Back.** In the reader, pull down from the top and release to go back to the front page, as in Tabs. Sheets close with a plain drag down.
 
 ## AI (optional)
 

@@ -250,6 +250,7 @@ export function createItem(draft, { id, now = Date.now(), source = "drop" } = {}
     size: draft.size,
     blobId: draft.blobId,
     summary: draft.summary || "",
+    why: draft.why || "",           // the reader's own reason, in their words
     tags: draft.tags || [],
     minutes: draft.minutes,
     source,
