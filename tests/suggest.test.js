@@ -64,3 +64,27 @@ test("letting go of a suggestion doesn't lower your own interests", () => {
   assert.equal(prof.tags.ai, 1);
   assert.equal(prof.tags.design, 1.5);
 });
+
+import { asBook, bookLabel, BOOK_SITTING_MINUTES } from "../src/model.js";
+
+test("a photo of a book becomes a book you want to read", () => {
+  const b = asBook({ kind: "photo", title: "Saved photo" }, { title: "Shape Up", author: "Ryan Singer" });
+  assert.equal(b.title, "Shape Up");
+  assert.equal(b.author, "Ryan Singer");
+  assert.equal(b.intent, "read");
+  assert.equal(b.minutes, BOOK_SITTING_MINUTES);
+  assert.equal(bookLabel(b.book), "Shape Up by Ryan Singer");
+  const edited = asBook({ kind: "photo", title: "My title", editedAt: 1 }, { title: "Other" });
+  assert.equal(edited.title, "My title");
+});
+
+test("a read book is an interest, not a recent read", () => {
+  const items = [
+    { status: STATUS.DONE, book: { title: "Shape Up" }, tags: ["product"], doneAt: 2 },
+    { status: STATUS.DONE, tags: ["product"], title: "An essay", doneAt: 1 },
+  ];
+  const p = interestProfile(items);
+  assert.deepEqual(p.kept.map((i) => i.title), ["An essay"]);
+  assert.equal(p.books.length, 1);
+  assert.equal(p.tags.product, 2);
+});

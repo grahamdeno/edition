@@ -4,7 +4,7 @@
  * Bump VERSION with each release so phones pick up the new shell.
  */
 
-const VERSION = "3.9.1";
+const VERSION = "3.10.0";
 const CACHE = `edition-${VERSION}`;
 const SHELL = [
   "./",

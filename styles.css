@@ -558,3 +558,9 @@ html, body { height: var(--app-h, 100%); }
 .feed.pic-both .feed-bg.pic::after {
   background: linear-gradient(180deg, rgba(14, 15, 17, 0.8) 0%, rgba(14, 15, 17, 0.3) 18%, rgba(14, 15, 17, 0.5) 38%, rgba(14, 15, 17, 0.92) 58%, #0E0F11 80%);
 }
+
+/* Edit: "This is a book" */
+.check { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; border-radius: 14px; background: var(--panel); border: 1px solid var(--line); }
+.check input { width: 22px; height: 22px; margin: 1px 0 0; accent-color: var(--accent); flex: none; }
+.check span { display: flex; flex-direction: column; gap: 2px; font-size: 15px; }
+.check small { font-size: 12px; color: var(--muted); }

@@ -341,9 +341,11 @@ export function interestProfile(items) {
     for (const t of it.tags || []) bump(tags, t.toLowerCase(), w);
     bump(kinds, it.kind, w);
   }
-  const kept = items.filter((i) => i.status === STATUS.DONE).sort((a, b) => (b.doneAt || 0) - (a.doneAt || 0));
+  // A book marked done means "I've read it", not "I read it today": books are listed apart, with no date implied.
+  const kept = items.filter((i) => i.status === STATUS.DONE && !i.book).sort((a, b) => (b.doneAt || 0) - (a.doneAt || 0));
+  const books = items.filter((i) => i.status === STATUS.DONE && i.book).sort((a, b) => (b.doneAt || 0) - (a.doneAt || 0));
   const dropped = items.filter((i) => i.status === STATUS.ARCHIVED).sort((a, b) => (b.archivedAt || 0) - (a.archivedAt || 0));
-  return { tags, kinds, kept, dropped };
+  return { tags, kinds, kept, dropped, books };
 }
 
 export function topTags(profile, n = 8) {
@@ -705,4 +707,30 @@ export function localTags(text, vocab, max = 3) {
     if (words && s.includes(` ${words} `) && !out.includes(normTag(t))) out.push(normTag(t));
   }
   return out;
+}
+
+/* ---- Books ----
+ * A photo of a book is a book you want to read. Marking it done means you
+ * have read it, at some point; not necessarily recently.
+ */
+export const BOOK_SITTING_MINUTES = 30; // what a book "costs" in an edition: one sitting
+
+/** "Title by Author", or just the title. */
+export function bookLabel(book) {
+  if (!book || !book.title) return "";
+  return book.author ? `${book.title} by ${book.author}` : book.title;
+}
+
+/** Turn a photo into a book: its title, author and a sitting's worth of time. Keeps edits you made. */
+export function asBook(item, book) {
+  const b = { title: String(book.title || "").trim().slice(0, 140), author: String(book.author || "").trim().slice(0, 80) || undefined };
+  if (!b.title) return item;
+  return {
+    ...item,
+    book: b,
+    title: item.editedAt ? item.title : b.title,
+    author: item.editedAt && item.author ? item.author : b.author,
+    intent: "read",
+    minutes: BOOK_SITTING_MINUTES,
+  };
 }

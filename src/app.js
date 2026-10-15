@@ -18,6 +18,7 @@ import {
   VERDICT, STATUS, KIND, dayKey, applyVerdict, restore, buildEdition, editionView,
   interestProfile, estimateMinutes, counts, migrateLegacy, createItem, EDITION_SIZE,
   detectText, draftFromFile, describeDraft, fitToTime, circling, fading, isFaded, FADE_DAYS, youtubeId, titleFromUrl,
+  asBook, bookLabel,
   SUGGESTIONS_PER_DAY, WHY_NOT, WHY_NOT_LABEL, emptySuggestProfile, learnFromSuggestion, suggestionGuide,
   screenSuggestions, suggestMaxMinutes,
   canonTags, tagVocab, tagStats, renameTag, addAlias, releaseTags, renameInSuggestProfile, localTags, normTag, MAX_TAGS,
@@ -31,7 +32,7 @@ import { I } from "./icons.js";
 import { topicColor, coverSvg, dominantColor } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "3.9.1";
+export const VERSION = "3.10.0";
 const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 
 const KIND_LABEL = { link: "Link", note: "Note", quote: "Quote", photo: "Photo", pdf: "PDF", text: "Text", video: "Video", audio: "Audio", file: "File" };
@@ -326,7 +327,7 @@ function contextFor(item) {
     .filter((i) => i.id !== item.id && !i.suggested && !i.sample && Math.abs((i.created || 0) - (item.created || 0)) < 3 * DAY)
     .sort((a, b) => Math.abs(a.created - item.created) - Math.abs(b.created - item.created))
     .slice(0, 5).map(headline);
-  const finished = state.items.filter((i) => i.status === STATUS.DONE && i.id !== item.id)
+  const finished = state.items.filter((i) => i.status === STATUS.DONE && !i.book && i.id !== item.id)
     .sort((a, b) => (b.doneAt || 0) - (a.doneAt || 0)).slice(0, 5).map(headline);
   return { around, finished };
 }
@@ -362,6 +363,8 @@ async function enrichPending() {
             hookV: out.hook ? ai.HOOK_VERSION : cur.hookV,
             enrichedAt: Date.now(),
           };
+          // A photo of a book is a book you want to read.
+          if (out.book && cur.kind === KIND.PHOTO) Object.assign(upd, asBook(upd, out.book), { hook: "A book you want to read", hookV: ai.HOOK_VERSION });
           // A note that turns out to be a quotation is filed as one.
           if (out.quote && cur.kind === KIND.NOTE) {
             upd.kind = KIND.QUOTE;
@@ -743,7 +746,7 @@ function ringItems() {
     inner.push(
       { id: "letgo", label: item.suggested ? "Not for me" : "Let go", icon: I.letGo, run: () => feedVerdict(id, VERDICT.LET_GO) },
       { id: "later", label: keep ? "Keep" : "Later", icon: keep ? I.keep : I.later, run: () => feedVerdict(id, VERDICT.LATER) },
-      { id: "done", label: "Done", icon: I.done, run: () => feedVerdict(id, VERDICT.DONE) },
+      { id: "done", label: doneLabel(item), icon: I.done, run: () => feedVerdict(id, VERDICT.DONE) },
       { id: "read", label: "Read", icon: I.read, primary: true, run: () => openStories("single", id) },
     );
   }
@@ -946,7 +949,7 @@ function renderStory() {
     return;
   }
   $("#reader-edit", el).hidden = false;
-  $("#where", el).textContent = [KIND_LABEL[item.kind], item.url ? host(item.url) : ""].filter(Boolean).join(" · ");
+  $("#where", el).textContent = item.book ? feedMeta(item) : [KIND_LABEL[item.kind], item.url ? host(item.url) : ""].filter(Boolean).join(" · ");
   story.innerHTML = storyBody(item);
   story.scrollTop = 0;
   hydrate(story);
@@ -956,7 +959,7 @@ function renderStory() {
   const b = (v, label, icon, primary) => `<button type="button" class="${primary ? "primary" : ""}" data-v="${v}">${icon}<span>${label}</span></button>`;
   if (open) {
     const keep = item.status === STATUS.INBOX || isFaded(item);
-    verdicts.innerHTML = b(VERDICT.LET_GO, "Let go", I.letGo) + b(VERDICT.LATER, keep ? "Keep" : "Later", keep ? I.keep : I.later) + b(VERDICT.DONE, "Done", I.done, true);
+    verdicts.innerHTML = b(VERDICT.LET_GO, "Let go", I.letGo) + b(VERDICT.LATER, keep ? "Keep" : "Later", keep ? I.keep : I.later) + b(VERDICT.DONE, item.book ? "Read it" : "Done", I.done, true);
   } else {
     verdicts.innerHTML = `<button type="button" data-requeue>${I.requeue}<span>Requeue</span></button><button type="button" class="primary" data-close>${I.done}<span>Close</span></button>`;
   }
@@ -990,6 +993,7 @@ function storyBody(item) {
     ? `<a class="source" data-blob="${esc(item.blobId)}" href="#" target="_blank" rel="noopener">${I.open}<span>Open the file</span><span class="host">${esc(item.fileName || "")}</span></a>`
     : item.url ? `<a class="source" href="${esc(item.url)}" target="_blank" rel="noopener">${I.open}<span>${item.videoId ? "Watch on YouTube" : "Read the original"}</span><span class="host">${esc(host(item.url))}</span></a>` : "";
   return `${words ? "" : `<h1>${esc(item.title)}</h1>`}
+    ${item.book && item.book.author ? `<p class="cite">by ${esc(item.book.author)}</p>` : ""}
     ${content}
     ${busy ? '<p class="summary accent">Reading it…</p>' : item.summary ? `<p class="summary">${esc(item.summary)}</p>` : ""}
     ${item.points && item.points.length ? `<ul class="points">${item.points.map((p) => `<li>${esc(p)}</li>`).join("")}</ul>` : ""}
@@ -1097,7 +1101,7 @@ async function storyVerdict(id, verdict) {
   const words = {
     [VERDICT.LET_GO]: "Let go.",
     [VERDICT.LATER]: stage === "inbox" ? "Kept for a future edition." : after.fadedAt ? "Moved later eight times. It's waiting in the Tideline." : "Moved to a later edition.",
-    [VERDICT.DONE]: "Marked done.",
+    [VERDICT.DONE]: doneToast(before),
   };
   toast(words[verdict], {
     high: true,
@@ -1230,13 +1234,19 @@ function hookFor(item) {
   const since = item.status === STATUS.INBOX ? (ago(item.created) === "today" ? "Saved today" : `Saved ${ago(item.created)}`) : `From ${ago(item.created)}`;
   const sub = item.ai?.why || item.summary || "";
   if (item.why) return { kicker: since, lead: "You wrote when you saved it:", big: `“${item.why}”`, mine: true, sub };
+  if (item.book) return { kicker: since, lead: "", big: "A book you want to read", mine: false, sub: "" };
   if (item.hook) return { kicker: since, lead: `Edition's guess · ${doingFor(item)}`, big: item.hook, mine: false, guess: true, sub: "" };
   return { kicker: since, lead: "", big: what[item.intent] || byKind[item.kind] || "Something you saved.", mine: false, sub };
 }
 
 function feedMeta(item) {
+  if (item.book) return ["Book", item.book.author ? `by ${item.book.author}` : ""].filter(Boolean).join(" · ");
   return [KIND_LABEL[item.kind] || "Item", `${estimateMinutes(item)} min`, item.url ? host(item.url) : item.author || ""].filter(Boolean).join(" · ");
 }
+
+/** What Done is called for this item: for a book, it means you've read it (whenever that was). */
+const doneLabel = (item) => (item && item.book ? "I've read it" : "Done");
+const doneToast = (item) => (item && item.book ? "Marked as read. It counts toward what you like, not as a recent read." : "Marked done.");
 
 function renderFeed() {
   if (ringEl) closeRing(true);
@@ -1451,7 +1461,7 @@ async function feedVerdict(id, verdict) {
   const words = {
     [VERDICT.LET_GO]: rec.whyNot ? `Let go. ${{ topic: "Fewer like it.", known: "Deeper ones next time.", long: "Shorter ones next time.", site: "That site is blocked." }[rec.whyNot]}` : "Let go.",
     [VERDICT.LATER]: stage === "inbox" ? "Kept for a future edition." : after.fadedAt ? "Moved later eight times. It's waiting under Fading." : "Moved to a later edition.",
-    [VERDICT.DONE]: "Marked done.",
+    [VERDICT.DONE]: doneToast(before),
   };
   toast(words[verdict], {
     action: "Undo",
@@ -1587,6 +1597,8 @@ function openEdit(id) {
     <p class="note">${esc(KIND_LABEL[item.kind] || "Item")} · saved ${esc(ago(item.created))}${item.fileName ? ` · ${esc(item.fileName)}` : ""}</p>
     ${words ? f("text", item.kind === KIND.QUOTE ? "Quote" : "Note", item.text, { area: true }) : f("title", "Title", item.title)}
     ${item.kind === KIND.QUOTE || item.kind === KIND.VIDEO ? f("author", item.kind === KIND.QUOTE ? "Who said it" : "Channel", item.author) : ""}
+    ${item.kind === KIND.PHOTO ? `<label class="check"><input type="checkbox" id="ed-book" ${item.book ? "checked" : ""}><span>This is a book I want to read<small>Done becomes "I've read it", and counts toward what you like rather than as a recent read.</small></span></label>
+      ${f("author", "Author", item.book?.author || item.author)}` : ""}
     ${hasUrl ? f("url", "Link", item.url, { type: "url", ph: "https://" }) : ""}
     ${f("why", "Why you saved it", item.why, { hint: "the face of its card", ph: item.hook || "Read this before the roadmap review" })}
     ${!item.why && item.hook ? `<button class="chip use-guess" type="button" id="ed-guess">Edit Edition's guess</button>` : ""}
@@ -1625,6 +1637,11 @@ function openEdit(id) {
       next.url = u || undefined;
       const vid = u ? youtubeId(u) : null;
       if (cur.kind === KIND.VIDEO || vid) { next.videoId = vid || undefined; if (vid) next.kind = KIND.VIDEO; }
+    }
+    if (cur.kind === KIND.PHOTO) {
+      const isBook = $("#ed-book", wrap)?.checked;
+      if (isBook) Object.assign(next, asBook(next, { title: next.title, author: next.author }), { hook: "A book you want to read" });
+      else delete next.book;
     }
     next.why = (val("why") || "").trim().slice(0, 140);
     const typed = canonTags((val("tags") || "").split(","), {}, MAX_TAGS);
