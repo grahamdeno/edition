@@ -27,7 +27,7 @@ import { tick, unlock, soundOn, setSound } from "./feel.js";
 import { I } from "./icons.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "3.3.0";
+export const VERSION = "3.3.1";
 const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 
 const KIND_LABEL = { link: "Link", note: "Note", quote: "Quote", photo: "Photo", pdf: "PDF", text: "Text", video: "Video", audio: "Audio", file: "File" };
@@ -493,20 +493,21 @@ function bindFront() {
 
 /*
  * The + button catches the light now and then, like a coin spinning to a stop
- * on a counter: once on launch, then every half minute while the front page
- * sits idle. Skipped when the reader asked for reduced motion.
+ * on a counter: once on launch, then every six seconds while the front page is
+ * open. It brightens for the spin without resetting the corner's sleep, so the
+ * menu still dims between spins. Skipped with reduced motion or a hidden page.
  */
-const COIN_EVERY_MS = 30000;
+const COIN_EVERY_MS = 6000;
 let coinTimer = 0;
 function spinCoin() {
   const fab = $("#fab"), corner = $("#corner");
   if (!fab || state.reader || $(".sheet-wrap") || corner.classList.contains("open")) return;
-  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-  wakeCorner();
+  if (document.hidden || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
   fab.classList.remove("spin");
   void fab.offsetWidth; // restart the animation
   fab.classList.add("spin");
-  fab.addEventListener("animationend", () => fab.classList.remove("spin"), { once: true });
+  corner.classList.add("glinting");
+  fab.addEventListener("animationend", () => { fab.classList.remove("spin"); corner.classList.remove("glinting"); }, { once: true });
 }
 function startCoin() {
   clearInterval(coinTimer);
