@@ -12,8 +12,12 @@
 ```js
 {
   id,                       // UUID
-  kind,                     // link | note | photo | pdf | text | video | audio | file
+  kind,                     // link | note | quote | photo | pdf | text | video | audio | file
   title, text, url,
+  author,                   // quote attribution, or a video's channel
+  videoId, imageUrl,        // YouTube id; a web image or video thumbnail
+  intent, points, transcript, // AI: why it was saved, key points, text in a photo
+  sample,                   // true for the built-in examples
   fileName, mime, size,
   blobId, thumbId,          // keys into the blobs store
   summary,                  // one line on why it might matter (AI or none)
@@ -54,7 +58,7 @@ The first version kept everything in `localStorage['edition-v0']`. On first laun
 
 | Route | Where it works |
 | --- | --- |
-| Capture screen: mode wheel (Note, Paste, Camera, Photos, Files) and shutter | Everywhere |
+| Capture screen: one box, Paste, Attach (photo library, camera, files) and shutter. `detectText` decides link, video, quote or note; several links become several items | Everywhere |
 | Paste anywhere outside a text field | Desktop, iPad with keyboard |
 | Drag and drop onto the window | Desktop |
 | Share target (`manifest.share_target` → `sw.js`) | Android, desktop Chrome |

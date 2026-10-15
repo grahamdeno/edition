@@ -4,7 +4,9 @@
  *
  * Three jobs:
  *   enrich    read one new item (text, link, photo or PDF) and return a
- *             title, a one-line "why it might matter", tags and minutes
+ *             title, a one-line "why it might matter", tags, minutes, what
+ *             it was saved for, key points, text in a photo, and whether a
+ *             note is really a quote
  *   rank      score the queue 0..100 using what the reader finished and let go
  *   discover  search the web for a few new things this reader would want
  */
@@ -99,10 +101,18 @@ const ENRICH_SYSTEM =
 const ENRICH_SHAPE =
   'Return JSON: {"title": string (max 80 chars, plain, no site name unless needed), ' +
   '"summary": string (one sentence, max 140 chars, on why this might be worth their time; for a photo, what it shows and why it might have been kept), ' +
-  '"tags": array of 1-3 lowercase topic words, "minutes": integer time to read or watch}';
+  '"tags": array of 1-3 lowercase topic words, "minutes": integer time to read or watch, ' +
+  '"intent": one of "read", "watch", "listen", "reference", "idea", "task" (what the person most likely saved it for), ' +
+  '"points": array of 0-3 short key points (only for documents, PDFs, long notes or photos of pages; otherwise []), ' +
+  '"transcript": string (for a photo or screenshot with readable text such as a whiteboard, page, slide or sign: that text, cleaned up, max 1500 chars; otherwise ""), ' +
+  '"quote": null, or {"text": string, "author": string} when the item is really a quotation worth keeping as one}';
+
+const INTENTS = new Set(["read", "watch", "listen", "reference", "idea", "task"]);
 
 /**
- * Enrich one item. `blob` is the original file for photos and PDFs.
+ * Enrich one item: title, why it matters, tags, time, what it was saved for,
+ * key points, any text in a photo, and whether a note is really a quote.
+ * `blob` is the original file for photos, PDFs and text files.
  * Links are judged from the URL and any note; the browser can't fetch the page.
  */
 export async function enrich(item, blob) {
@@ -110,14 +120,17 @@ export async function enrich(item, blob) {
   if (item.kind === "photo" && blob) {
     const img = await imageForModel(blob);
     if (img) parts.push({ type: "image", source: { type: "base64", media_type: img.type, data: img.data } });
+  } else if (item.kind === "photo" && item.imageUrl) {
+    parts.push({ type: "image", source: { type: "url", url: item.imageUrl } });
   } else if (item.kind === "pdf" && blob && blob.size <= MAX_PDF_BYTES) {
     parts.push({ type: "document", source: { type: "base64", media_type: "application/pdf", data: await toBase64(blob) } });
   } else if (item.kind === "text" && blob) {
     item = { ...item, text: (await blob.text()).slice(0, 12000) };
   }
   const lines = [
-    `Kind: ${item.kind}`,
+    `Kind: ${item.kind}${item.videoId ? " (YouTube)" : ""}`,
     item.title && `Current title: ${item.title}`,
+    item.author && `Author or channel: ${item.author}`,
     item.url && `URL: ${item.url}`,
     item.fileName && `File name: ${item.fileName}`,
     item.text && `Text:\n${item.text.slice(0, 12000)}`,
@@ -125,12 +138,17 @@ export async function enrich(item, blob) {
     ENRICH_SHAPE,
   ].filter((l) => l !== undefined && l !== false);
   parts.push({ type: "text", text: lines.join("\n") });
-  const out = parseJson(textOf(await call({ content: parts, system: ENRICH_SYSTEM, maxTokens: 400 })));
+  const out = parseJson(textOf(await call({ content: parts, system: ENRICH_SYSTEM, maxTokens: 1200 })));
+  const quote = out.quote && typeof out.quote === "object" && out.quote.text ? { text: clip(out.quote.text, 600), author: clip(out.quote.author, 80) } : null;
   return {
     title: clip(out.title, 120) || item.title,
     summary: clip(out.summary, 200),
     tags: Array.isArray(out.tags) ? out.tags.slice(0, 3).map((t) => String(t).toLowerCase().trim()).filter(Boolean) : [],
     minutes: Number.isFinite(+out.minutes) && +out.minutes > 0 ? Math.round(+out.minutes) : undefined,
+    intent: INTENTS.has(out.intent) ? out.intent : undefined,
+    points: Array.isArray(out.points) ? out.points.slice(0, 3).map((p) => clip(p, 160)).filter(Boolean) : [],
+    transcript: clip(out.transcript, 1500),
+    quote,
   };
 }
 
