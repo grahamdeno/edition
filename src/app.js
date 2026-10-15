@@ -31,7 +31,7 @@ import { I } from "./icons.js";
 import { topicColor, coverSvg, dominantColor } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "3.9.0";
+export const VERSION = "3.9.1";
 const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 
 const KIND_LABEL = { link: "Link", note: "Note", quote: "Quote", photo: "Photo", pdf: "PDF", text: "Text", video: "Video", audio: "Audio", file: "File" };
@@ -359,6 +359,7 @@ async function enrichPending() {
             points: out.points.length ? out.points : cur.points,
             transcript: out.transcript || cur.transcript,
             hook: out.hook || cur.hook,
+            hookV: out.hook ? ai.HOOK_VERSION : cur.hookV,
             enrichedAt: Date.now(),
           };
           // A note that turns out to be a quotation is filed as one.
@@ -392,7 +393,7 @@ async function enrichPending() {
  * Items read before card faces existed get one now: a small call each, cards
  * in the feed first. Your own reason always wins, so those are skipped.
  */
-const needsHook = (i) => i.enrichedAt && !i.hook && !i.why && !i.suggested && (i.hookTries || 0) < 2
+const needsHook = (i) => i.enrichedAt && (!i.hook || (i.hookV || 1) < ai.HOOK_VERSION) && !i.why && !i.suggested && (i.hookTries || 0) < 2
   && (i.status === STATUS.INBOX || i.status === STATUS.QUEUED);
 async function backfillHooks() {
   for (;;) {
@@ -403,7 +404,7 @@ async function backfillHooks() {
     try {
       const line = await ai.hook(next, { context: contextFor(next) });
       const cur = byId(next.id);
-      if (cur) await saveItem(line ? { ...cur, hook: line } : { ...cur, hookTries: (cur.hookTries || 0) + 1 });
+      if (cur) await saveItem(line ? { ...cur, hook: line, hookV: ai.HOOK_VERSION, hookTries: 0 } : { ...cur, hookTries: (cur.hookTries || 0) + 1 });
     } catch (e) {
       noteError(e, { quiet: true, where: "card face" });
       const cur = byId(next.id);
