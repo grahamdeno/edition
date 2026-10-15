@@ -120,7 +120,9 @@ const ENRICH_SHAPE =
   '"points": array of 0-3 short key points (only for documents, PDFs, long notes or photos of pages; otherwise []), ' +
   '"transcript": string (for a photo or screenshot with readable text such as a whiteboard, page, slide or sign: that text, cleaned up, max 1500 chars; otherwise ""), ' +
   '"quote": null, or {"text": string, "author": string} when the item is really a quotation worth keeping as one, ' +
-  '"hook": string (see Hook)}';
+  '"hook": string (see Hook), ' +
+  '"book": null, or {"title": string, "author": string} when the photo is mainly of a book (its cover, spine, or the book in hand): ' +
+  'read the title and author from it; a person photographs a book because they want to read it}';
 
 /*
  * The hook is the face-down side of the card: one line that reminds the
@@ -188,7 +190,14 @@ export async function enrich(item, blob, { vocab = [], context = null } = {}) {
     transcript: clip(out.transcript, 1500),
     quote,
     hook: cleanHook(out.hook),
+    book: out.book && typeof out.book === "object" && out.book.title ? { title: clip(out.book.title, 140), author: clip(out.book.author, 80) } : null,
   };
+}
+
+/** Books they've read, as a prompt line: an interest signal with no date implied. */
+function booksLine(profile) {
+  const b = (profile.books || []).slice(0, 12).map((i) => i.book ? `${i.book.title}${i.book.author ? ` by ${i.book.author}` : ""}` : i.title);
+  return b.length ? `Books they've read (at some point, not necessarily recently): ${b.join("; ")}\n` : "";
 }
 
 /**
@@ -279,7 +288,7 @@ export async function rank(queue, profile) {
   const items = list.map((i) => `${i.id} | ${i.kind} | ${i.title}${tagStr(i)} | saved ${ageStr(i.created)}${i.skips ? ` | deferred ${i.skips}x` : ""}${i.summary ? ` | ${i.summary}` : ""}`).join("\n");
   const prompt =
     `Rank one person's private reading queue for today's edition.\n\n` +
-    `They finished or read right away:\n${kept}\n\nThey let go:\n${dropped}\n\n` +
+    `They finished or read right away:\n${kept}\n\n${booksLine(profile)}They let go:\n${dropped}\n\n` +
     `Queue (id | kind | title [tags] | age | notes):\n${items}\n\n` +
     `Score each 0-100 for how much they would want it today. Favour their demonstrated interests, ` +
     `give some weight to things deferred repeatedly (a verdict is overdue), and keep variety across kinds.\n` +
@@ -306,12 +315,12 @@ async function claudeDiscover(profile, { count = 3, guide = "", vocab = [] } = {
   const interests = topTags(profile, 10);
   const kept = profile.kept.slice(0, 10).map((i) => `- ${i.title}${i.url ? ` (${i.url})` : ""}`).join("\n");
   const dropped = profile.dropped.slice(0, 6).map((i) => `- ${i.title}`).join("\n");
-  if (!interests.length && !kept) throw new AiError("Finish or let go of a few items first, so there is something to learn from.");
+  if (!interests.length && !kept && !(profile.books || []).length) throw new AiError("Finish or let go of a few items first, so there is something to learn from.");
   const prompt =
     `Find ${count} things this person would want in their private daily reading edition: substantial articles, essays, ` +
     `papers or talks, published in the last year, not news briefs or listicles. Avoid anything they already have.\n\n` +
     `Interests, strongest first: ${interests.join(", ") || "(learn from the list below)"}\n` +
-    `Recently finished:\n${kept || "(none)"}\n` +
+    `Recently finished:\n${kept || "(none)"}\n` + booksLine(profile) +
     `Recently let go (avoid these directions):\n${dropped || "(none)"}\n` +
     `${guide ? `What their answers to past suggestions taught:\n${guide}\n` : ""}` +
     `${vocab.length ? `${vocabLine(vocab)}\n` : ""}\n` +
@@ -474,13 +483,13 @@ async function pplxDiscover(profile, { count = 3, known = new Set(), guide = "",
   const interests = topTags(profile, 8);
   const kept = profile.kept.slice(0, 10).map((i) => `- ${i.title}${tagStr(i)}`).join("\n");
   const dropped = profile.dropped.slice(0, 6).map((i) => `- ${i.title}`).join("\n");
-  if (!interests.length && !kept) throw new AiError("Finish or let go of a few items first, so there is something to learn from.");
+  if (!interests.length && !kept && !(profile.books || []).length) throw new AiError("Finish or let go of a few items first, so there is something to learn from.");
   const input =
     `Search the web for ${count} articles, essays or talks this person would want in their private daily reading. ` +
     `Favour pieces that are popular and widely shared right now, published in the last month or two, and substantial: ` +
     `no news briefs, listicles or product pages.\n\n` +
     `Interests, strongest first: ${interests.join(", ") || "(learn from the list below)"}\n` +
-    `Recently finished:\n${kept || "(none)"}\n` +
+    `Recently finished:\n${kept || "(none)"}\n` + booksLine(profile) +
     `Recently let go (avoid these directions):\n${dropped || "(none)"}\n` +
     `Already saved (skip): ${[...known].slice(0, 30).join(" ") || "(none)"}\n` +
     `${guide ? `What their answers to past suggestions taught:\n${guide}\n` : ""}` +
