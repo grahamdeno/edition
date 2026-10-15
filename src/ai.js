@@ -128,12 +128,16 @@ const ENRICH_SHAPE =
  * a talk to watch, an episode to listen to, a reference, an idea, a task),
  * so the card still tells them what they'd be doing.
  */
+/** Bump when the hook instructions change, so older lines are rewritten once. */
+export const HOOK_VERSION = 2;
+
 const HOOK_RULE =
-  "Hook: one line, max 90 characters, for the face of the card in their reading app. " +
-  "Say plainly what kind of thing it is to them, using the verb that fits: a read, something to watch, " +
-  "something to listen to, a reference, an idea, or something to act on (for example \"A 20-minute read on how Basecamp bets on six-week cycles\" " +
-  "or \"A talk to watch on running retros that people actually use\"). Be specific to this item. Mention their context below only when it " +
-  "clearly connects. Never claim to know why they saved it. No hype, no exclamation marks, no quotation marks around it.";
+  "Hook: a short line for the face of the card, 5 to 8 words, never more than 50 characters. " +
+  "Start from what kind of thing it is, using the verb that fits: a read, something to watch, " +
+  "something to listen to, a reference, an idea, or something to act on. Then the topic in a few plain words. " +
+  "Examples: \"A short read on six-week cycles\", \"A talk to watch on retros\", \"An idea for sprint reviews\". " +
+  "General is fine; brevity matters more than detail. Skip their context unless it fits in those few words. " +
+  "Never claim to know why they saved it. No hype, no exclamation marks, no quotation marks, no full stop.";
 
 /** What else the reader is doing, so a hook can connect to it. */
 function contextLines(context) {
@@ -146,7 +150,7 @@ function contextLines(context) {
 }
 
 function cleanHook(h) {
-  return clip(String(h || "").replace(/^["'\u201C\u2018]+|["'\u201D\u2019]+$/g, "").replace(/\s+/g, " "), 110);
+  return clip(String(h || "").replace(/^["'\u201C\u2018]+|["'\u201D\u2019]+$/g, "").replace(/\s+/g, " ").replace(/\.$/, ""), 70);
 }
 
 /** The reader's tags, as a prompt line asking the model to reuse them. */

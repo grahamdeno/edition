@@ -112,7 +112,7 @@ test("enrich asks for a card face that names what you'd be doing, with your cont
   const p = promptOf(sent[0]);
   assert.match(p, /Saved around the same time:\n- Roadmap notes/);
   assert.match(p, /Recently finished:\n- Shape Up/);
-  assert.match(p, /a read, something to watch, something to listen to/);
+  assert.match(p, /5 to 8 words, never more than 50 characters/);
 });
 
 test("a card face can be written later from what's already known, in one small call", async () => {
@@ -123,4 +123,12 @@ test("a card face can be written later from what's already known, in one small c
   assert.match(promptOf(sent[0]), /Saved for: watch/);
   assert.equal(sent[0].max_tokens, 200);
   assert.equal(typeof sent[0].messages[0].content, "string"); // no file upload
+});
+
+test("card faces are trimmed: no quotes, no full stop, never long", async () => {
+  const { hook } = await import("../src/ai.js");
+  stubApi({ hook: "“A read on six-week cycles.”" });
+  assert.equal(await hook({ kind: "link", title: "x" }), "A read on six-week cycles");
+  stubApi({ hook: "x".repeat(120) });
+  assert.ok((await hook({ kind: "link", title: "x" })).length <= 70);
 });
