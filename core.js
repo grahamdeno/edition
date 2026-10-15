@@ -104,12 +104,20 @@ export function weight(item) {
   return Math.min(4, 1 + 0.5 * (item.skips || 0));
 }
 
+export function preferenceSignal(items) {
+  const kept = items.filter((i) => i.status === "done" || i.readNow).slice(0, 12);
+  const dropped = items.filter((i) => i.status === "archived").slice(0, 8);
+  return { kept, dropped };
+}
+
 export function selectEdition(items, max = 6) {
   const active = items.filter((i) => i.status === "active");
-  if (active.length <= max) return active;
+  if (active.length <= max) {
+    return [...active].sort((a, b) => (b.aiRank || 0) - (a.aiRank || 0) || weight(b) - weight(a));
+  }
   const scored = active.map((i) => ({
     ...i,
-    score: weight(i) * (1 + (Date.now() - i.created) / 86400000 / 30),
+    score: (i.aiRank || 0) * 10 + weight(i) * (1 + (Date.now() - i.created) / 86400000 / 30),
   }));
   scored.sort((a, b) => b.score - a.score);
   return scored.slice(0, max);
@@ -133,21 +141,26 @@ export function applyVerdict(item, verdict) {
   return next;
 }
 
-export function createItem({ title, summary, url, text, type }) {
-  const isUrl = !!url || (text && /^https?:\/\//i.test(text.trim()));
-  const cleanUrl = url || (isUrl ? text.trim() : "");
+export function createItem({ title, summary, url, text, type, fileName, dataUrl, mime }) {
+  const isUrl = !!url || (text && /^https?:\/\//i.test(String(text).trim()));
+  const cleanUrl = url || (isUrl ? String(text).trim() : "");
   const cleanText = isUrl ? "" : (text || "").trim();
+  const inferred = type || (dataUrl ? "photo" : fileName ? "doc" : isUrl ? "link" : "thought");
   return {
     id: "i" + Date.now().toString(36),
-    type: type || (isUrl ? "link" : "thought"),
-    title: (title || cleanText || cleanUrl || "Untitled").slice(0, 120),
+    type: inferred,
+    title: (title || fileName || cleanText || cleanUrl || "Untitled").slice(0, 120),
     url: cleanUrl || undefined,
     text: cleanText || undefined,
     summary: (summary || "").slice(0, 280),
+    fileName: fileName || undefined,
+    dataUrl: dataUrl || undefined,
+    mime: mime || undefined,
     created: Date.now(),
     skips: 0,
     status: "active",
-    minutes: isUrl ? 8 : 2,
-    tags: [isUrl ? "link" : "thought"],
+    minutes: isUrl ? 8 : dataUrl ? 1 : 2,
+    tags: [inferred],
+    aiRank: 0,
   };
 }
