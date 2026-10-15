@@ -14,10 +14,14 @@ Built like [Scales](https://github.com/grahamdeno/scales) and [Tabs](https://git
                         Read now
 ```
 
-1. **Drop.** Tap **+** and paste, type, take a photo, or pick files. On a computer, paste or drag anywhere in the window. On Android and desktop Chrome, Edition appears in the share sheet. One step, no form.
-2. **Triage.** Everything new lands in the inbox first, one card at a time. Swipe left to let go, right to read now, up to keep for later, or use the verdict bar.
-3. **Read the edition.** Kept items come back as full-screen pages, each set for its kind: notes as large type, photos full-bleed, links as headlines, files as a slab with the file type. The numbered rail on the right jumps between pages and strikes through the ones you've settled.
-4. **Let things go.** "Later" on an edition page defers it. Defer it eight times and it washes out of the queue. Everything stays in the Library, searchable, and can be requeued.
+Every control sits in the bottom half of the screen or on the right edge, so the whole app works with one thumb. Choices are made with scroll wheels that click as they pass each option; a tap on any option selects it directly.
+
+1. **Capture.** Tap **+**. A camera-style mode wheel picks Note, Paste, Camera, Photos or Files, and the round shutter saves. On a computer, paste or drag anywhere in the window. On Android and desktop Chrome, Edition appears in the share sheet.
+2. **Triage.** Everything new lands in the inbox first, one card at a time. Sweep your thumb across the corner dial to choose Let go, Later, Done or Read, then press Set. Swiping the card left, right or up works too.
+3. **Read the edition.** Kept items come back as today's pages. The knurled wheel on the right edge rolls between them; the verdict wheel at the bottom sets what happens next, and Press confirms.
+4. **Read.** The reader's right-edge wheel shows progress and scrolls the text when you turn it, with the time left at the top.
+5. **Library.** Two drum pickers, status and kind, filter everything you have saved. Find searches it.
+6. **Let things go.** "Later" on an edition page moves it to a future edition. Do that eight times and it washes out of the queue. Nothing is deleted; the Library can requeue it.
 
 ## AI (optional)
 
@@ -49,6 +53,8 @@ src/model.js          pure logic: capture parsing, verdicts, ranking, edition se
 src/db.js             IndexedDB storage, migration from v1, backup
 src/capture.js        every way in: text, files, clipboard, drag-drop, share target
 src/ai.js             Anthropic API: enrich, rank, discover
+src/wheel.js          scroll wheels, drum pickers and the corner dial
+src/feel.js           detent clicks (audio, and vibration where supported)
 sw.js                 offline shell and share target
 tests/                node --test unit tests for the model
 docs/ARCHITECTURE.md  data model and decisions
@@ -65,6 +71,8 @@ Bump `VERSION` in `sw.js` and `src/app.js` with each release so installed copies
 
 ## Design
 
-Set in **Index**: paper ground, black ink, hairline rules, mono labels, one electric-blue accent. Square corners, borders instead of shadows. Paper (light) and Ink (dark) themes follow the system or can be set in Settings.
+Tech tactical: matte graphite surfaces, titanium-gray text and one safety-orange accent, with condensed uppercase headlines (Barlow Condensed), a readable body face (Barlow) and monospace spec labels (IBM Plex Mono). Depth comes from knurled wheel textures and corner brackets, not shadows. One deliberate dark look.
+
+iPhone web apps can't vibrate, so each wheel detent plays a short synthesized click instead. Settings › Wheel clicks turns it off.
 
 MIT.
