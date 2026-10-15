@@ -21,6 +21,7 @@ export const STATUS = Object.freeze({
 export const KIND = Object.freeze({
   LINK: "link",
   NOTE: "note",
+  QUOTE: "quote", // a line worth keeping, with who said it
   PHOTO: "photo",
   PDF: "pdf",
   TEXT: "text",   // a plain-text or markdown file
@@ -61,19 +62,126 @@ export function kindOfFile(mime = "", name = "") {
   return KIND.FILE;
 }
 
+const YT_RE = /(?:youtube\.com\/(?:watch\?(?:[^#\s]*&)?v=|shorts\/|embed\/|live\/)|youtu\.be\/)([A-Za-z0-9_-]{11})/i;
+const IMAGE_URL_RE = /\.(?:jpe?g|png|gif|webp|avif|heic)(?:[?#].*)?$/i;
+const VIDEO_URL_RE = /\.(?:mp4|mov|m4v|webm)(?:[?#].*)?$/i;
+const QUOTE_MARKS = "\"'\u201C\u201D\u2018\u2019\u00AB\u00BB";
+
+/** YouTube video id from any of its URL shapes, or "". */
+export function youtubeId(url) {
+  const m = String(url || "").match(YT_RE);
+  return m ? m[1] : "";
+}
+
+/** Still image for a YouTube video; needs no API key. */
+export function youtubeThumb(id) {
+  return id ? `https://i.ytimg.com/vi/${id}/hqdefault.jpg` : "";
+}
+
+/** Draft for a single URL: YouTube becomes video, image URLs become photos, the rest are links. */
+export function draftFromUrl(url, note = "") {
+  const yt = youtubeId(url);
+  if (yt) {
+    return { kind: KIND.VIDEO, url, videoId: yt, imageUrl: youtubeThumb(yt), title: note || "YouTube video", text: note || undefined };
+  }
+  if (IMAGE_URL_RE.test(url)) return { kind: KIND.PHOTO, url, imageUrl: url, title: note || titleFromUrl(url), text: note || undefined };
+  if (VIDEO_URL_RE.test(url)) return { kind: KIND.VIDEO, url, title: note || titleFromUrl(url), text: note || undefined };
+  return { kind: KIND.LINK, url, title: note || titleFromUrl(url), text: note || undefined };
+}
+
 /**
- * Turn whatever was dropped in (text, a link, a file) into a draft item.
- * Text that is mostly a URL becomes a link; anything else is a note.
+ * A quote: wrapped in quote marks, or a short passage ending in an
+ * attribution ("... - Seneca", or the name alone on the last line).
+ * Returns { text, author } or null.
  */
-export function draftFromText(raw) {
+export function parseQuote(raw) {
   const text = String(raw || "").trim();
-  if (!text) return null;
+  if (!text || text.length > 600 || findUrl(text)) return null;
+  const q = `[${QUOTE_MARKS}]`;
+  const wrapped = text.match(new RegExp(`^${q}([\\s\\S]+?)${q}[\\s,]*(?:(?:[-\u2013\u2014~]+|\\n)\\s*(.+))?$`));
+  if (wrapped) {
+    const author = cleanAuthor(wrapped[2]);
+    if (wrapped[2] && !author) return null;
+    return { text: wrapped[1].trim(), author };
+  }
+  const dashed = text.match(/^([\s\S]{12,}?)(\s*\n\s*|\s*)([-\u2013\u2014~]{1,2})\s*([^\n]{2,60})$/);
+  if (dashed) {
+    const body = dashed[1].trim();
+    // A plain hyphen after a sentence fragment is usually a to-do ("call Sam - Tuesday"),
+    // so it needs a finished sentence; an em dash, en dash or line break is enough on its own.
+    const strong = /\n/.test(dashed[2]) || dashed[3] !== "-";
+    const sentence = /[.!?\u201D"']$/.test(body) && body.split(/\s+/).length >= 4;
+    const author = cleanAuthor(dashed[4]);
+    if (author && (strong || sentence)) return { text: stripQuotes(body), author };
+  }
+  return null;
+}
+
+const NOT_AUTHORS = /^(?:(?:mon|tues?|wed(?:nes)?|thu(?:rs)?|fri|sat(?:ur)?|sun)(?:day)?|today|tomorrow|tonight|jan(?:uary)?|feb(?:ruary)?|march|mar|april|apr|may|june?|july?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|asap|eod|tbd)\b/i;
+
+function cleanAuthor(s) {
+  const a = String(s || "").trim().replace(/[.;]+$/, "");
+  if (!a) return "";
+  const words = a.split(/\s+/);
+  // A name or a short source, capitalized, not a sentence.
+  if (words.length > 7 || !/^[A-Z\u00C0-\u024F]/.test(a)) return "";
+  if (NOT_AUTHORS.test(a)) return "";
+  return a;
+}
+function stripQuotes(s) {
+  return s.trim().replace(new RegExp(`^[${QUOTE_MARKS}]+|[${QUOTE_MARKS}]+$`, "g"), "").trim();
+}
+
+/**
+ * Work out what was dropped in, so the person never has to say. One paste
+ * can hold several things: a list of links becomes one item per link.
+ * Returns an array of drafts (empty when there is nothing).
+ */
+export function detectText(raw) {
+  const text = String(raw || "").trim();
+  if (!text) return [];
+  const urls = text.match(new RegExp(URL_RE.source, "gi")) || [];
+  // Only links, one per line or separated by spaces: one item each.
+  if (urls.length > 1) {
+    const leftover = urls.reduce((t, u) => t.replace(u, ""), text).replace(/[\s,;\-\u2022*]+/g, "");
+    if (!leftover) return urls.map((u) => draftFromUrl(u.replace(/[).,;:!?\]]+$/, "")));
+  }
   const url = findUrl(text);
   const rest = url ? text.replace(url, "").trim() : text;
-  if (url && rest.length < 40) {
-    return { kind: KIND.LINK, url, title: rest || titleFromUrl(url), text: rest || undefined };
+  if (url && rest.length < 40) return [draftFromUrl(url, rest)];
+  const quote = parseQuote(text);
+  if (quote) {
+    return [{ kind: KIND.QUOTE, text: quote.text, author: quote.author || undefined, title: firstLine(quote.text) }];
   }
-  return { kind: KIND.NOTE, text, url: url || undefined, title: firstLine(text) };
+  return [{ kind: KIND.NOTE, text, url: url || undefined, title: firstLine(text) }];
+}
+
+/** First draft of `detectText`; kept for callers that expect one item. */
+export function draftFromText(raw) {
+  return detectText(raw)[0] || null;
+}
+
+/** A short plain description of what the app thinks something is, for the capture screen. */
+export function describeDraft(d) {
+  if (!d) return "";
+  switch (d.kind) {
+    case KIND.VIDEO: return d.videoId ? "YouTube video" : "Video link";
+    case KIND.PHOTO: return d.imageUrl && !d.blobId && d.url ? "Image link" : "Photo";
+    case KIND.LINK: return `Link · ${hostOf(d.url)}`;
+    case KIND.QUOTE: return d.author ? `Quote · ${d.author}` : "Quote";
+    case KIND.NOTE: {
+      const words = (d.text || "").split(/\s+/).filter(Boolean).length;
+      return `Note · ${words} word${words === 1 ? "" : "s"}`;
+    }
+    case KIND.PDF: return "PDF";
+    case KIND.TEXT: return "Text file";
+    case KIND.AUDIO: return "Audio";
+    default: return "File";
+  }
+}
+
+function hostOf(url) {
+  try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return ""; }
 }
 
 export function draftFromFile({ name = "", type = "", size = 0 }) {
@@ -116,6 +224,7 @@ export function estimateMinutes(item) {
   if (item.minutes) return item.minutes;
   switch (item.kind) {
     case KIND.NOTE: return Math.max(1, Math.round((item.text || "").split(/\s+/).length / 220));
+    case KIND.QUOTE: return 1;
     case KIND.PHOTO: return 1;
     case KIND.LINK: return 6;
     case KIND.PDF: return 15;
@@ -131,6 +240,10 @@ export function createItem(draft, { id, now = Date.now(), source = "drop" } = {}
     title: (draft.title || "Untitled").slice(0, 140),
     text: draft.text,
     url: draft.url,
+    author: draft.author,
+    videoId: draft.videoId,
+    imageUrl: draft.imageUrl,
+    points: draft.points,
     fileName: draft.fileName,
     mime: draft.mime,
     size: draft.size,

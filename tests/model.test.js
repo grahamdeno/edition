@@ -125,3 +125,42 @@ test("legacy items migrate into the queue", () => {
 test("dayKey uses the local calendar day", () => {
   assert.equal(dayKey(new Date(2026, 0, 5, 23, 30).getTime()), "2026-01-05");
 });
+
+/* ---- Capture detection ---- */
+import { detectText, parseQuote, youtubeId, describeDraft } from "../src/model.js";
+
+test("YouTube links become videos with a thumbnail", () => {
+  for (const u of ["https://www.youtube.com/watch?v=UF8uR6Z6KLc", "https://youtu.be/UF8uR6Z6KLc?t=30", "https://youtube.com/shorts/UF8uR6Z6KLc", "https://m.youtube.com/watch?feature=share&v=UF8uR6Z6KLc"]) {
+    assert.equal(youtubeId(u), "UF8uR6Z6KLc", u);
+  }
+  const [d] = detectText("https://youtu.be/UF8uR6Z6KLc");
+  assert.equal(d.kind, KIND.VIDEO);
+  assert.equal(d.imageUrl, "https://i.ytimg.com/vi/UF8uR6Z6KLc/hqdefault.jpg");
+  assert.equal(describeDraft(d), "YouTube video");
+});
+
+test("image links become photos", () => {
+  const [d] = detectText("https://example.com/whiteboard.jpg");
+  assert.equal(d.kind, KIND.PHOTO);
+  assert.equal(d.imageUrl, "https://example.com/whiteboard.jpg");
+});
+
+test("a list of links becomes one item per link", () => {
+  const out = detectText("https://a.com/one\nhttps://youtu.be/UF8uR6Z6KLc\n- https://b.com/two");
+  assert.deepEqual(out.map((d) => d.kind), [KIND.LINK, KIND.VIDEO, KIND.LINK]);
+});
+
+test("quotes are recognised with their author", () => {
+  assert.deepEqual(parseQuote("“Plans are worthless, but planning is everything.” — Dwight D. Eisenhower"),
+    { text: "Plans are worthless, but planning is everything.", author: "Dwight D. Eisenhower" });
+  assert.deepEqual(parseQuote("How we spend our days is how we spend our lives.\n— Annie Dillard"),
+    { text: "How we spend our days is how we spend our lives.", author: "Annie Dillard" });
+  assert.deepEqual(parseQuote("\"Simplicity is prerequisite for reliability.\""), { text: "Simplicity is prerequisite for reliability.", author: "" });
+  assert.equal(detectText("Waste no more time arguing what a good man should be. Be one. - Marcus Aurelius")[0].kind, KIND.QUOTE);
+});
+
+test("to-dos and plain notes are not mistaken for quotes", () => {
+  assert.equal(parseQuote("Call the plumber about the leak - Tuesday"), null);
+  assert.equal(parseQuote("Finish the PI objectives draft. - Friday"), null);
+  assert.equal(detectText("Ask about the sprint review format before Thursday")[0].kind, KIND.NOTE);
+});

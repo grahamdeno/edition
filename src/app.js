@@ -9,16 +9,18 @@
 import {
   VERDICT, STATUS, KIND, dayKey, applyVerdict, restore, buildEdition, editionView,
   interestProfile, estimateMinutes, counts, migrateLegacy, createItem, EDITION_SIZE,
+  detectText, draftFromFile, describeDraft,
 } from "./model.js";
 import * as db from "./db.js";
-import { captureText, captureFile, captureTransfer, captureClipboard, captureShares } from "./capture.js";
+import { captureText, captureFile, captureTransfer, readClipboard, captureShares } from "./capture.js";
+import { sampleItems } from "./samples.js";
 import * as ai from "./ai.js";
 import { createWheel, createDial } from "./wheel.js";
 import { tick, unlock, soundOn, setSound } from "./feel.js";
 
-export const VERSION = "2.1.0";
+export const VERSION = "2.2.0";
 
-const KIND_LABEL = { link: "Link", note: "Note", photo: "Photo", pdf: "PDF", text: "Text", video: "Video", audio: "Audio", file: "File" };
+const KIND_LABEL = { link: "Link", note: "Note", quote: "Quote", photo: "Photo", pdf: "PDF", text: "Text", video: "Video", audio: "Audio", file: "File" };
 const GEAR = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><path d="M14 4v6M6 14v6"/></svg>';
 
 // The bottom verdict wheel on edition pages, and the corner dial in triage.
@@ -34,13 +36,7 @@ const DIAL_VERDICTS = [
   { label: "Done", v: VERDICT.DONE },
   { label: "Read", v: VERDICT.READ_NOW },
 ];
-const CAPTURE_MODES = [
-  { label: "Note", id: "note" },
-  { label: "Paste", id: "paste" },
-  { label: "Camera", id: "camera" },
-  { label: "Photos", id: "photos" },
-  { label: "Files", id: "files" },
-];
+const INTENT_LABEL = { read: "To read", watch: "To watch", listen: "To listen", reference: "Reference", idea: "Idea", task: "Task" };
 const LIB_STATUS = [
   { label: "Inbox", id: STATUS.INBOX },
   { label: "Queue", id: STATUS.QUEUED },
@@ -52,7 +48,9 @@ const LIB_KIND = [
   { label: "All", kinds: null },
   { label: "Links", kinds: [KIND.LINK] },
   { label: "Notes", kinds: [KIND.NOTE, KIND.TEXT] },
-  { label: "Photos", kinds: [KIND.PHOTO, KIND.VIDEO] },
+  { label: "Quotes", kinds: [KIND.QUOTE] },
+  { label: "Video", kinds: [KIND.VIDEO] },
+  { label: "Photos", kinds: [KIND.PHOTO] },
   { label: "PDFs", kinds: [KIND.PDF] },
   { label: "Files", kinds: [KIND.FILE, KIND.AUDIO] },
 ];
@@ -65,8 +63,8 @@ const state = {
   edPage: 0,                // index into today's open pages
   edVerdict: 2,             // Read
   dialVerdict: 3,           // Read
-  capMode: 1,               // Paste
-  capText: "",
+  capText: "",              // what is in the capture box
+  capFiles: [],             // files staged in the capture box: { file, url }
   lastSaved: null,
   libStatus: 1,             // Queue
   libKind: 0,               // All
@@ -85,14 +83,39 @@ async function boot() {
   const migrated = await db.migrateFromLocalStorage(migrateLegacy).catch(() => 0);
   state.items = await db.items.all();
   state.edition = await db.meta.get("edition", null);
+  const seeded = await seedSamples();
   await importShares();
   await importFromUrl();
   await ensureEdition();
   render();
   if (migrated) toast(`Brought over ${migrated} saved item${migrated === 1 ? "" : "s"} from the old version.`);
+  else if (seeded) toast(`Loaded ${seeded} sample items. Remove them in Settings.`);
   wireGlobal();
   enrichPending();
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+}
+
+/** Sample items, loaded once per device so a new install has something to show. */
+async function seedSamples({ force = false } = {}) {
+  if (!force && await db.meta.get("samplesLoaded", false)) return 0;
+  const have = new Set(state.items.map((i) => i.id));
+  const fresh = sampleItems().filter((i) => !have.has(i.id));
+  if (fresh.length) await db.items.putMany(fresh);
+  await db.meta.set("samplesLoaded", true);
+  state.items = [...fresh, ...state.items];
+  if (fresh.length && state.edition && state.edition.date === dayKey() && !state.edition.ids.length) state.edition = null;
+  return fresh.length;
+}
+
+async function removeSamples() {
+  const list = state.items.filter((i) => i.sample);
+  await removeItems(list);
+  if (state.edition) {
+    const ids = new Set(list.map((i) => i.id));
+    state.edition = { ...state.edition, ids: state.edition.ids.filter((id) => !ids.has(id)) };
+    await db.meta.set("edition", state.edition);
+  }
+  return list.length;
 }
 
 /** Today's edition, rebuilt on a new day (ranked by the AI first when a key is set). */
@@ -219,8 +242,8 @@ async function importFromUrl() {
   if (p.has("share")) state.view = "inbox";
   const text = [p.get("title"), p.get("text"), p.get("url")].filter(Boolean).join(" ").trim();
   if (text) {
-    const it = await captureText(text, "link");
-    if (it) { state.items = [it, ...state.items]; state.view = "inbox"; }
+    const list = await captureText(text, "link");
+    if (list.length) { state.items = [...list, ...state.items]; state.view = "inbox"; }
   }
   if ([...p.keys()].length) history.replaceState(null, "", location.pathname);
 }
@@ -242,14 +265,24 @@ async function enrichPending() {
         const out = await ai.enrich(next, blob);
         const cur = byId(next.id);
         if (cur) {
-          await saveItem({
+          const upd = {
             ...cur,
             title: out.title || cur.title,
             summary: out.summary || cur.summary,
             tags: out.tags.length ? out.tags : cur.tags,
             minutes: out.minutes || cur.minutes,
+            intent: out.intent || cur.intent,
+            points: out.points.length ? out.points : cur.points,
+            transcript: out.transcript || cur.transcript,
             enrichedAt: Date.now(),
-          });
+          };
+          // A note that turns out to be a quotation is filed as one.
+          if (out.quote && cur.kind === KIND.NOTE) {
+            upd.kind = KIND.QUOTE;
+            upd.text = out.quote.text;
+            upd.author = out.quote.author || cur.author;
+          }
+          await saveItem(upd);
         }
       } catch (e) {
         const cur = byId(next.id);
@@ -463,8 +496,11 @@ function cardBody(item) {
     `<span class="tag kind">${KIND_LABEL[item.kind] || "Item"}</span>`,
     `<span class="tag">${estimateMinutes(item)} min</span>`,
     item.url ? `<span class="tag">${esc(host(item.url))}</span>` : item.fileName ? `<span class="tag">${esc(ext(item.fileName))}${item.size ? " · " + size(item.size) : ""}</span>` : "",
+    item.intent && INTENT_LABEL[item.intent] ? `<span class="tag">${INTENT_LABEL[item.intent]}</span>` : "",
     item.suggested ? '<span class="tag ai">AI pick</span>' : "",
+    item.sample ? '<span class="tag">Sample</span>' : "",
   ].join("");
+  const points = item.points && item.points.length ? `<ul class="points">${item.points.map((p) => `<li>${esc(p)}</li>`).join("")}</ul>` : "";
   const summary = busy ? '<p class="lede mono accent">Reading it…</p>' : item.summary ? `<p class="lede">${esc(item.summary)}</p>` : "";
   let body = "";
   switch (item.kind) {
@@ -473,18 +509,26 @@ function cardBody(item) {
       body = `<blockquote class="quote ${t.length > 220 ? "l" : ""}">${esc(t)}</blockquote>${summary}${item.url ? linkOut(item.url) : ""}`;
       break;
     }
+    case KIND.QUOTE: {
+      const t = item.text || item.title;
+      body = `<blockquote class="quote ${t.length > 220 ? "l" : ""}">${esc(t)}</blockquote>${item.author ? `<p class="cite mono">${esc(item.author)}</p>` : ""}${summary}`;
+      break;
+    }
     case KIND.LINK:
-      body = `<h1 class="${hClass}">${esc(item.title)}</h1>${summary}${item.text ? `<p class="lede">${esc(item.text)}</p>` : ""}${linkOut(item.url)}`;
+      body = `<h1 class="${hClass}">${esc(item.title)}</h1>${summary}${item.text ? `<p class="lede">${esc(item.text)}</p>` : ""}${points}${linkOut(item.url)}`;
       break;
     case KIND.PHOTO:
-      body = `<div class="figure"><img alt="${esc(item.title)}" data-blob="${esc(item.thumbId || item.blobId)}"></div><h1 class="headline s">${esc(item.title)}</h1>${summary}`;
+      body = `<div class="figure">${imgTag(item, true)}</div><h1 class="headline s">${esc(item.title)}</h1>${summary}`;
       break;
     case KIND.VIDEO:
-      body = `<div class="figure"><video controls playsinline preload="metadata" data-blob="${esc(item.blobId)}"></video></div><h1 class="headline s">${esc(item.title)}</h1>${summary}`;
+      body = item.blobId
+        ? `<div class="figure"><video controls playsinline preload="metadata" data-blob="${esc(item.blobId)}"></video></div><h1 class="headline s">${esc(item.title)}</h1>${summary}`
+        : `<div class="figure poster">${item.imageUrl ? `<img alt="" src="${esc(item.imageUrl)}" loading="lazy">` : ""}<span class="play" aria-hidden="true"></span></div>
+           <h1 class="headline s">${esc(item.title)}</h1>${item.author ? `<p class="cite mono">${esc(item.author)}</p>` : ""}${summary}${item.url ? linkOut(item.url, item.videoId ? "Watch" : "Open source") : ""}`;
       break;
     default: {
       const glyph = item.kind === KIND.PDF ? "PDF" : item.kind === KIND.TEXT ? "TXT" : item.kind === KIND.AUDIO ? "AUD" : ext(item.fileName);
-      body = `<div class="slab"><span class="mono muted">${esc(item.fileName || "")}</span><span class="glyph">${esc(glyph)}</span></div><h1 class="${hClass}">${esc(item.title)}</h1>${summary}`;
+      body = `<div class="slab"><span class="mono muted">${esc(item.fileName || "")}</span><span class="glyph">${esc(glyph)}</span></div><h1 class="${hClass}">${esc(item.title)}</h1>${summary}${points}`;
     }
   }
   const facts = [
@@ -495,8 +539,14 @@ function cardBody(item) {
   return `<div class="card-body"><div class="tags">${tags}</div>${body}<dl class="facts">${facts}</dl></div>`;
 }
 
-function linkOut(url) {
-  return `<a class="link-out" href="${esc(url)}" target="_blank" rel="noopener">Open source <span class="mono muted">${esc(host(url))} ↗</span></a>`;
+function linkOut(url, label = "Open source") {
+  return `<a class="link-out" href="${esc(url)}" target="_blank" rel="noopener">${label} <span class="mono muted">${esc(host(url))} ↗</span></a>`;
+}
+
+/** An <img> for a photo item: a stored file (hydrated later) or a web image. */
+function imgTag(item, thumb = false) {
+  if (item.blobId) return `<img alt="${esc(item.title)}" data-blob="${esc(thumb ? item.thumbId || item.blobId : item.blobId)}">`;
+  return item.imageUrl ? `<img alt="${esc(item.title)}" src="${esc(item.imageUrl)}" loading="lazy">` : "";
 }
 
 /* ---------- G2 · Inbox triage ---------- */
@@ -591,94 +641,127 @@ function bindSwipe() {
 
 /* ---------- G3 · Capture ---------- */
 
+/*
+ * One box takes anything. Type, paste or drop a link, a YouTube URL, a
+ * quote, a thought, a photo or a file; Edition works out what each one is
+ * and shows it before saving. Attach opens the system picker, which on a
+ * phone already offers the photo library, the camera and files.
+ */
+const CLIP = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11.5l-8.2 8.2a5 5 0 0 1-7.1-7.1l8.6-8.6a3.4 3.4 0 0 1 4.8 4.8l-8.6 8.6a1.7 1.7 0 0 1-2.4-2.4l7.9-7.9"/></svg>';
+const PASTE = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V3h6v1M9 10h6M9 14h6M9 18h3"/></svg>';
+
 function renderCapture() {
   const c = counts(state.items);
-  const last = state.lastSaved && byId(state.lastSaved.id);
-  const lastSquare = last
-    ? last.kind === KIND.PHOTO
-      ? `<img alt="" data-blob="${esc(last.thumbId || last.blobId)}">`
-      : `<span class="mono accent" style="font-size:10px">${esc((KIND_LABEL[last.kind] || "").toUpperCase())}</span>`
-    : "";
   app.innerHTML = `<div class="screen s-capture">
-    <div class="status mono"><span>Capture</span><span class="right"><span>To inbox${c.inbox ? ` · <span class="accent">${c.inbox}</span> waiting` : ""}</span></span></div>
-    <section class="panel brackets capture-panel" id="cap-panel">${capturePanel()}</section>
-    <div class="hwheel bare" id="mode-wheel"><span class="notch" aria-hidden="true"></span><span class="fade" aria-hidden="true"></span></div>
+    <div class="status mono"><span>Capture · to inbox${c.inbox ? ` · <span class="accent">${c.inbox}</span> waiting` : ""}</span>
+      <button class="icon-btn" type="button" id="cap-close" aria-label="Close" style="font:500 15px var(--body)">✕</button></div>
+    <section class="panel brackets capture-panel" id="cap-panel">
+      <label class="mono accent" for="cap-text">Drop anything</label>
+      <textarea id="cap-text" placeholder="Paste a link, a YouTube URL or a quote. Type a thought. Attach photos or files.">${esc(state.capText)}</textarea>
+      <div class="tray" id="cap-tray"></div>
+      <ul class="detect" id="cap-detect" aria-live="polite"></ul>
+      <span class="st" id="cap-st" role="status"></span>
+    </section>
     <div class="shutter-row">
-      <button class="square" type="button" data-go="inbox" aria-label="Open inbox">${lastSquare}</button>
-      <button class="shutter" type="button" id="shutter" aria-label="Capture"><span></span></button>
-      <button class="square" type="button" id="cap-close" aria-label="Close" style="font:500 18px var(--body)">✕</button>
+      <button class="square tool" type="button" id="cap-paste" aria-label="Paste from clipboard">${PASTE}<span class="mono">Paste</span></button>
+      <button class="shutter" type="button" id="shutter" aria-label="Save to inbox"><span></span></button>
+      <button class="square tool" type="button" id="cap-attach" aria-label="Attach photos or files">${CLIP}<span class="mono">Attach</span></button>
     </div>
-    <div class="hint mono" style="font-size:10px">Swipe the wheel to change mode</div>
-    <input type="file" id="in-camera" accept="image/*" capture="environment" hidden>
-    <input type="file" id="in-photos" accept="image/*,video/*" multiple hidden>
-    <input type="file" id="in-files" multiple hidden>
+    <div class="hint mono" id="cap-hint" style="font-size:10px">Edition sorts it for you</div>
+    <input type="file" id="in-any" multiple hidden>
   </div>`;
   bindCommon();
-  hydrate(app);
-  bindCapturePanel();
-
-  createWheel($("#mode-wheel"), {
-    items: CAPTURE_MODES,
-    index: state.capMode,
-    axis: "x",
-    spacing: 92,
-    label: "Capture mode",
-    onChange: (i) => {
-      state.capMode = i;
-      $("#cap-panel").innerHTML = capturePanel();
-      bindCapturePanel();
-    },
-    onCommit: () => shutter(),
+  const ta = $("#cap-text");
+  ta.addEventListener("input", () => { state.capText = ta.value; updateDetect(); });
+  ta.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) shutter(); });
+  ta.addEventListener("paste", (e) => {
+    const files = Array.from(e.clipboardData?.files || []);
+    if (!files.length) return;
+    e.preventDefault();
+    stageFiles(files);
   });
   $("#shutter").addEventListener("click", shutter);
   $("#cap-close").addEventListener("click", () => go(state.back || "edition"));
-  for (const id of ["in-camera", "in-photos", "in-files"]) {
-    const input = $("#" + id);
-    input.addEventListener("change", async () => {
-      const files = Array.from(input.files || []);
-      if (!files.length) return;
-      setCapStatus(`Saving ${files.length}…`);
-      const out = [];
-      for (const f of files) out.push(await captureFile(f, "drop"));
-      input.value = "";
-      afterCapture(out);
-    });
-  }
-}
-
-function capturePanel() {
-  const mode = CAPTURE_MODES[state.capMode].id;
-  const st = '<span class="st" id="cap-st" role="status"></span>';
-  switch (mode) {
-    case "note":
-      return `<label class="mono accent" for="cap-text">Type a thought or paste a link</label>
-        <textarea id="cap-text" placeholder="Anything you want to come back to">${esc(state.capText)}</textarea>${st}`;
-    case "paste":
-      return `<span class="mono accent">Paste</span><span class="big">Press to paste what you copied.</span>
-        <p class="lede">Links, text and images from any app. If your phone asks, tap Paste.</p>${st}`;
-    case "camera":
-      return `<span class="mono accent">Camera</span><span class="big">Take a photo.</span>
-        <p class="lede">A whiteboard, a page, a sign. The AI reads it and titles it for you.</p>${st}`;
-    case "photos":
-      return `<span class="mono accent">Photos</span><span class="big">Choose photos or video.</span>
-        <p class="lede">Pick several at once. Each becomes its own item in your inbox.</p>${st}`;
-    default:
-      return `<span class="mono accent">Files</span><span class="big">Choose any file.</span>
-        <p class="lede">PDFs, documents, audio, anything. PDFs are read by the AI; other files keep their name and type.</p>${st}`;
-  }
-}
-
-function bindCapturePanel() {
-  const ta = $("#cap-text");
-  if (!ta) return;
-  ta.addEventListener("input", () => { state.capText = ta.value; });
-  ta.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) shutter(); });
-  ta.addEventListener("paste", async (e) => {
-    if (e.clipboardData && e.clipboardData.files && e.clipboardData.files.length) {
-      e.preventDefault();
-      afterCapture(await captureTransfer(e.clipboardData, "paste"));
-    }
+  $("#cap-attach").addEventListener("click", () => { unlock(); $("#in-any").click(); });
+  $("#cap-paste").addEventListener("click", pasteIntoBox);
+  const input = $("#in-any");
+  input.addEventListener("change", () => {
+    stageFiles(Array.from(input.files || []));
+    input.value = "";
   });
+  renderTray();
+  updateDetect();
+}
+
+/** What will be saved, line by line, so there are no surprises. */
+function stagedDrafts() {
+  const fromText = detectText(state.capText);
+  const fromFiles = state.capFiles.map((f) => ({ ...draftFromFile(f.file), blobId: "staged" }));
+  return [...fromText, ...fromFiles];
+}
+
+function updateDetect() {
+  const list = $("#cap-detect");
+  if (!list) return;
+  const drafts = stagedDrafts();
+  list.innerHTML = drafts.map((d) => `<li><span class="arrow">→</span><span class="what">${esc(describeDraft(d))}</span><span class="title">${esc(d.kind === KIND.NOTE || d.kind === KIND.QUOTE ? "" : d.fileName || (d.videoId ? "" : d.url) || "")}</span></li>`).join("");
+  const hint = $("#cap-hint");
+  if (hint) hint.textContent = drafts.length > 1 ? `Saves as ${drafts.length} items` : drafts.length ? "Press to save" : "Edition sorts it for you";
+  $("#shutter").classList.toggle("ready", drafts.length > 0);
+}
+
+function stageFiles(files) {
+  for (const file of files) state.capFiles.push({ file, url: file.type.startsWith("image/") ? URL.createObjectURL(file) : "" });
+  renderTray();
+  updateDetect();
+}
+
+function renderTray() {
+  const tray = $("#cap-tray");
+  if (!tray) return;
+  tray.innerHTML = state.capFiles.map((f, i) => `<div class="chip">
+      ${f.url ? `<img alt="" src="${f.url}">` : `<span class="glyph mono">${esc(ext(f.file.name))}</span>`}
+      <button type="button" data-unstage="${i}" aria-label="Remove ${esc(f.file.name)}">✕</button></div>`).join("");
+  tray.hidden = !state.capFiles.length;
+  tray.querySelectorAll("[data-unstage]").forEach((b) => b.addEventListener("click", () => {
+    const [gone] = state.capFiles.splice(+b.dataset.unstage, 1);
+    if (gone && gone.url) URL.revokeObjectURL(gone.url);
+    renderTray();
+    updateDetect();
+  }));
+}
+
+/** Paste fills the box (or the tray, for images) so you can see it before saving. */
+async function pasteIntoBox() {
+  unlock();
+  try {
+    const { text, files } = await readClipboard();
+    if (!text && !files.length) { setCapStatus("The clipboard is empty.", true); return; }
+    if (text) {
+      const ta = $("#cap-text");
+      state.capText = state.capText.trim() ? `${state.capText.trim()}\n${text}` : text;
+      ta.value = state.capText;
+    }
+    if (files.length) stageFiles(files);
+    else updateDetect();
+    setCapStatus("");
+  } catch {
+    // Some browsers refuse clipboard reads; long-press paste in the box always works.
+    $("#cap-text").focus();
+    setCapStatus("Clipboard access was blocked. Long-press the box and choose Paste.", true);
+  }
+}
+
+/** On the capture screen, paste and drop fill the box instead of saving straight away. */
+function stageTransfer(dt) {
+  const files = Array.from(dt.files || []);
+  if (files.length) { stageFiles(files); return; }
+  const text = dt.getData("text/plain") || dt.getData("text/uri-list");
+  if (!text) return;
+  state.capText = state.capText.trim() ? `${state.capText.trim()}\n${text}` : text;
+  const ta = $("#cap-text");
+  if (ta) ta.value = state.capText;
+  updateDetect();
 }
 
 function setCapStatus(msg, err) {
@@ -690,29 +773,22 @@ function setCapStatus(msg, err) {
 
 async function shutter() {
   unlock();
-  const mode = CAPTURE_MODES[state.capMode].id;
-  if (mode === "camera") return $("#in-camera").click();
-  if (mode === "photos") return $("#in-photos").click();
-  if (mode === "files") return $("#in-files").click();
-  if (mode === "note") {
-    const text = (state.capText || "").trim();
-    if (!text) { $("#cap-text").focus(); setCapStatus("Type or paste something first.", true); return; }
-    const it = await captureText(text, "drop");
-    state.capText = "";
-    afterCapture([it]);
+  const text = (state.capText || "").trim();
+  if (!text && !state.capFiles.length) {
+    $("#cap-text").focus();
+    setCapStatus("Type, paste or attach something first.", true);
     return;
   }
-  try {
-    const list = await captureClipboard();
-    if (list.length) afterCapture(list);
-    else setCapStatus("The clipboard is empty.", true);
-  } catch {
-    // Some browsers refuse clipboard reads; fall back to typing and long-press paste.
-    state.capMode = 0;
-    render();
-    setCapStatus("Clipboard access was blocked. Long-press the box and choose Paste.", true);
-    $("#cap-text").focus();
+  setCapStatus("Saving…");
+  const out = [];
+  if (text) out.push(...await captureText(text, "drop"));
+  for (const f of state.capFiles) {
+    out.push(await captureFile(f.file, "drop"));
+    if (f.url) URL.revokeObjectURL(f.url);
   }
+  state.capText = "";
+  state.capFiles = [];
+  afterCapture(out);
 }
 
 /* ---------- G4 · Reader ---------- */
@@ -730,9 +806,12 @@ function openReader(item) {
   let content = "";
   switch (item.kind) {
     case KIND.NOTE: content = `<div class="prose">${esc(item.text || item.title)}</div>`; break;
+    case KIND.QUOTE: content = `<blockquote class="quote">${esc(item.text || item.title)}</blockquote>${item.author ? `<p class="cite mono">${esc(item.author)}</p>` : ""}`; break;
     case KIND.LINK: content = item.text ? `<div class="prose">${esc(item.text)}</div>` : ""; break;
-    case KIND.PHOTO: content = `<img alt="${esc(item.title)}" data-blob="${esc(item.blobId)}">`; break;
-    case KIND.VIDEO: content = `<video controls playsinline data-blob="${esc(item.blobId)}"></video>`; break;
+    case KIND.PHOTO: content = imgTag(item); break;
+    case KIND.VIDEO: content = item.videoId
+      ? `<div class="yt"><iframe title="${esc(item.title)}" src="https://www.youtube-nocookie.com/embed/${esc(item.videoId)}?playsinline=1&rel=0" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen></iframe></div>`
+      : item.blobId ? `<video controls playsinline data-blob="${esc(item.blobId)}"></video>` : ""; break;
     case KIND.AUDIO: content = `<audio controls data-blob="${esc(item.blobId)}"></audio>`; break;
     case KIND.TEXT: content = `<div class="prose" data-textblob="${esc(item.blobId)}">Loading…</div>`; break;
     case KIND.PDF: content = `<iframe title="${esc(item.title)}" data-blob="${esc(item.blobId)}"></iframe>`; break;
@@ -761,7 +840,9 @@ function openReader(item) {
         <span class="mono muted">${esc(item.url ? host(item.url) : item.fileName || KIND_LABEL[item.kind])} · ${estimateMinutes(item)} min</span>
         <h1 class="headline">${esc(item.title)}</h1>
         ${item.summary ? `<p class="lede">${esc(item.summary)}</p>` : ""}
+        ${item.points && item.points.length ? `<ul class="points">${item.points.map((p) => `<li>${esc(p)}</li>`).join("")}</ul>` : ""}
         ${content}
+        ${item.transcript ? `<span class="mono accent">Text in the image</span><div class="prose">${esc(item.transcript)}</div>` : ""}
       </div>
       <div class="swheel" id="swheel" role="slider" tabindex="0" aria-label="Scroll" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span class="fill" id="sfill"></span></div>
     </div>
@@ -829,7 +910,7 @@ function libraryMatches() {
   return state.items
     .filter((i) => status === "all" || i.status === status)
     .filter((i) => !kinds || kinds.includes(i.kind))
-    .filter((i) => !q || [i.title, i.text, i.url, i.summary, i.fileName, ...(i.tags || [])].some((s) => s && s.toLowerCase().includes(q)))
+    .filter((i) => !q || [i.title, i.text, i.url, i.summary, i.fileName, i.author, i.transcript, ...(i.points || []), ...(i.tags || [])].some((s) => s && s.toLowerCase().includes(q)))
     .sort((a, b) => (b.doneAt || b.archivedAt || b.created) - (a.doneAt || a.archivedAt || a.created));
 }
 
@@ -919,6 +1000,15 @@ function openSettings() {
       <p class="note">iPhone web apps can't vibrate, so each detent plays a short click instead.</p>
     </div>
     <div class="section">
+      <span class="mono accent">Samples</span>
+      <div class="two">
+        <button class="btn" type="button" id="set-samples-load">Load samples</button>
+        <button class="btn" type="button" id="set-samples-clear" ${state.items.some((i) => i.sample) ? "" : "disabled"}>Remove samples</button>
+      </div>
+      <span class="st" id="set-sm-st" role="status"></span>
+      <p class="note">Example links, YouTube videos, quotes, notes and stock photos across the inbox, queue and history. Your own items are never touched.</p>
+    </div>
+    <div class="section">
       <span class="mono accent">Backup</span>
       <div class="two">
         <button class="btn" type="button" id="set-export">Export</button>
@@ -958,6 +1048,20 @@ function openSettings() {
     } catch (e) { say(edSt, e.message || "Could not rebuild.", true); }
   });
   $("#set-discover", wrap).addEventListener("click", () => findNew(edSt));
+  const smSt = $("#set-sm-st", wrap);
+  $("#set-samples-load", wrap).addEventListener("click", async () => {
+    const n = await seedSamples({ force: true });
+    await ensureEdition();
+    $("#set-samples-clear", wrap).disabled = false;
+    say(smSt, n ? `Loaded ${n} sample items.` : "Samples are already loaded.");
+    render();
+  });
+  $("#set-samples-clear", wrap).addEventListener("click", async () => {
+    const n = await removeSamples();
+    $("#set-samples-clear", wrap).disabled = true;
+    say(smSt, `Removed ${n} sample items.`);
+    render();
+  });
   wrap.querySelectorAll("[data-sound]").forEach((b) => b.addEventListener("click", () => {
     setSound(b.dataset.sound === "1");
     wrap.querySelectorAll("[data-sound]").forEach((x) => {
@@ -1033,6 +1137,7 @@ function wireGlobal() {
     if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
     if (!e.clipboardData) return;
     e.preventDefault();
+    if (state.view === "capture") { stageTransfer(e.clipboardData); return; }
     afterCapture(await captureTransfer(e.clipboardData, "paste"));
   });
   const zone = document.createElement("div");
@@ -1045,7 +1150,9 @@ function wireGlobal() {
   window.addEventListener("dragleave", () => { depth = Math.max(0, depth - 1); if (!depth) zone.classList.remove("on"); });
   window.addEventListener("drop", async (e) => {
     e.preventDefault(); depth = 0; zone.classList.remove("on");
-    if (e.dataTransfer) afterCapture(await captureTransfer(e.dataTransfer, "drop"));
+    if (!e.dataTransfer) return;
+    if (state.view === "capture") { stageTransfer(e.dataTransfer); return; }
+    afterCapture(await captureTransfer(e.dataTransfer, "drop"));
   });
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;

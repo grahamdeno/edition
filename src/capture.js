@@ -1,22 +1,47 @@
 /*
- * Capture. Every route in ends here: the drop sheet, paste anywhere,
- * drag and drop, the photo and file pickers, and the share target.
- * Each route hands over text or File objects; this decides what they are,
- * stores the bytes, and puts a new item in the inbox. No forms.
+ * Capture. Every route in ends here: the capture box, paste anywhere,
+ * drag and drop, the attach picker, and the share target.
+ * Each route hands over text or File objects; this decides what they are
+ * (link, YouTube video, quote, note, photo, PDF...), stores the bytes, and
+ * puts new items in the inbox. The person never picks a type.
  */
 
-import { draftFromText, draftFromFile, createItem, KIND } from "./model.js";
+import { detectText, draftFromText, draftFromFile, createItem, KIND } from "./model.js";
 import { items, blobs, newId } from "./db.js";
 
 const THUMB_EDGE = 1200;
 
-/** Save text (a link, a thought, a pasted paragraph). Returns the new item, or null. */
+/**
+ * Save text: a link, several links, a YouTube URL, a quote or a thought.
+ * Returns the new items (one per thing found).
+ */
 export async function captureText(text, source = "drop") {
-  const draft = draftFromText(text);
-  if (!draft) return null;
-  const item = createItem(draft, { id: newId(), source });
-  await items.put(item);
-  return item;
+  const out = [];
+  for (const draft of detectText(text)) {
+    if (draft.videoId) await nameVideo(draft);
+    const item = createItem(draft, { id: newId(), source });
+    await items.put(item);
+    out.push(item);
+  }
+  return out;
+}
+
+/**
+ * YouTube's own title and channel, from a public oEmbed proxy that allows
+ * browser requests. Best effort: a slow or blocked lookup leaves the draft as it is.
+ */
+async function nameVideo(draft) {
+  try {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 3500);
+    const res = await fetch(`https://noembed.com/embed?url=${encodeURIComponent("https://www.youtube.com/watch?v=" + draft.videoId)}`, { signal: ctl.signal });
+    clearTimeout(timer);
+    const data = await res.json();
+    if (data && data.title && !data.error) {
+      if (!draft.text) draft.title = data.title;
+      draft.author = data.author_name || undefined;
+    }
+  } catch { /* offline or blocked: keep the default title */ }
 }
 
 /** Save one file of any type. */
@@ -44,18 +69,18 @@ export async function captureTransfer(dt, source = "drop") {
   if (!files.length) {
     const uri = dt.getData("text/uri-list");
     const text = dt.getData("text/plain") || uri;
-    const item = await captureText(text, source);
-    if (item) out.push(item);
+    out.push(...await captureText(text, source));
   }
   return out;
 }
 
 /**
- * Read the clipboard on a tap. Images come through as files; text as text.
- * Falls back to plain text where the richer API isn't available.
+ * Read the clipboard on a tap without saving, so the capture box can show
+ * what it found first. Images come back as files, everything else as text.
+ * Throws NotAllowedError where the browser refuses.
  */
-export async function captureClipboard() {
-  const out = [];
+export async function readClipboard() {
+  const out = { text: "", files: [] };
   if (navigator.clipboard && navigator.clipboard.read) {
     try {
       const entries = await navigator.clipboard.read();
@@ -64,24 +89,18 @@ export async function captureClipboard() {
         if (imageType) {
           const blob = await entry.getType(imageType);
           const ext = imageType.split("/")[1] || "png";
-          out.push(await captureFile(new File([blob], `Pasted image.${ext}`, { type: imageType }), "paste"));
+          out.files.push(new File([blob], `Pasted image.${ext}`, { type: imageType }));
           continue;
         }
-        const textType = entry.types.includes("text/uri-list") ? "text/uri-list" : entry.types.includes("text/plain") ? "text/plain" : null;
-        if (textType) {
-          const item = await captureText(await (await entry.getType(textType)).text(), "paste");
-          if (item) out.push(item);
-        }
+        const textType = entry.types.includes("text/plain") ? "text/plain" : entry.types.includes("text/uri-list") ? "text/uri-list" : null;
+        if (textType) out.text += (out.text ? "\n" : "") + (await (await entry.getType(textType)).text());
       }
       return out;
     } catch (e) {
       if (e && e.name === "NotAllowedError") throw e;
     }
   }
-  if (navigator.clipboard && navigator.clipboard.readText) {
-    const item = await captureText(await navigator.clipboard.readText(), "paste");
-    if (item) out.push(item);
-  }
+  if (navigator.clipboard && navigator.clipboard.readText) out.text = await navigator.clipboard.readText();
   return out;
 }
 
@@ -99,8 +118,7 @@ export async function captureShares(list) {
       await items.put(item);
       out.push(item);
     } else {
-      const item = await captureText([s.title, s.text].filter(Boolean).join("\n"), "share");
-      if (item) out.push(item);
+      out.push(...await captureText([s.title, s.text].filter(Boolean).join("\n"), "share"));
     }
   }
   return out;

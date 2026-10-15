@@ -16,7 +16,7 @@ Built like [Scales](https://github.com/grahamdeno/scales) and [Tabs](https://git
 
 Every control sits in the bottom half of the screen or on the right edge, so the whole app works with one thumb. Choices are made with scroll wheels that click as they pass each option; a tap on any option selects it directly.
 
-1. **Capture.** Tap **+**. A camera-style mode wheel picks Note, Paste, Camera, Photos or Files, and the round shutter saves. On a computer, paste or drag anywhere in the window. On Android and desktop Chrome, Edition appears in the share sheet.
+1. **Capture.** Tap **+** and drop anything into one box: type a thought, paste a link, a list of links, a YouTube URL or a quote, or tap **Attach** for photos, the camera or files. Edition works out what each thing is (link, video, quote, note, photo, PDF, file) and lists it under the box before you save, so you never pick a type. The round shutter saves everything at once. On a computer, paste or drag anywhere. On Android and desktop Chrome, Edition appears in the share sheet.
 2. **Triage.** Everything new lands in the inbox first, one card at a time. Sweep your thumb across the corner dial to choose Let go, Later, Done or Read, then press Set. Swiping the card left, right or up works too.
 3. **Read the edition.** Kept items come back as today's pages. The knurled wheel on the right edge rolls between them; the verdict wheel at the bottom sets what happens next, and Press confirms.
 4. **Read.** The reader's right-edge wheel shows progress and scrolls the text when you turn it, with the time left at the top.
@@ -29,13 +29,17 @@ Add an Anthropic API key in Settings. It stays in this browser's storage and is 
 
 | Job | When | What it sends |
 | --- | --- | --- |
-| Enrich | Each new save | The item's text or URL; photos as a downscaled image; PDFs as the document |
+| Enrich | Each new save | The item's text or URL; photos as a downscaled image; PDFs as the document. Returns a title, why it matters, tags, time, what it was saved for (read, watch, reference, idea, task), up to three key points, any text in a photo, and turns a note that is really a quotation into a quote |
 | Rank | First open each day, or Settings › Rebuild | Titles and tags of your queue, plus what you finished and let go |
 | Discover | Settings or the end of an edition | Your top interests and recent reads; the model searches the web |
 
 Your verdicts are the learning signal: finished and read-now items raise their tags; let-go items lower them. Ranking blends the AI score (60%) with a local score (40%) built from age, deferrals and those tag affinities, so the app still orders sensibly with no key at all. AI suggestions are labeled, go through triage like anything else, and are capped at one per edition.
 
 Default model: `claude-haiku-5-5`, changeable in Settings. Every AI action is a paid API call on your account.
+
+## Samples
+
+A fresh install loads sixteen sample items (links, YouTube talks, quotes, a note and stock photos) across the inbox, queue and history so every screen has something to show. Settings › Samples removes them, or loads them again. Your own items are never touched.
 
 ## Install
 
@@ -52,6 +56,7 @@ src/app.js            views, gestures, wiring
 src/model.js          pure logic: capture parsing, verdicts, ranking, edition selection
 src/db.js             IndexedDB storage, migration from v1, backup
 src/capture.js        every way in: text, files, clipboard, drag-drop, share target
+src/samples.js        example items for a fresh install
 src/ai.js             Anthropic API: enrich, rank, discover
 src/wheel.js          scroll wheels, drum pickers and the corner dial
 src/feel.js           detent clicks (audio, and vibration where supported)
