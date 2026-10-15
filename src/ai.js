@@ -9,6 +9,7 @@
  *             note is really a quote
  *   rank      score the queue 0..100 using what the reader finished and let go
  *   discover  search the web for a few new things this reader would want
+ *             (Perplexity's Search API when its key is set, else Claude's web search)
  */
 
 import { topTags } from "./model.js";
@@ -21,6 +22,8 @@ const MAX_IMAGE_EDGE = 1568;
 
 const KEY_STORE = "edition.apiKey";
 const MODEL_STORE = "edition.model";
+const PPLX_STORE = "edition.perplexityKey";
+const PPLX_URL = "https://api.perplexity.ai/search";
 
 export const settings = {
   key: () => safeGet(KEY_STORE),
@@ -28,6 +31,11 @@ export const settings = {
   model: () => safeGet(MODEL_STORE) || DEFAULT_MODEL,
   setModel: (m) => safeSet(MODEL_STORE, m),
   enabled: () => Boolean(safeGet(KEY_STORE)),
+  pplxKey: () => safeGet(PPLX_STORE),
+  setPplxKey: (k) => safeSet(PPLX_STORE, k),
+  pplxEnabled: () => Boolean(safeGet(PPLX_STORE)),
+  /** Discovery works with either key: Perplexity when set, Claude's web search otherwise. */
+  canDiscover: () => Boolean(safeGet(PPLX_STORE) || safeGet(KEY_STORE)),
 };
 
 function safeGet(k) { try { return localStorage.getItem(k) || ""; } catch { return ""; } }
@@ -181,7 +189,12 @@ export async function rank(queue, profile) {
  * Find a few new things worth reading, using the web search tool.
  * Returns [{ title, url, why, tags }].
  */
-export async function discover(profile, { count = 3 } = {}) {
+export async function discover(profile, { count = 3, known = new Set() } = {}) {
+  if (settings.pplxEnabled()) return pplxDiscover(profile, { count, known });
+  return claudeDiscover(profile, { count });
+}
+
+async function claudeDiscover(profile, { count = 3 } = {}) {
   const interests = topTags(profile, 10);
   const kept = profile.kept.slice(0, 10).map((i) => `- ${i.title}${i.url ? ` (${i.url})` : ""}`).join("\n");
   const dropped = profile.dropped.slice(0, 6).map((i) => `- ${i.title}`).join("\n");
@@ -205,6 +218,109 @@ export async function discover(profile, { count = 3 } = {}) {
     .map((p) => ({
       title: clip(p.title, 120),
       url: p.url,
+      why: clip(p.why, 160),
+      tags: Array.isArray(p.tags) ? p.tags.slice(0, 3).map((t) => String(t).toLowerCase()) : [],
+      minutes: Number.isFinite(+p.minutes) ? Math.round(+p.minutes) : undefined,
+    }));
+}
+
+/* ---- Perplexity Search API ---- */
+
+async function pplxSearch(body) {
+  const key = settings.pplxKey();
+  if (!key) throw new AiError("No Perplexity key set.");
+  let res;
+  try {
+    res = await fetch(PPLX_URL, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    // A network error here is usually Perplexity refusing calls from a browser app.
+    throw new AiError("Couldn't reach Perplexity. Check your connection; if this keeps happening, Perplexity is blocking calls from the app.");
+  }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const detail = Array.isArray(data?.detail) ? data.detail.map((d) => d.msg).join("; ") : data?.error?.message || data?.detail;
+    throw new AiError(res.status === 401 ? "The Perplexity key was rejected." : detail || `Perplexity request failed (${res.status}).`, res.status);
+  }
+  return data;
+}
+
+/** Check a Perplexity key with the smallest search. */
+export async function testPplxKey() {
+  await pplxSearch({ query: "edition reading app", max_results: 1, search_type: "fast" });
+  return true;
+}
+
+/** Search queries from what the reader keeps finishing. */
+export function discoveryQueries(profile, n = 3) {
+  const tags = topTags(profile, n);
+  if (tags.length) return tags.map((t) => `best recent in-depth article or essay on ${t}`);
+  return profile.kept.slice(0, n).map((i) => `articles like "${i.title}"`);
+}
+
+/**
+ * Flatten Perplexity results (one list per query when several are sent) and
+ * take picks round-robin across queries, skipping links already saved.
+ */
+export function pickResults(results, queries, { count = 3, known = new Set() } = {}) {
+  const lists = Array.isArray(results[0]) ? results : [results];
+  const seen = new Set(known), picks = [];
+  for (let round = 0; picks.length < count && round < 20; round++) {
+    let any = false;
+    lists.forEach((list, qi) => {
+      const r = list[round];
+      if (!r) return;
+      any = true;
+      if (picks.length >= count || !/^https?:\/\//.test(r.url || "") || seen.has(r.url)) return;
+      seen.add(r.url);
+      picks.push({ ...r, query: queries[qi] || queries[0] });
+    });
+    if (!any) break;
+  }
+  return picks;
+}
+
+async function pplxDiscover(profile, { count = 3, known = new Set() } = {}) {
+  const queries = discoveryQueries(profile);
+  if (!queries.length) throw new AiError("Finish or let go of a few items first, so there is something to learn from.");
+  const data = await pplxSearch({ query: queries, max_results: 8, search_recency_filter: "month", max_tokens_per_page: 256 });
+  const results = data.results || [];
+  const tagOf = (q) => { const t = topTags(profile, 3).find((x) => q.includes(x)); return t ? [t] : []; };
+  // With a Claude key, let Claude choose the best fits from Perplexity's candidates.
+  if (settings.enabled()) {
+    const pool = pickResults(results, queries, { count: 15, known });
+    if (pool.length) {
+      try { return await chooseFromPool(profile, pool, count); } catch { /* fall back to Perplexity's order */ }
+    }
+  }
+  return pickResults(results, queries, { count, known }).map((r) => ({
+    title: clip(r.title, 120),
+    url: r.url,
+    why: clip(r.snippet, 160),
+    tags: tagOf(r.query),
+    minutes: undefined,
+  }));
+}
+
+async function chooseFromPool(profile, pool, count) {
+  const kept = profile.kept.slice(0, 10).map((i) => `- ${i.title}${tagStr(i)}`).join("\n") || "(none)";
+  const dropped = profile.dropped.slice(0, 6).map((i) => `- ${i.title}`).join("\n") || "(none)";
+  const list = pool.map((r, n) => `${n} | ${r.title} | ${r.url} | ${clip(r.snippet, 200)}`).join("\n");
+  const prompt =
+    `Pick the ${count} best fits for this person's private reading edition from search results. Prefer substantial ` +
+    `articles and essays over news briefs, listicles and product pages.\n\nThey finished:\n${kept}\n\nThey let go:\n${dropped}\n\n` +
+    `Results (n | title | url | snippet):\n${list}\n\n` +
+    `Reply with JSON only: {"picks":[{"n":integer,"title":string (plain, max 80 chars),"why":string (max 120 chars, plain, why it fits them),"tags":[1-3 lowercase words],"minutes":integer}]}`;
+  const out = parseJson(textOf(await call({ content: prompt, maxTokens: 1000 })));
+  return (out.picks || [])
+    .filter((p) => pool[p.n])
+    .slice(0, count)
+    .map((p) => ({
+      title: clip(p.title || pool[p.n].title, 120),
+      url: pool[p.n].url,
       why: clip(p.why, 160),
       tags: Array.isArray(p.tags) ? p.tags.slice(0, 3).map((t) => String(t).toLowerCase()) : [],
       minutes: Number.isFinite(+p.minutes) ? Math.round(+p.minutes) : undefined,

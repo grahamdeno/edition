@@ -175,11 +175,50 @@ a { color: inherit; text-decoration: none; }
   display: flex; flex-direction: column; align-items: flex-end; gap: 10px;
   transition: opacity 0.6s ease, transform 0.6s ease;
 }
-.corner.asleep { opacity: 0.35; transform: scale(0.88); transform-origin: 100% 100%; }
+.corner.asleep { opacity: 0.5; transform: scale(0.88); transform-origin: 100% 100%; }
+/* A faint copper rim at rest, so the + reads as the way in without shouting. */
 .fab {
-  width: 56px; height: 56px; border-radius: 28px; display: grid; place-items: center;
-  background: rgba(36, 37, 42, 0.86); border: 1px solid var(--line); color: var(--text);
+  position: relative; width: 56px; height: 56px; border-radius: 28px; display: grid; place-items: center;
+  background: radial-gradient(circle at 35% 30%, rgba(58, 52, 48, 0.95), rgba(30, 31, 35, 0.92) 70%);
+  border: 1px solid rgba(217, 149, 95, 0.45); color: #F1E3D4;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.3), 0 4px 16px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 230, 205, 0.12);
   -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+}
+/* The glint: a band of light that crosses the face as the coin turns. */
+.fab::after {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; opacity: 0;
+  background: linear-gradient(105deg, transparent 30%, rgba(255, 216, 176, 0.55) 48%, rgba(255, 240, 225, 0.75) 50%, transparent 68%);
+  background-size: 260% 100%; background-position: 150% 0;
+}
+/* Coin spinning to a stop: fast turns that slow, a last wobble, then flat. */
+.fab.spin { animation: coin 1.9s linear both, rim 1.9s ease-out both; }
+.fab.spin::after { animation: glint 1.9s linear both; }
+@keyframes coin {
+  0%   { transform: perspective(260px) rotateY(0deg); }
+  18%  { transform: perspective(260px) rotateY(360deg); }
+  38%  { transform: perspective(260px) rotateY(650deg); }
+  56%  { transform: perspective(260px) rotateY(860deg); }
+  70%  { transform: perspective(260px) rotateY(990deg) rotateX(10deg); }
+  80%  { transform: perspective(260px) rotateY(1050deg) rotateX(-7deg); }
+  89%  { transform: perspective(260px) rotateY(1075deg) rotateX(4deg); }
+  95%  { transform: perspective(260px) rotateY(1080deg) rotateX(-1.5deg); }
+  100% { transform: perspective(260px) rotateY(1080deg) rotateX(0deg); }
+}
+@keyframes glint {
+  0%   { opacity: 0; background-position: 150% 0; }
+  4%   { opacity: 1; }
+  18%  { background-position: -50% 0; }
+  19%  { background-position: 150% 0; }
+  38%  { background-position: -50% 0; }
+  39%  { background-position: 150% 0; }
+  62%  { background-position: -50% 0; }
+  63%  { background-position: 150% 0; }
+  92%  { background-position: -50% 0; opacity: 0.9; }
+  100% { background-position: -50% 0; opacity: 0; }
+}
+@keyframes rim {
+  0%, 100% { border-color: rgba(217, 149, 95, 0.45); }
+  30%      { border-color: rgba(240, 190, 140, 0.95); box-shadow: 0 0 18px rgba(217, 149, 95, 0.45), 0 4px 16px rgba(0, 0, 0, 0.4); }
 }
 .fab .i { width: 24px; height: 24px; transition: transform 0.2s ease; }
 .corner.open .fab .i { transform: rotate(45deg); }
@@ -366,4 +405,4 @@ a { color: inherit; text-decoration: none; }
 .dropzone { position: fixed; inset: 0; z-index: 50; display: none; place-items: center; background: rgba(14, 15, 17, 0.92); border: 2px dashed var(--accent); font: 400 34px var(--serif); color: var(--accent); }
 .dropzone.on { display: grid; }
 
-@media (prefers-reduced-motion: reduce) { .story, .corner, .verdicts, .reader-top { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .story, .corner, .verdicts, .reader-top { transition: none; } .fab.spin, .fab.spin::after { animation: none; } }

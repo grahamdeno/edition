@@ -26,7 +26,7 @@ import * as ai from "./ai.js";
 import { tick, unlock, soundOn, setSound } from "./feel.js";
 import { I } from "./icons.js";
 
-export const VERSION = "3.1.0";
+export const VERSION = "3.2.0";
 
 const KIND_LABEL = { link: "Link", note: "Note", quote: "Quote", photo: "Photo", pdf: "PDF", text: "Text", video: "Video", audio: "Audio", file: "File" };
 const TIME = [
@@ -74,6 +74,7 @@ async function boot() {
   if (migrated) toast(`Brought over ${migrated} saved item${migrated === 1 ? "" : "s"} from the old version.`);
   else if (seeded) toast(`Loaded ${seeded} sample items. Remove them in Settings.`);
   wireGlobal();
+  startCoin();
   enrichPending();
   if (shared || linked) openStories("inbox");
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
@@ -289,11 +290,11 @@ async function enrichPending() {
 
 async function findNew(statusEl) {
   const set = (msg, err) => { if (statusEl) { statusEl.textContent = msg; statusEl.classList.toggle("err", !!err); } };
-  if (!ai.settings.enabled()) { set("Add an API key in Settings first.", true); return; }
-  set("Searching for something worth your time…");
+  if (!ai.settings.canDiscover()) { set("Add a Perplexity or Anthropic key in Settings first.", true); return; }
+  set(ai.settings.pplxEnabled() ? "Searching Perplexity for something worth your time…" : "Searching for something worth your time…");
   try {
-    const picks = await ai.discover(interestProfile(state.items));
     const known = new Set(state.items.map((i) => i.url).filter(Boolean));
+    const picks = await ai.discover(interestProfile(state.items), { known });
     const fresh = picks.filter((p) => !known.has(p.url));
     for (const p of fresh) {
       const item = createItem(
@@ -343,7 +344,7 @@ function renderFront() {
     paper = `<div class="empty-front"><h2>You're done.</h2>
       <p>${done} read, ${gone} let go, ${v.total - done - gone} moved later. Tomorrow's edition is set in the morning.</p>
       ${c.queued ? `<button class="pill-btn ghost" type="button" data-act="one-more">Read one more</button>` : ""}
-      ${ai.settings.enabled() ? `<button class="pill-btn ghost" type="button" data-act="discover">Find something new</button><span class="st" id="discover-st" role="status"></span>` : ""}</div>`;
+      ${ai.settings.canDiscover() ? `<button class="pill-btn ghost" type="button" data-act="discover">Find something new</button><span class="st" id="discover-st" role="status"></span>` : ""}</div>`;
   } else {
     paper = `<div class="empty-front"><h2>${c.inbox ? "Sort your inbox first." : "Nothing here yet."}</h2>
       <p>${c.inbox ? "The saves you keep come back here as today's edition." : "Save a link, a thought, a photo or a file. It goes to your inbox first, then comes back here."}</p>
@@ -484,6 +485,29 @@ function bindFront() {
   fab.addEventListener("click", () => (corner.classList.contains("open") ? closeMenu() : openMenu()));
   front.addEventListener("scroll", () => { if (!corner.classList.contains("open")) sleepCorner(); }, { passive: true });
   wakeCorner();
+}
+
+/*
+ * The + button catches the light now and then, like a coin spinning to a stop
+ * on a counter: once on launch, then every half minute while the front page
+ * sits idle. Skipped when the reader asked for reduced motion.
+ */
+const COIN_EVERY_MS = 30000;
+let coinTimer = 0;
+function spinCoin() {
+  const fab = $("#fab"), corner = $("#corner");
+  if (!fab || state.reader || $(".sheet-wrap") || corner.classList.contains("open")) return;
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  wakeCorner();
+  fab.classList.remove("spin");
+  void fab.offsetWidth; // restart the animation
+  fab.classList.add("spin");
+  fab.addEventListener("animationend", () => fab.classList.remove("spin"), { once: true });
+}
+function startCoin() {
+  clearInterval(coinTimer);
+  setTimeout(spinCoin, 900);
+  coinTimer = setInterval(spinCoin, COIN_EVERY_MS);
 }
 
 let cornerTimer = 0;
@@ -940,10 +964,21 @@ function openSettings() {
       <p class="note">The key stays on this device and is sent only to Anthropic. With it, Edition titles and tags each new save (photos and PDFs too), ranks your queue from what you finish and let go, and can search for new reading. Each is a paid API call on your account.</p>
     </div>
     <div class="section">
+      <h3>Discovery (Perplexity API)</h3>
+      <div class="field"><label for="set-pplx">API key</label>
+        <input id="set-pplx" type="password" autocomplete="off" spellcheck="false" placeholder="pplx-…" value="${esc(ai.settings.pplxKey())}"></div>
+      <div class="two">
+        <button class="btn primary" type="button" id="set-pplx-save">Save and test</button>
+        <button class="btn" type="button" id="set-pplx-clear">Remove key</button>
+      </div>
+      <span class="st" id="set-pplx-st" role="status"></span>
+      <p class="note">With this key, Find something new searches Perplexity for recent articles on what you keep finishing. With the Anthropic key too, Claude picks the best fits from those results. Without it, Claude does the searching. Sent only to Perplexity.</p>
+    </div>
+    <div class="section">
       <h3>Edition</h3>
       <div class="two">
         <button class="btn" type="button" id="set-rebuild">Rebuild today</button>
-        <button class="btn" type="button" id="set-discover" ${ai.settings.enabled() ? "" : "disabled"}>Find something new</button>
+        <button class="btn" type="button" id="set-discover" ${ai.settings.canDiscover() ? "" : "disabled"}>Find something new</button>
       </div>
       <span class="st" id="set-ed-st" role="status"></span>
     </div>
@@ -993,6 +1028,23 @@ function openSettings() {
     ai.settings.setKey("");
     $("#set-key", wrap).value = "";
     say(st, "Key removed. Edition works without AI.");
+  });
+  const pSt = $("#set-pplx-st", wrap);
+  $("#set-pplx-save", wrap).addEventListener("click", async () => {
+    ai.settings.setPplxKey($("#set-pplx", wrap).value.trim());
+    if (!ai.settings.pplxEnabled()) { say(pSt, "No key saved."); return; }
+    say(pSt, "Testing…");
+    try {
+      await ai.testPplxKey();
+      say(pSt, "Key works. Find something new now uses Perplexity.");
+      $("#set-discover", wrap).disabled = false;
+    } catch (e) { say(pSt, e.message, true); }
+  });
+  $("#set-pplx-clear", wrap).addEventListener("click", () => {
+    ai.settings.setPplxKey("");
+    $("#set-pplx", wrap).value = "";
+    $("#set-discover", wrap).disabled = !ai.settings.canDiscover();
+    say(pSt, ai.settings.enabled() ? "Key removed. Claude does the searching." : "Key removed.");
   });
   const edSt = $("#set-ed-st", wrap);
   $("#set-rebuild", wrap).addEventListener("click", async () => {
@@ -1057,7 +1109,7 @@ function sheet(html, { tall = false, label = "" } = {}) {
   wrap.querySelectorAll("[data-close]").forEach((b) => b.addEventListener("click", closeSheet));
   document.body.appendChild(wrap);
   const panel = $(".sheet", wrap);
-  bindPull({ scroller: panel, target: panel, host: wrap, label: "Release to close", onBack: closeSheet });
+  bindPull({ scroller: panel, target: panel, host: wrap, onBack: closeSheet });
   return wrap;
 }
 
@@ -1075,14 +1127,22 @@ function closeSheet() {
  * back. Pull less and it springs back. Touch events, because iOS hands a
  * pointer gesture to the scroller before a pull can claim it.
  */
-const PULL = 90;
+/*
+ * Sheets use the same gesture without the pill: the sheet follows the finger
+ * one to one and closes past 110px or on a quick flick, like any phone sheet.
+ */
+const PULL = 90, DRAG_CLOSE = 110;
 function bindPull({ scroller, target, host, label, onBack }) {
+  const drag = !label; // a sheet: plain drag to close
   const tip = document.createElement("div");
-  tip.className = "pull-tip";
-  tip.setAttribute("aria-hidden", "true");
-  tip.innerHTML = `${I.down}<span>${esc(label)}</span>`;
-  host.appendChild(tip);
-  let x0 = 0, y0 = null, dy = 0, lit = false;
+  if (!drag) {
+    tip.className = "pull-tip";
+    tip.setAttribute("aria-hidden", "true");
+    tip.innerHTML = `${I.down}<span>${esc(label)}</span>`;
+    host.appendChild(tip);
+  }
+  let x0 = 0, y0 = null, t0 = 0, dy = 0, lit = false;
+  const willClose = () => drag ? dy >= DRAG_CLOSE || (dy > 40 && dy / Math.max(1, Date.now() - t0) > 0.6) : dy >= PULL;
   const reset = () => {
     y0 = null; dy = 0; lit = false;
     tip.style.opacity = ""; tip.classList.remove("go");
@@ -1092,7 +1152,7 @@ function bindPull({ scroller, target, host, label, onBack }) {
   scroller.addEventListener("touchstart", (e) => {
     if (scroller.scrollTop > 0 || e.touches.length !== 1) return;
     if (e.target.closest("input, textarea, iframe, video, audio, .chips, .tray")) return;
-    x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; dy = 0;
+    x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; t0 = Date.now(); dy = 0;
   }, { passive: true });
   scroller.addEventListener("touchmove", (e) => {
     if (y0 == null) return;
@@ -1101,6 +1161,7 @@ function bindPull({ scroller, target, host, label, onBack }) {
     if (dy <= 0 || scroller.scrollTop > 0 || Math.abs(dx) > dy) { if (dy < -4 || Math.abs(dx) > Math.max(dy, 12)) reset(); return; }
     e.preventDefault();
     target.style.transition = "none";
+    if (drag) { target.style.transform = `translateY(${dy}px)`; return; }
     target.style.transform = `translateY(${Math.min(dy, PULL * 1.6) * 0.5}px)`;
     tip.style.opacity = String(Math.min(1, dy / PULL));
     const go = dy >= PULL;
@@ -1108,7 +1169,19 @@ function bindPull({ scroller, target, host, label, onBack }) {
     lit = go;
     tip.classList.toggle("go", go);
   }, { passive: false });
-  scroller.addEventListener("touchend", () => { if (y0 == null) return; const go = dy >= PULL; reset(); if (go) onBack(); });
+  scroller.addEventListener("touchend", () => {
+    if (y0 == null) return;
+    const go = willClose();
+    if (drag && go) { // slide the rest of the way out, then close
+      y0 = null;
+      target.style.transition = "transform 0.18s ease-in";
+      target.style.transform = "translateY(100%)";
+      setTimeout(onBack, 170);
+      return;
+    }
+    reset();
+    if (go) onBack();
+  });
   scroller.addEventListener("touchcancel", reset);
 }
 
