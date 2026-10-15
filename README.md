@@ -20,7 +20,8 @@ Two screens and no tab bar. The front page scrolls; the reader is full screen. A
 2. **Sort.** When new saves arrive, a line at the top says how many. Tap it and they open full screen, one at a time. Tap Let go, Keep or Done in the bottom-right pill. Swipe left or right to skip ahead or go back.
 3. **Read.** Tap any story on the front page to read it full screen. The same pill gives Let go, Later or Done, and the next story slides in. The pill and the close button dim while you read and wake when you touch the screen.
 4. **Add.** Corner button, then Add. One box takes a link, a YouTube URL, a quote or a thought; Paste and Attach sit either side of Save, and Edition lists what it found before saving. On a computer, paste or drag anywhere.
-5. **Let things go.** "Later" on an edition story moves it to a future edition. Do that eight times and it washes out of the queue. Nothing is deleted; Search can open and requeue anything.
+5. **Fading.** A save left untouched for three weeks, or moved later eight times, fades: it stops appearing in editions and waits in the Tideline at the bottom of the front page. Nothing is let go without your verdict: tap Keep for three more weeks, or Let go. Items within a week of fading show the days left and a *Read today* button.
+6. **Back.** On the reader or any sheet, pull down from the top and release to go back, as in Tabs.
 
 ## AI (optional)
 

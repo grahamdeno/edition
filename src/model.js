@@ -31,7 +31,8 @@ export const KIND = Object.freeze({
 });
 
 export const EDITION_SIZE = 6;
-export const MAX_SKIPS = 8;          // deferrals in an edition before an item washes out
+export const MAX_SKIPS = 8;          // deferrals in an edition before an item fades
+export const FADE_DAYS = 21;         // untouched this long, an item fades and waits for a verdict
 export const MAX_SUGGESTIONS = 1;    // AI-discovered items allowed per edition
 
 const DAY = 86400000;
@@ -290,11 +291,8 @@ export function applyVerdict(item, verdict, { stage = "inbox", now = Date.now() 
       } else {
         next.skips = (item.skips || 0) + 1;
         next.deferredAt = now;
-        if (next.skips >= MAX_SKIPS) {
-          next.status = STATUS.ARCHIVED;
-          next.archivedAt = now;
-          next.washedOut = true;
-        }
+        // Deferred too often: it fades and waits for your verdict. Nothing is let go automatically.
+        if (next.skips >= MAX_SKIPS) next.fadedAt = now;
       }
       break;
     default:
@@ -305,7 +303,21 @@ export function applyVerdict(item, verdict, { stage = "inbox", now = Date.now() 
 
 /** Put a let-go or done item back in the queue. */
 export function restore(item, now = Date.now()) {
-  return { ...item, status: STATUS.QUEUED, skips: 0, washedOut: false, queuedAt: now };
+  const next = { ...item, status: STATUS.QUEUED, skips: 0, washedOut: false, queuedAt: now };
+  delete next.fadedAt;
+  delete next.deferredAt;
+  return next;
+}
+
+/** The last time you gave this item any attention: saved, kept, deferred or restored. */
+export function touchedAt(item) {
+  return Math.max(item.queuedAt || 0, item.deferredAt || 0, item.created || 0);
+}
+
+/** A queued item fades after FADE_DAYS untouched, or after MAX_SKIPS deferrals. It stays until you decide. */
+export function isFaded(item, now = Date.now()) {
+  if (item.status !== STATUS.QUEUED) return false;
+  return Boolean(item.fadedAt) || now - touchedAt(item) >= FADE_DAYS * DAY;
 }
 
 /**
@@ -367,7 +379,8 @@ export function buildEdition(items, previous, { now = Date.now(), size = EDITION
   const today = dayKey(now);
   if (previous && previous.date === today && previous.ids && previous.ids.length) return previous;
   const profile = interestProfile(items);
-  const queued = items.filter((i) => i.status === STATUS.QUEUED);
+  // Faded items wait in the Tideline for a verdict; they don't come back on their own.
+  const queued = items.filter((i) => i.status === STATUS.QUEUED && !isFaded(i, now));
   const ranked = queued
     .map((i) => ({ i, s: score(i, profile, now) }))
     .sort((a, b) => b.s - a.s || a.i.created - b.i.created);
@@ -471,12 +484,21 @@ export function circling(items, { now = Date.now(), limit = 5 } = {}) {
     .map(([tag, c]) => ({ tag, count: Math.round(c), rising: (recent.get(tag) || 0) >= 2 }));
 }
 
-/** Queue items outside today's edition that have waited longest, oldest first. */
-export function fading(items, edition, { now = Date.now(), limit = 3 } = {}) {
+/**
+ * The Tideline: queue items outside today's edition, by how close they are to
+ * fading. Faded ones come first and wait for a verdict; then those with a week
+ * or less left. Returns [{ item, days, left, faded }].
+ */
+export function fading(items, edition, { now = Date.now(), limit = 5, within = 7 } = {}) {
   const inEdition = new Set(edition?.ids || []);
   return items
     .filter((i) => i.status === STATUS.QUEUED && !inEdition.has(i.id))
-    .map((i) => ({ item: i, days: Math.floor((now - (i.queuedAt || i.created)) / DAY) }))
-    .sort((a, b) => b.days - a.days)
+    .map((i) => {
+      const days = Math.floor((now - touchedAt(i)) / DAY);
+      const faded = isFaded(i, now);
+      return { item: i, days, left: faded ? 0 : Math.max(0, FADE_DAYS - days), faded };
+    })
+    .filter((e) => e.faded || e.left <= within)
+    .sort((a, b) => Number(b.faded) - Number(a.faded) || a.left - b.left || b.days - a.days)
     .slice(0, limit);
 }

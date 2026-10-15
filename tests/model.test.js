@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  VERDICT, STATUS, KIND, MAX_SKIPS, dayKey, findUrl, kindOfFile, draftFromText, draftFromFile,
+  VERDICT, STATUS, KIND, MAX_SKIPS, isFaded, dayKey, findUrl, kindOfFile, draftFromText, draftFromFile,
   createItem, applyVerdict, interestProfile, localScore, score, buildEdition, editionView,
   migrateLegacy, titleFromUrl, restore,
 } from "../src/model.js";
@@ -55,14 +55,26 @@ test("inbox verdicts", () => {
   assert.throws(() => applyVerdict(it, "maybe"));
 });
 
-test("deferring in an edition counts skips and washes out", () => {
+test("deferring too often fades an item but never lets it go", () => {
   let it = make(draftFromText("x"), { status: STATUS.QUEUED });
   for (let i = 0; i < MAX_SKIPS - 1; i++) it = applyVerdict(it, VERDICT.LATER, { stage: "edition", now: NOW });
-  assert.equal(it.status, STATUS.QUEUED);
+  assert.equal(isFaded(it, NOW), false);
   it = applyVerdict(it, VERDICT.LATER, { stage: "edition", now: NOW });
-  assert.equal(it.status, STATUS.ARCHIVED);
-  assert.equal(it.washedOut, true);
-  assert.equal(restore(it, NOW).status, STATUS.QUEUED);
+  assert.equal(it.status, STATUS.QUEUED, "still in the queue");
+  assert.equal(isFaded(it, NOW), true, "but faded");
+  const back = restore(it, NOW);
+  assert.equal(isFaded(back, NOW), false);
+  assert.equal(back.skips, 0);
+});
+
+test("three weeks untouched fades an item; faded items stay out of editions", () => {
+  const old = make(draftFromText("old"), { status: STATUS.QUEUED, queuedAt: NOW - 22 * DAY, created: NOW - 22 * DAY });
+  const fresh = make(draftFromText("fresh"), { status: STATUS.QUEUED, queuedAt: NOW - 2 * DAY, created: NOW - 2 * DAY });
+  assert.equal(isFaded(old, NOW), true);
+  assert.equal(isFaded(fresh, NOW), false);
+  const ed = buildEdition([old, fresh], null, { now: NOW });
+  assert.deepEqual(ed.ids, [fresh.id]);
+  assert.equal(old.status, STATUS.QUEUED, "nothing is let go automatically");
 });
 
 test("interest profile learns from verdicts", () => {
@@ -187,14 +199,17 @@ test("circling finds repeated themes and marks rising ones", () => {
   assert.equal(c[0].rising, true);
 });
 
-test("fading lists the oldest queue items outside the edition", () => {
+test("tideline lists faded items first, then those about to fade", () => {
   const items = [
-    { id: "a", status: STATUS.QUEUED, queuedAt: NOW - 20 * DAY },
+    { id: "a", status: STATUS.QUEUED, queuedAt: NOW - 18 * DAY },
     { id: "b", status: STATUS.QUEUED, queuedAt: NOW - 2 * DAY },
     { id: "c", status: STATUS.QUEUED, queuedAt: NOW - 30 * DAY },
+    { id: "e", status: STATUS.QUEUED, queuedAt: NOW - 25 * DAY },
+    { id: "f", status: STATUS.QUEUED, queuedAt: NOW - DAY, fadedAt: NOW },
     { id: "d", status: STATUS.DONE, queuedAt: NOW - 90 * DAY },
   ];
-  const f = fading(items, { ids: ["c"] }, { now: NOW });
-  assert.deepEqual(f.map((x) => x.item.id), ["a", "b"]);
-  assert.equal(f[0].days, 20);
+  const t = fading(items, { ids: ["c"] }, { now: NOW });
+  assert.deepEqual(t.map((x) => x.item.id), ["e", "f", "a"], "b has two weeks left, c is in the edition");
+  assert.equal(t[0].faded, true);
+  assert.equal(t[2].left, 3);
 });
