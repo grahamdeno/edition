@@ -1,5 +1,5 @@
-import { load, save, selectEdition, applyVerdict, createItem, VERDICTS, todayKey } from "./core.js";
-import { analyzeItem } from "./analyze.js";
+import { load, save, selectEdition, applyVerdict, createItem, preferenceSignal, VERDICTS, todayKey } from "./core.js";
+import { analyzeItem, rankItems } from "./analyze.js";
 
 const app = document.getElementById("app");
 let data = load();
@@ -29,10 +29,14 @@ function render() {
   let html = '';
   html += '<div class="mast"><span class="date">' + formatDate() + '</span><div class="mast-right"><span class="count">' + edition.length + ' items</span><button class="settings-btn" aria-label="Settings">⚙</button></div></div>';
   html += '<h1 class="title">The Edition</h1>';
-  html += '<p class="sub">Today\'s front page, built from your saves. Finish it and you\'re done.</p>';
+  html += '<p class="sub">Your curated feed. Not social media. Finish it and you\'re done.</p>';
   html += '<button class="lead" data-id="' + lead.id + '">';
   html += '<div class="kicker">' + (lead.category || lead.type || "item").toUpperCase() + ' · saved ' + daysAgo(lead.created) + ' days ago</div>';
-  html += '<div class="preview">[preview image]</div>';
+  if (lead.dataUrl) {
+    html += '<div class="preview"><img src="' + lead.dataUrl + '" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:10px"></div>';
+  } else {
+    html += '<div class="preview">[preview]</div>';
+  }
   html += '<h2>' + escapeHtml(lead.title) + '</h2>';
   html += '<p class="summary">' + escapeHtml(lead.summary) + '</p></button>';
   if (rest.length) {
@@ -70,9 +74,9 @@ function openSettings() {
   sheet.className = "sheet";
   let html = '<div class="sheet-head"><h2>Settings</h2><button class="back" aria-label="Close">×</button></div>';
   html += '<div class="field"><label>Anthropic API key</label><input id="set-key" type="password" placeholder="sk-ant-..." /></div>';
-  html += '<p class="help">Used to categorize and summarize items when you save them. Stored only on this device.</p>';
+  html += '<p class="help">Used to categorize new saves and rank your feed from past triage. Stored only on this device.</p>';
   html += '<div id="set-status" class="clip-note" style="display:none"></div>';
-  html += '<div class="sheet-actions"><button class="btn" id="set-clear">Clear</button><button class="btn primary" id="set-save">Save</button></div>';
+  html += '<div class="sheet-actions"><button class="btn" id="set-rank">Rank feed</button><button class="btn" id="set-clear">Clear key</button><button class="btn primary" id="set-save">Save</button></div>';
   sheet.innerHTML = html;
   document.body.appendChild(sheet);
 
@@ -92,6 +96,39 @@ function openSettings() {
     status.style.display = "block";
     status.textContent = key ? "Key saved." : "Key cleared.";
   };
+  sheet.querySelector("#set-rank").onclick = async function () {
+    const status = sheet.querySelector("#set-status");
+    status.style.display = "block";
+    status.textContent = "Ranking...";
+    const ok = await rankFeed();
+    status.textContent = ok ? "Feed ranked from your past choices." : "Ranking failed. Check key or CORS.";
+    if (ok) { sheet.remove(); render(); }
+  };
+}
+
+async function rankFeed() {
+  const key = getKey();
+  if (!key) return false;
+  const active = data.items.filter(function (i) { return i.status === "active"; });
+  const prefs = preferenceSignal(data.items);
+  const result = await rankItems({
+    active: active,
+    kept: prefs.kept,
+    dropped: prefs.dropped,
+    apiKey: key,
+  });
+  if (!result || !result.ranks) return false;
+  const map = {};
+  result.ranks.forEach(function (r) { map[r.id] = r; });
+  data.items = data.items.map(function (i) {
+    if (map[i.id]) {
+      i.aiRank = map[i.id].score || 0;
+      if (map[i.id].why && !i.summary) i.summary = map[i.id].why;
+    }
+    return i;
+  });
+  save(data);
+  return true;
 }
 
 function openCapture(prefill) {
@@ -107,9 +144,10 @@ function openCapture(prefill) {
   let html = '<div class="sheet-head"><h2>Capture</h2><button class="back" aria-label="Close">×</button></div>';
   if (prefill) html += '<div class="clip-note">Found on the clipboard. Edit and save, or dismiss.</div>';
   html += '<div class="field"><label>Title</label><input id="cap-title" placeholder="What is this?" /></div>';
-  html += '<div class="field"><label>Link or text</label><textarea id="cap-body" placeholder="Paste a URL or a thought"></textarea></div>';
+  html += '<div class="field"><label>Link, text, or note</label><textarea id="cap-body" placeholder="Paste a URL or a thought"></textarea></div>';
+  html += '<div class="field"><label>Photo or file</label><input id="cap-file" type="file" accept="image/*,.txt,.md,.pdf" /></div>';
   html += '<div class="field"><label>Note (optional)</label><input id="cap-note" placeholder="Why it might matter" /></div>';
-  if (!getKey()) html += '<p class="help">Add an Anthropic key in Settings to auto-categorize saves.</p>';
+  if (!getKey()) html += '<p class="help">Add an Anthropic key in Settings to categorize and rank.</p>';
   html += '<div id="cap-status" class="clip-note" style="display:none"></div>';
   html += '<div class="sheet-actions"><button class="btn" id="cap-paste">Paste</button><button class="btn primary" id="cap-save">Save</button></div>';
   sheet.innerHTML = html;
@@ -132,29 +170,50 @@ function openCapture(prefill) {
     const title = sheet.querySelector("#cap-title").value.trim();
     const body = sheet.querySelector("#cap-body").value.trim();
     const note = sheet.querySelector("#cap-note").value.trim();
-    if (!title && !body) return;
+    const fileInput = sheet.querySelector("#cap-file");
+    const file = fileInput.files && fileInput.files[0];
+    if (!title && !body && !file) return;
 
     const status = sheet.querySelector("#cap-status");
     const saveBtn = sheet.querySelector("#cap-save");
     saveBtn.disabled = true;
     saveBtn.textContent = "Saving...";
 
+    let dataUrl = "", mime = "", fileName = "", fileText = body;
+    if (file) {
+      fileName = file.name;
+      mime = file.type;
+      if (file.type.startsWith("image/")) {
+        dataUrl = await readFileAsDataURL(file);
+      } else if (file.type.startsWith("text/") || /\.txt$|\.md$/i.test(file.name)) {
+        fileText = await readFileAsText(file);
+      }
+    }
+
     const key = getKey();
     let analysis = null;
     if (key) {
       status.style.display = "block";
       status.textContent = "Analyzing...";
-      analysis = await analyzeItem({ title: title, body: body, note: note, apiKey: key });
+      analysis = await analyzeItem({
+        title: title || fileName,
+        body: fileText || note,
+        note: note,
+        apiKey: key,
+      });
       if (!analysis) status.textContent = "Analysis failed. Saved without it.";
     }
 
-    const isLink = /^https?:\/\//i.test(body);
+    const isLink = /^https?:\/\//i.test(fileText || body);
     const item = createItem({
-      title: (analysis && analysis.title) || title || undefined,
+      title: (analysis && analysis.title) || title || fileName || undefined,
       summary: (analysis && analysis.summary) || note,
-      url: isLink ? body : undefined,
-      text: isLink ? undefined : body,
-      type: analysis && analysis.type,
+      url: isLink ? (fileText || body) : undefined,
+      text: isLink ? undefined : (fileText || body),
+      type: (analysis && analysis.type) || (dataUrl ? "photo" : fileName ? "doc" : undefined),
+      fileName: fileName || undefined,
+      dataUrl: dataUrl || undefined,
+      mime: mime || undefined,
     });
     if (analysis) {
       item.category = analysis.category;
@@ -168,6 +227,23 @@ function openCapture(prefill) {
     sheet.remove();
     render();
   };
+}
+
+function readFileAsDataURL(file) {
+  return new Promise(function (resolve) {
+    const r = new FileReader();
+    r.onload = function () { resolve(r.result); };
+    r.onerror = function () { resolve(""); };
+    r.readAsDataURL(file);
+  });
+}
+function readFileAsText(file) {
+  return new Promise(function (resolve) {
+    const r = new FileReader();
+    r.onload = function () { resolve(String(r.result || "")); };
+    r.onerror = function () { resolve(""); };
+    r.readAsText(file);
+  });
 }
 
 async function readClip() {
@@ -202,7 +278,11 @@ function openTriage(id) {
   overlay.className = "triage";
   let html = '<div class="triage-head"><button class="back" aria-label="Close">×</button><span>Triage</span><span></span></div>';
   html += '<div class="stack"><div class="tcard" id="tcard">';
-  html += '<div class="preview">[preview]</div>';
+  if (item.dataUrl) {
+    html += '<div class="preview"><img src="' + item.dataUrl + '" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:12px"></div>';
+  } else {
+    html += '<div class="preview">[preview]</div>';
+  }
   html += '<div class="kicker">' + (item.category || item.type || "item").toUpperCase() + '</div>';
   html += '<h2>' + escapeHtml(item.title) + '</h2>';
   html += '<p class="summary">' + escapeHtml(item.summary) + '</p>';
