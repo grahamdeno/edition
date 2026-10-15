@@ -17,7 +17,7 @@
 import {
   VERDICT, STATUS, KIND, dayKey, applyVerdict, restore, buildEdition, editionView,
   interestProfile, estimateMinutes, counts, migrateLegacy, createItem, EDITION_SIZE,
-  detectText, draftFromFile, describeDraft, fitToTime, circling, fading, isFaded, FADE_DAYS, youtubeId,
+  detectText, draftFromFile, describeDraft, fitToTime, circling, fading, isFaded, FADE_DAYS, youtubeId, titleFromUrl,
   SUGGESTIONS_PER_DAY, WHY_NOT, WHY_NOT_LABEL, emptySuggestProfile, learnFromSuggestion, suggestionGuide,
   screenSuggestions, suggestMaxMinutes,
   canonTags, tagVocab, tagStats, renameTag, addAlias, releaseTags, renameInSuggestProfile, localTags, normTag, MAX_TAGS,
@@ -28,9 +28,10 @@ import { sampleItems, SAMPLES_VERSION } from "./samples.js";
 import * as ai from "./ai.js";
 import { tick, unlock, soundOn, setSound } from "./feel.js";
 import { I } from "./icons.js";
+import { topicColor, coverSvg, dominantColor } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "3.8.0";
+export const VERSION = "3.9.0";
 const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 
 const KIND_LABEL = { link: "Link", note: "Note", quote: "Quote", photo: "Photo", pdf: "PDF", text: "Text", video: "Video", audio: "Audio", file: "File" };
@@ -107,6 +108,7 @@ async function boot() {
   if (migrated) toast(`Brought over ${migrated} saved item${migrated === 1 ? "" : "s"} from the old version.`);
   else if (seeded) toast(`Loaded ${seeded} sample items. Remove them in Settings.`);
   wireGlobal();
+  previewPending();
   openFeed(); // new saves (including anything just shared) come first in the feed
   startCoin();
   enrichPending();
@@ -284,6 +286,7 @@ async function afterCapture(list) {
   }
   tick(true);
   refresh();
+  previewPending();
   toast(`Saved ${list.length === 1 ? "1 item" : list.length + " items"} to your inbox.`, {
     action: "Undo",
     onAction: async () => { await removeItems(list); refresh(); },
@@ -574,7 +577,46 @@ function picFor(item) {
     if (item.imageUrl) return `<img alt="" ${gone} src="${esc(item.imageUrl)}" loading="lazy">`;
   }
   if (item.kind === KIND.VIDEO && item.imageUrl) return `<img alt="" ${gone} src="${esc(item.imageUrl)}" loading="lazy"><span class="play">${I.play}</span>`;
+  if (item.kind === KIND.LINK && item.imageUrl) return `<img alt="" ${gone} src="${esc(item.imageUrl)}" loading="lazy">`;
   return "";
+}
+
+/* ================= Link previews (through the relay) =================
+ * With a relay address set, each link without a picture gets its page's
+ * preview image (and its real title, unless you edited it). Two tries each,
+ * quietly; a page without a preview simply keeps its drawn cover.
+ */
+let previewRunning = false;
+async function previewPending() {
+  const base = ai.relayBase();
+  if (previewRunning || !base) return;
+  previewRunning = true;
+  try {
+    for (;;) {
+      const next = state.items.find((i) => i.kind === KIND.LINK && i.url && !i.imageUrl && (i.previewTries || 0) < 2
+        && (i.status === STATUS.INBOX || i.status === STATUS.QUEUED));
+      if (!next) break;
+      let data = null;
+      try {
+        const res = await withTimeout(fetch(`${base}/preview?url=${encodeURIComponent(next.url)}`), 12000);
+        if (res.ok) data = await res.json();
+      } catch (e) {
+        noteError(e, { quiet: true, where: "preview" });
+      }
+      const cur = byId(next.id);
+      if (!cur) continue;
+      const upd = { ...cur, previewTries: (cur.previewTries || 0) + 1 };
+      if (data && data.image) upd.imageUrl = data.image;
+      if (data && data.title && !cur.editedAt && (cur.title === titleFromUrl(cur.url) || !cur.enrichedAt)) upd.title = data.title.slice(0, 140);
+      if (data && data.description && !cur.summary) upd.summary = data.description.slice(0, 200);
+      if (data && (data.image || data.title)) upd.previewTries = 2; // got what there is
+      await saveItem(upd);
+      if (state.feed && state.feed.ids[state.feed.index] === upd.id && !feedDrag) renderFeed();
+    }
+  } finally {
+    previewRunning = false;
+    if (!state.reader && !$(".sheet-wrap")) renderFront();
+  }
 }
 
 function bindFront() {
@@ -891,7 +933,7 @@ function storyBody(item) {
       content = `<blockquote class="quote ${t.length > 180 ? "long" : ""}">“${esc(t)}”</blockquote>${item.author ? `<p class="cite">${esc(item.author)}</p>` : ""}`;
       break;
     }
-    case KIND.LINK: content = item.text ? `<div class="prose">${esc(item.text)}</div>` : ""; break;
+    case KIND.LINK: content = (item.imageUrl ? imgFull(item) : "") + (item.text ? `<div class="prose">${esc(item.text)}</div>` : ""); break;
     case KIND.PHOTO: content = imgFull(item); break;
     case KIND.VIDEO: content = item.videoId
       ? `<div class="yt"><iframe title="${esc(item.title)}" src="https://www.youtube-nocookie.com/embed/${esc(item.videoId)}?playsinline=1&rel=0" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen></iframe></div>`
@@ -1103,6 +1145,7 @@ function openFeed() {
   const el = document.createElement("div");
   el.className = "feed";
   el.innerHTML = `<div class="feed-inner">
+    <div class="feed-bg" id="feed-bg" aria-hidden="true"></div>
     <div class="segs" id="feed-segs" aria-hidden="true"></div>
     <div class="feed-top"><span class="where" id="feed-where"></span><span class="left" id="feed-left"></span></div>
     <div class="feed-card" id="feed-card"></div>
@@ -1158,6 +1201,7 @@ function renderFeed() {
   card.style.transform = "";
   card.style.opacity = "";
 
+  paintFeedBg(el, item, f.turned.has(id));
   if (!item) {
     $("#feed-where", el).textContent = dateLabel();
     $("#feed-left", el).textContent = "";
@@ -1174,7 +1218,6 @@ function renderFeed() {
 
   const turned = f.turned.has(id);
   const h = hookFor(item);
-  const pic = picFor(item);
   const words = item.kind === KIND.QUOTE || item.kind === KIND.NOTE;
   card.className = "feed-card" + (turned ? " turned" : "") + (item.suggested ? " suggested" : "");
   card.innerHTML = `<div class="flip">
@@ -1187,7 +1230,6 @@ function renderFeed() {
       <span class="turn">Tap to turn ${I.requeue}</span>
     </div>
     <div class="face card-face" data-open-card role="button" tabindex="${turned ? 0 : -1}" aria-label="Open ${esc(headline(item))}">
-      ${pic ? `<span class="pic">${pic}</span>` : ""}
       <span class="kicker">${esc(feedMeta(item))}</span>
       ${words
         ? `<span class="said ${String(item.text || "").length > 160 ? "long" : ""}">${esc(headline(item))}</span>${item.author ? `<span class="who">${esc(item.author)}</span>` : ""}`
@@ -1229,6 +1271,39 @@ function askWhy(id) {
   input.focus();
 }
 
+/*
+ * Behind each card: its picture (a link's preview, a photo, a video still) or
+ * a drawn cover in its topic's colour, shown once the card is turned. The whole
+ * card is tinted, faintly, by the picture's main colour or the topic colour.
+ */
+function paintFeedBg(el, item, turned) {
+  const bg = $("#feed-bg", el);
+  if (!bg) return;
+  if (!item) { bg.innerHTML = ""; bg.className = "feed-bg"; el.style.removeProperty("--tint"); return; }
+  const src = item.kind === KIND.PHOTO && item.blobId ? null : item.imageUrl || null;
+  const blobId = item.kind === KIND.PHOTO && item.blobId ? item.thumbId || item.blobId : null;
+  bg.className = "feed-bg" + (turned ? " show" : "") + (src || blobId ? " pic" : " drawn");
+  bg.innerHTML = src || blobId
+    ? `<img alt="" ${blobId ? `data-blob="${esc(blobId)}"` : `src="${esc(src)}"`} onerror="this.parentElement.classList.replace('pic','drawn');this.outerHTML=this.parentElement.dataset.cover">`
+    : coverSvg(item);
+  bg.dataset.cover = coverSvg(item);
+  el.style.setProperty("--tint", item.tint || topicColor(item));
+  if (blobId) hydrate(bg).then(() => tintFrom(item, bg.querySelector("img")?.src));
+  else if (src && !item.tint) tintFrom(item, src);
+}
+
+/** Read a picture's main colour once, keep it on the item, and tint the card if it's still on screen. */
+async function tintFrom(item, src) {
+  if (!src || item.tint) return;
+  const color = await dominantColor(src);
+  if (!color) return;
+  const cur = byId(item.id);
+  if (!cur) return;
+  await saveItem({ ...cur, tint: color });
+  const f = state.feed;
+  if (f && f.ids[f.index] === item.id) $(".feed")?.style.setProperty("--tint", color);
+}
+
 function turnCard() {
   const f = state.feed;
   const id = f && f.ids[f.index];
@@ -1236,6 +1311,7 @@ function turnCard() {
   f.turned.add(id);
   const card = $("#feed-card");
   card.classList.add("turned");
+  $("#feed-bg")?.classList.add("show");
   card.querySelector("[data-turn]")?.setAttribute("tabindex", "-1");
   card.querySelector("[data-open-card]")?.removeAttribute("tabindex");
   tick();
@@ -1876,7 +1952,9 @@ function openSettings() {
     say(pSt, "Testing…");
     try {
       await ai.testPplxKey();
-      say(pSt, "Key and relay work. Find something new now uses Perplexity.");
+      say(pSt, "Key and relay work. Find something new now uses Perplexity, and links get their pictures.");
+      state.items = state.items.map((i) => ({ ...i, previewTries: 0 }));
+      previewPending();
       $("#set-discover", wrap).disabled = false;
     } catch (e) {
       noteError(e, { quiet: true, where: "settings: Perplexity test" });
