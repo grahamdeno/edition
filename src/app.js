@@ -17,7 +17,7 @@
 import {
   VERDICT, STATUS, KIND, dayKey, applyVerdict, restore, buildEdition, editionView,
   interestProfile, estimateMinutes, counts, migrateLegacy, createItem, EDITION_SIZE,
-  detectText, draftFromFile, describeDraft, fitToTime, circling, fading, isFaded, FADE_DAYS,
+  detectText, draftFromFile, describeDraft, fitToTime, circling, fading, isFaded, FADE_DAYS, youtubeId,
 } from "./model.js";
 import * as db from "./db.js";
 import { captureText, captureFile, captureTransfer, readClipboard, captureShares } from "./capture.js";
@@ -27,7 +27,7 @@ import { tick, unlock, soundOn, setSound } from "./feel.js";
 import { I } from "./icons.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "3.5.0";
+export const VERSION = "3.6.0";
 const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 
 const KIND_LABEL = { link: "Link", note: "Note", quote: "Quote", photo: "Photo", pdf: "PDF", text: "Text", video: "Video", audio: "Audio", file: "File" };
@@ -284,7 +284,7 @@ async function enrichPending() {
         if (cur) {
           const upd = {
             ...cur,
-            title: out.title || cur.title,
+            title: cur.editedAt ? cur.title : out.title || cur.title,
             summary: out.summary || cur.summary,
             tags: out.tags.length ? out.tags : cur.tags,
             minutes: out.minutes || cur.minutes,
@@ -594,6 +594,7 @@ function ringItems() {
     f ? { id: "front", label: "Front page", icon: I.edition, run: closeFeed } : { id: "feed", label: "Feed", icon: I.read, run: openFeed },
     { id: "add", label: "Add", icon: I.plus, primary: !item, run: openAdd },
   ];
+  if (item) outer.splice(1, 0, { id: "edit", label: "Edit", icon: I.edit, run: () => openEdit(id) });
   return inner.length ? [inner, outer] : [outer];
 }
 
@@ -731,6 +732,7 @@ function openStories(mode, startId) {
     <div class="reader-top" id="reader-top">
       <button class="x" type="button" data-close aria-label="Close">${I.close}</button>
       <span class="where" id="where"></span><span class="left" id="time-left"></span>
+      <button class="x" type="button" id="reader-edit" aria-label="Edit">${I.edit}</button>
     </div>
     <span class="stamp" id="stamp" aria-hidden="true"></span>
     <article class="story" id="story"></article>
@@ -738,6 +740,7 @@ function openStories(mode, startId) {
   </div>`;
   document.body.appendChild(el);
   el.querySelector("[data-close]").addEventListener("click", closeReader);
+  $("#reader-edit", el).addEventListener("click", () => { const r = state.reader; const id = r && r.ids[r.index]; if (id) openEdit(id); });
   bindStoryGestures(el);
   bindPull({ scroller: $("#story", el), target: $("#story", el), host: $(".reader-inner", el), label: state.feed ? "Release to go back" : "Release for the front page", onBack: closeReader });
   el.addEventListener("pointerdown", wakeReader, true);
@@ -779,9 +782,11 @@ function renderStory() {
       <p class="summary">${r.mode === "inbox" ? "Everything new has a verdict. What you kept will come back in an edition." : "That's today's edition. The next one is set tomorrow morning."}</p>
       <button class="pill-btn" type="button" data-end>Back to the front page</button></div>`;
     verdicts.innerHTML = "";
+    $("#reader-edit", el).hidden = true;
     $("[data-end]", story).addEventListener("click", closeReader);
     return;
   }
+  $("#reader-edit", el).hidden = false;
   $("#where", el).textContent = [KIND_LABEL[item.kind], item.url ? host(item.url) : ""].filter(Boolean).join(" · ");
   story.innerHTML = storyBody(item);
   story.scrollTop = 0;
@@ -830,6 +835,7 @@ function storyBody(item) {
     ${busy ? '<p class="summary accent">Reading it…</p>' : item.summary ? `<p class="summary">${esc(item.summary)}</p>` : ""}
     ${item.points && item.points.length ? `<ul class="points">${item.points.map((p) => `<li>${esc(p)}</li>`).join("")}</ul>` : ""}
     ${item.transcript ? `<span class="label">Text in the image</span><div class="prose">${esc(item.transcript)}</div>` : ""}
+    ${item.note ? `<div class="prose mine-note">${esc(item.note)}</div>` : ""}
     ${source}
     ${item.ai && item.ai.why ? `<p class="why-line"><b>Why today</b>${esc(item.ai.why)}</p>` : ""}`;
 }
@@ -1276,6 +1282,122 @@ function bindFeedGestures(el) {
     if (e.target.closest("[data-add-why]")) { const id = state.feed?.ids[state.feed.index]; if (id) askWhy(id); return; }
     if (e.target.closest("[data-turn]")) turnCard();
     else if (e.target.closest("[data-open-card]")) { const id = state.feed?.ids[state.feed.index]; if (id) openStories("single", id); }
+  });
+}
+
+/* ================= Edit and delete =================
+ * Edit: one sheet with only the fields that kind of item has. Delete is for
+ * good (Let go keeps the item in your history so Edition learns from it), so
+ * it says so, and gives a few seconds to undo instead of asking first.
+ */
+
+function openEdit(id) {
+  const item = byId(id);
+  if (!item) return;
+  const words = item.kind === KIND.QUOTE || item.kind === KIND.NOTE;
+  const hasUrl = item.kind === KIND.LINK || item.kind === KIND.VIDEO || Boolean(item.url);
+  const f = (key, label, value, { area = false, type = "text", hint = "", ph = "" } = {}) => `<div class="field">
+      <label for="ed-${key}">${label}${hint ? ` <span class="hint">${hint}</span>` : ""}</label>
+      ${area
+        ? `<textarea id="ed-${key}" rows="4" placeholder="${esc(ph)}">${esc(value || "")}</textarea>`
+        : `<input id="ed-${key}" type="${type}" autocomplete="off" ${type === "url" ? 'inputmode="url" autocapitalize="off" spellcheck="false"' : ""} placeholder="${esc(ph)}" value="${esc(value ?? "")}">`}
+    </div>`;
+  const wrap = sheet(`
+    <div class="sheet-head"><h2>Edit</h2><button class="x" type="button" data-close aria-label="Close">${I.close}</button></div>
+    <p class="note">${esc(KIND_LABEL[item.kind] || "Item")} · saved ${esc(ago(item.created))}${item.fileName ? ` · ${esc(item.fileName)}` : ""}</p>
+    ${words ? f("text", item.kind === KIND.QUOTE ? "Quote" : "Note", item.text, { area: true }) : f("title", "Title", item.title)}
+    ${item.kind === KIND.QUOTE || item.kind === KIND.VIDEO ? f("author", item.kind === KIND.QUOTE ? "Who said it" : "Channel", item.author) : ""}
+    ${hasUrl ? f("url", "Link", item.url, { type: "url", ph: "https://" }) : ""}
+    ${f("why", "Why you saved it", item.why, { hint: "the face of its card", ph: "Read this before the roadmap review" })}
+    ${!words ? f("note", "Your note", item.kind === KIND.LINK ? item.text : item.note, { area: true, ph: "Anything you want to remember about it" }) : ""}
+    <div class="two">
+      ${f("tags", "Tags", (item.tags || []).join(", "), { ph: "scrum, ai" })}
+      ${f("minutes", "Minutes", estimateMinutes(item), { type: "number" })}
+    </div>
+    <span class="st" id="ed-st" role="status"></span>
+    <button class="btn primary" type="button" id="ed-save">Save</button>
+    <div class="danger">
+      <button class="btn ghost-danger" type="button" id="ed-delete">${I.trash}Delete for good</button>
+      <p class="note">Removes it${item.blobId ? " and its file" : ""} from this phone. To keep it in your history so Edition learns from it, use Let go instead.</p>
+    </div>`, { tall: true, label: "Edit" });
+
+  const val = (k) => $(`#ed-${k}`, wrap)?.value;
+  const save = async () => {
+    const cur = byId(id);
+    if (!cur) { closeSheet(); return; }
+    const next = { ...cur, editedAt: Date.now() };
+    if (words) {
+      const t = (val("text") || "").trim();
+      if (!t) { $("#ed-st", wrap).textContent = "It can't be empty."; $("#ed-st", wrap).classList.add("err"); return; }
+      next.text = t;
+      next.title = t.slice(0, 140);
+    } else {
+      next.title = (val("title") || "").trim().slice(0, 140) || cur.title;
+      if (cur.kind === KIND.LINK) next.text = (val("note") || "").trim() || undefined;
+      else next.note = (val("note") || "").trim() || undefined;
+    }
+    if (val("author") !== undefined) next.author = (val("author") || "").trim() || undefined;
+    if (hasUrl) {
+      const u = (val("url") || "").trim();
+      if (u && !/^https?:\/\//i.test(u)) { $("#ed-st", wrap).textContent = "A link starts with https://"; $("#ed-st", wrap).classList.add("err"); return; }
+      next.url = u || undefined;
+      const vid = u ? youtubeId(u) : null;
+      if (cur.kind === KIND.VIDEO || vid) { next.videoId = vid || undefined; if (vid) next.kind = KIND.VIDEO; }
+    }
+    next.why = (val("why") || "").trim().slice(0, 140);
+    next.tags = (val("tags") || "").split(",").map((t) => t.trim().toLowerCase()).filter(Boolean).slice(0, 6);
+    const m = Math.round(+val("minutes"));
+    next.minutes = Number.isFinite(m) && m > 0 ? Math.min(m, 600) : cur.minutes;
+    await saveItem(next);
+    tick(true);
+    closeSheet();
+    refresh();
+    toast("Saved.");
+  };
+  $("#ed-save", wrap).addEventListener("click", save);
+  wrap.querySelectorAll("input").forEach((i) => i.addEventListener("keydown", (e) => { if (e.key === "Enter") save(); }));
+  $("#ed-delete", wrap).addEventListener("click", () => { closeSheet(); deleteItem(id); });
+}
+
+/*
+ * Delete for good, with Undo. The record goes at once; its stored file waits
+ * out the undo window, so Undo brings back everything.
+ */
+async function deleteItem(id) {
+  const item = byId(id);
+  if (!item) return;
+  await db.items.remove(id);
+  state.items = state.items.filter((i) => i.id !== id);
+  const edAt = state.edition ? state.edition.ids.indexOf(id) : -1;
+  if (edAt >= 0) { state.edition = { ...state.edition, ids: state.edition.ids.filter((x) => x !== id) }; await db.meta.set("edition", state.edition); }
+  // Take it out of whatever is on screen.
+  const f = state.feed, fAt = f ? f.ids.indexOf(id) : -1;
+  if (fAt >= 0) { f.ids.splice(fAt, 1); f.total -= 1; if (f.index > f.ids.length) f.index = f.ids.length; }
+  const r = state.reader, rAt = r ? r.ids.indexOf(id) : -1;
+  if (rAt >= 0) {
+    r.ids.splice(rAt, 1); r.total -= 1;
+    if (r.mode === "single" || !r.ids.length) closeReader();
+    else { if (r.index >= r.ids.length) r.index = r.ids.length - 1; renderStory(); }
+  }
+  tick(true);
+  if (f && fAt >= 0 && !state.reader) slideFeed("left"); else if (state.feed) renderFeed();
+  renderFront();
+  let undone = false;
+  const purge = setTimeout(async () => {
+    if (undone) return;
+    if (item.blobId) await db.blobs.remove(item.blobId);
+    if (item.thumbId) await db.blobs.remove(item.thumbId);
+  }, 7000);
+  toast("Deleted.", {
+    action: "Undo",
+    onAction: async () => {
+      undone = true;
+      clearTimeout(purge);
+      await saveItem(item);
+      if (edAt >= 0 && state.edition) { const ids = [...state.edition.ids]; ids.splice(edAt, 0, id); state.edition = { ...state.edition, ids }; await db.meta.set("edition", state.edition); }
+      if (state.feed === f && fAt >= 0) { f.ids.splice(fAt, 0, id); f.total += 1; f.index = fAt; }
+      refresh();
+    },
   });
 }
 

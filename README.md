@@ -26,7 +26,8 @@ Edition opens on a feed, not a menu: one card at a time, nothing to choose befor
 4. **Read.** Tap any story on the front page to read it full screen. The same pill gives Let go, Later or Done, and the next story slides in. The pill and the close button dim while you read and wake when you touch the screen.
 5. **Add.** Corner button, then Add. One box takes a link, a YouTube URL, a quote or a thought; Paste and Attach sit either side of Save, and Edition lists what it found before saving. An optional line asks why you're saving it; that reason is the first thing you see when the card comes back. On a computer, paste or drag anywhere.
 6. **Fading.** A save left untouched for three weeks, or moved later eight times, fades: it stops appearing in editions and waits in the Tideline at the bottom of the front page. Nothing is let go without your verdict: tap Keep for three more weeks, or Let go. Items within a week of fading show the days left and a *Read today* button.
-7. **Back.** In the reader, pull down from the top and release to go back to the front page, as in Tabs. Sheets close with a plain drag down.
+7. **Edit and delete.** On a card, + then Edit; in the reader, the pencil at the top. The sheet shows only the fields that kind of item has: title (or the quote or note itself), who said it, the link, why you saved it, your note, tags and minutes. Your edits are never overwritten by the AI. *Delete for good* at the bottom removes the item and its file from the phone, with a few seconds to Undo; Let go is the gentler choice, since it keeps the item in your history so Edition learns from it.
+8. **Back.** In the reader, pull down from the top and release to go back to the front page, as in Tabs. Sheets close with a plain drag down.
 
 ## AI (optional)
 
