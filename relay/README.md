@@ -12,6 +12,8 @@ This Cloudflare Worker does two jobs a web page can't do on its own: it forwards
 
 ## Notes
 
+- `GET /preview?url=&text=1` also returns the page's readable text, which Claude turns into a fuller summary.
+- `GET /photo?q=` finds openly licensed photos on Openverse (no key needed) for cards without a picture, with each photo's credit and licence.
 - `POST /v1/agent` is forwarded to Perplexity. `GET /preview?url=` returns a page's preview image, title and description; it only fetches public http(s) pages. Anything else gets a 404.
 - **Updating:** when this file changes, open the Worker in Cloudflare, Edit code, paste the new version and Deploy. The address stays the same.
 - Requests from any address other than `https://grahamdeno.github.io` (or localhost while developing) get a 403. If Edition moves, change `ALLOWED_ORIGINS`.

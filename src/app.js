@@ -32,7 +32,7 @@ import { I } from "./icons.js";
 import { topicColor, coverSvg, dominantColor } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "3.10.0";
+export const VERSION = "3.11.0";
 const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 
 const KIND_LABEL = { link: "Link", note: "Note", quote: "Quote", photo: "Photo", pdf: "PDF", text: "Text", video: "Video", audio: "Audio", file: "File" };
@@ -109,7 +109,7 @@ async function boot() {
   if (migrated) toast(`Brought over ${migrated} saved item${migrated === 1 ? "" : "s"} from the old version.`);
   else if (seeded) toast(`Loaded ${seeded} sample items. Remove them in Settings.`);
   wireGlobal();
-  previewPending();
+  picturePending();
   openFeed(); // new saves (including anything just shared) come first in the feed
   startCoin();
   enrichPending();
@@ -287,7 +287,7 @@ async function afterCapture(list) {
   }
   tick(true);
   refresh();
-  previewPending();
+  picturePending();
   toast(`Saved ${list.length === 1 ? "1 item" : list.length + " items"} to your inbox.`, {
     action: "Undo",
     onAction: async () => { await removeItems(list); refresh(); },
@@ -341,15 +341,24 @@ async function enrichPending() {
   enrichRunning = true;
   try {
     for (;;) {
-      const next = state.items.find((i) => !i.enrichedAt && (i.enrichTries || 0) < 2 && (i.status === STATUS.INBOX || i.status === STATUS.QUEUED));
+      const relay = Boolean(ai.relayBase());
+      // New items; and, once a relay can read pages, links read before it could (for their fuller summary).
+      let next = state.items.find((i) => (i.status === STATUS.INBOX || i.status === STATUS.QUEUED) && (
+        (!i.enrichedAt && (i.enrichTries || 0) < 2)
+        || (relay && i.kind === KIND.LINK && i.url && !i.extended && !i.sample && (i.extTries || 0) < 1)));
       if (!next) break;
+      if (relay && next.kind === KIND.LINK && !next.pageText && (next.pageTries || 0) < 2) next = await fetchPage(next);
       state.enriching.add(next.id);
       try {
         const blob = next.blobId && [KIND.PHOTO, KIND.PDF, KIND.TEXT].includes(next.kind) ? await db.blobs.get(next.blobId) : null;
         const out = await ai.enrich(next, blob, { vocab: vocab(), context: contextFor(next) });
         const tags = tidyTags(out.tags);
         const cur = byId(next.id);
-        if (cur) {
+        if (cur && cur.enrichedAt) {
+          // A page read again: add the fuller summary and photo words; leave the rest as you know it.
+          await saveItem({ ...cur, extended: out.extended || cur.extended, points: out.points.length ? out.points : cur.points,
+            photoQuery: out.photoQuery || cur.photoQuery, summary: cur.summary || out.summary, extTries: (cur.extTries || 0) + 1 });
+        } else if (cur) {
           const upd = {
             ...cur,
             title: cur.editedAt ? cur.title : out.title || cur.title,
@@ -361,6 +370,9 @@ async function enrichPending() {
             transcript: out.transcript || cur.transcript,
             hook: out.hook || cur.hook,
             hookV: out.hook ? ai.HOOK_VERSION : cur.hookV,
+            extended: out.extended || cur.extended,
+            photoQuery: out.photoQuery || cur.photoQuery,
+            extTries: (cur.extTries || 0) + 1,
             enrichedAt: Date.now(),
           };
           // A photo of a book is a book you want to read.
@@ -373,6 +385,9 @@ async function enrichPending() {
           }
           await saveItem(upd);
         }
+        // Nothing to show yet: find a photo from the AI's words.
+        const after = byId(next.id);
+        if (after && relay && !pictureOf(after) && !after.coverOff && (after.coverTries || 0) < 2) await findPhoto(after);
       } catch (e) {
         noteError(e, { quiet: true, where: `enrich ${next.kind}` });
         const cur = byId(next.id);
@@ -621,44 +636,113 @@ function picFor(item) {
     if (item.imageUrl) return `<img alt="" ${gone} src="${esc(item.imageUrl)}" loading="lazy">`;
   }
   if (item.kind === KIND.VIDEO && item.imageUrl) return `<img alt="" ${gone} src="${esc(item.imageUrl)}" loading="lazy"><span class="play">${I.play}</span>`;
-  if (item.kind === KIND.LINK && item.imageUrl) return `<img alt="" ${gone} src="${esc(item.imageUrl)}" loading="lazy">`;
+  const pic = pictureOf(item);
+  if (pic && pic.blobId) return `<img alt="" ${gone} data-blob="${esc(pic.blobId)}">`;
+  if (pic && pic.src) return `<img alt="" ${gone} src="${esc(pic.src)}" loading="lazy">`;
   return "";
 }
 
-/* ================= Link previews (through the relay) =================
- * With a relay address set, each link without a picture gets its page's
- * preview image (and its real title, unless you edited it). Two tries each,
- * quietly; a page without a preview simply keeps its drawn cover.
+/* ================= Pictures: the page's own, or one found for it =================
+ * Every card gets a picture, so the feed reads like one. In order of
+ * preference: one you chose; the photo itself; the page's own preview picture;
+ * an openly licensed photo found from a few words (Openverse, via the relay).
+ * You can choose another, find another, or remove it in Edit.
  */
-let previewRunning = false;
-async function previewPending() {
+
+/** The picture a card shows, or null for a drawn cover. */
+function pictureOf(item) {
+  if (!item || item.coverOff) return null;
+  const c = item.cover;
+  if (c && c.pinned && (c.blobId || c.src)) return c.blobId ? { blobId: c.blobId, from: "mine" } : { src: c.src, from: c.from, credit: c.credit, license: c.license, link: c.link };
+  if (item.kind === KIND.PHOTO && item.blobId) return { blobId: item.thumbId || item.blobId, from: "own" };
+  if (item.imageUrl) return { src: item.imageUrl, from: item.kind === KIND.LINK ? "page" : "own" };
+  if (c && (c.blobId || c.src)) return c.blobId ? { blobId: c.blobId, from: "mine" } : { src: c.src, from: c.from, credit: c.credit, license: c.license, link: c.link };
+  return null;
+}
+
+/** Credit line for a found photo, as its licence asks. */
+function creditLine(pic) {
+  if (!pic || pic.from !== "search") return "";
+  return ["Photo", pic.credit, pic.license].filter(Boolean).join(" · ");
+}
+
+const STOP = new Set("the a an and or of to in on for with from by is are was be this that it its at as your you my our how why what when".split(" "));
+/** Search words when the AI hasn't suggested any: topics, then the title's longer words. */
+function photoWords(item) {
+  if (item.photoQuery) return item.photoQuery;
+  const words = String(item.book?.title || item.title || "").toLowerCase().replace(/[^a-z\s]/g, " ").split(/\s+/).filter((w) => w.length > 3 && !STOP.has(w));
+  return [...(item.tags || []).slice(0, 1), ...words.slice(0, 2)].join(" ").trim() || "quiet desk morning light";
+}
+
+/** Read a link's page through the relay: its picture, real title, and text for the summary. */
+async function fetchPage(item) {
   const base = ai.relayBase();
-  if (previewRunning || !base) return;
-  previewRunning = true;
+  if (!base || item.kind !== KIND.LINK || !item.url) return item;
+  let data = null;
+  try {
+    const res = await withTimeout(fetch(`${base}/preview?text=1&url=${encodeURIComponent(item.url)}`), 15000);
+    if (res.ok) data = await res.json();
+  } catch (e) {
+    noteError(e, { quiet: true, where: "page" });
+  }
+  const cur = byId(item.id);
+  if (!cur) return item;
+  const upd = { ...cur, pageTries: (cur.pageTries || 0) + 1 };
+  if (data && data.image && !cur.imageUrl) upd.imageUrl = data.image;
+  if (data && data.title && !cur.editedAt && (cur.title === titleFromUrl(cur.url) || !cur.enrichedAt)) upd.title = data.title.slice(0, 140);
+  if (data && data.description && !cur.summary) upd.summary = data.description.slice(0, 200);
+  if (data && data.text) upd.pageText = String(data.text).slice(0, 15000);
+  if (data && (data.image || data.title || data.text)) upd.pageTries = 2; // got what there is
+  await saveItem(upd);
+  return upd;
+}
+
+/**
+ * Find a photo for an item. `skip` walks through the results ("find another");
+ * `pin` marks it as your choice, so it wins over the page's own picture.
+ */
+async function findPhoto(item, { query = null, skip = 0, pin = false } = {}) {
+  const base = ai.relayBase();
+  if (!base) return null;
+  const q = (query || photoWords(item)).trim();
+  let photos = [];
+  try {
+    const res = await withTimeout(fetch(`${base}/photo?q=${encodeURIComponent(q)}`), 12000);
+    if (res.ok) photos = (await res.json()).photos || [];
+  } catch (e) {
+    noteError(e, { quiet: true, where: "photo search" });
+  }
+  const cur = byId(item.id);
+  if (!cur) return null;
+  if (!photos.length) {
+    await saveItem({ ...cur, coverTries: (cur.coverTries || 0) + 1 });
+    return null;
+  }
+  const p = photos[skip % photos.length];
+  const upd = { ...cur, coverOff: false, coverTries: 2, tint: undefined,
+    cover: { src: p.src, thumb: p.thumb, credit: p.credit, license: p.license, link: p.link, from: "search", q, i: skip, pinned: pin } };
+  if (cur.cover && cur.cover.blobId) db.blobs.remove(cur.cover.blobId);
+  await saveItem(upd);
+  return upd;
+}
+
+let pictureRunning = false;
+async function picturePending() {
+  if (pictureRunning || !ai.relayBase()) return;
+  pictureRunning = true;
   try {
     for (;;) {
-      const next = state.items.find((i) => i.kind === KIND.LINK && i.url && !i.imageUrl && (i.previewTries || 0) < 2
-        && (i.status === STATUS.INBOX || i.status === STATUS.QUEUED));
+      // Items waiting for the AI get their picture right after it reads them.
+      const next = state.items.find((i) => (i.status === STATUS.INBOX || i.status === STATUS.QUEUED) && !pictureOf(i) && !i.coverOff
+        && (i.coverTries || 0) < 2 && !(ai.settings.enabled() && !i.enrichedAt && (i.enrichTries || 0) < 2));
       if (!next) break;
-      let data = null;
-      try {
-        const res = await withTimeout(fetch(`${base}/preview?url=${encodeURIComponent(next.url)}`), 12000);
-        if (res.ok) data = await res.json();
-      } catch (e) {
-        noteError(e, { quiet: true, where: "preview" });
-      }
-      const cur = byId(next.id);
-      if (!cur) continue;
-      const upd = { ...cur, previewTries: (cur.previewTries || 0) + 1 };
-      if (data && data.image) upd.imageUrl = data.image;
-      if (data && data.title && !cur.editedAt && (cur.title === titleFromUrl(cur.url) || !cur.enrichedAt)) upd.title = data.title.slice(0, 140);
-      if (data && data.description && !cur.summary) upd.summary = data.description.slice(0, 200);
-      if (data && (data.image || data.title)) upd.previewTries = 2; // got what there is
-      await saveItem(upd);
-      if (state.feed && state.feed.ids[state.feed.index] === upd.id && !feedDrag) renderFeed();
+      let upd = next;
+      if (next.kind === KIND.LINK && (next.pageTries || 0) < 2) upd = await fetchPage(next);
+      else upd = (await findPhoto(next)) || byId(next.id);
+      if (upd && state.feed && state.feed.ids[state.feed.index] === upd.id && !feedDrag) renderFeed();
     }
   } finally {
-    previewRunning = false;
+    pictureRunning = false;
     if (!state.reader && !$(".sheet-wrap")) renderFront();
   }
 }
@@ -977,7 +1061,7 @@ function storyBody(item) {
       content = `<blockquote class="quote ${t.length > 180 ? "long" : ""}">“${esc(t)}”</blockquote>${item.author ? `<p class="cite">${esc(item.author)}</p>` : ""}`;
       break;
     }
-    case KIND.LINK: content = (item.imageUrl ? imgFull(item) : "") + (item.text ? `<div class="prose">${esc(item.text)}</div>` : ""); break;
+    case KIND.LINK: content = imgFull(item) + (item.text ? `<div class="prose">${esc(item.text)}</div>` : ""); break;
     case KIND.PHOTO: content = imgFull(item); break;
     case KIND.VIDEO: content = item.videoId
       ? `<div class="yt"><iframe title="${esc(item.title)}" src="https://www.youtube-nocookie.com/embed/${esc(item.videoId)}?playsinline=1&rel=0" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen></iframe></div>`
@@ -995,7 +1079,9 @@ function storyBody(item) {
   return `${words ? "" : `<h1>${esc(item.title)}</h1>`}
     ${item.book && item.book.author ? `<p class="cite">by ${esc(item.book.author)}</p>` : ""}
     ${content}
-    ${busy ? '<p class="summary accent">Reading it…</p>' : item.summary ? `<p class="summary">${esc(item.summary)}</p>` : ""}
+    ${busy ? '<p class="summary accent">Reading it…</p>' : item.extended
+      ? `<div class="extended"><span class="label">Summary</span>${item.extended.split(/\n\s*\n/).map((para) => `<p>${esc(para.trim())}</p>`).join("")}</div>`
+      : item.summary ? `<p class="summary">${esc(item.summary)}</p>` : ""}
     ${item.points && item.points.length ? `<ul class="points">${item.points.map((p) => `<li>${esc(p)}</li>`).join("")}</ul>` : ""}
     ${item.transcript ? `<span class="label">Text in the image</span><div class="prose">${esc(item.transcript)}</div>` : ""}
     ${item.note ? `<div class="prose mine-note">${esc(item.note)}</div>` : ""}
@@ -1005,8 +1091,11 @@ function storyBody(item) {
 
 function imgFull(item) {
   const gone = `onerror="this.closest('.media')?.remove()"`;
-  if (item.blobId) return `<div class="media"><img alt="${esc(item.title)}" ${gone} data-blob="${esc(item.blobId)}"></div>`;
-  return item.imageUrl ? `<div class="media"><img alt="${esc(item.title)}" ${gone} src="${esc(item.imageUrl)}"></div>` : "";
+  const pic = item.kind === KIND.PHOTO && item.blobId && !item.cover?.pinned ? { blobId: item.blobId } : pictureOf(item);
+  if (!pic) return "";
+  const credit = creditLine(pic);
+  const img = pic.blobId ? `<img alt="${esc(item.title)}" ${gone} data-blob="${esc(pic.blobId)}">` : `<img alt="${esc(item.title)}" ${gone} src="${esc(pic.src)}">`;
+  return `<div class="media">${img}</div>${credit ? `<p class="credit">${pic.link ? `<a href="${esc(pic.link)}" target="_blank" rel="noopener">${esc(credit)}</a>` : esc(credit)}</p>` : ""}`;
 }
 
 function updateTimeLeft(item) {
@@ -1302,6 +1391,7 @@ function renderFeed() {
           ? `<span class="mine-line"><span class="k">Why you saved it</span><span class="w">“${esc(item.why)}”</span></span>`
           : `<button class="add-why" type="button" data-add-why>${I.plus}${item.hook ? "Correct Edition's guess" : "Add why you saved it"}</button>`}
       <span class="open-hint">Tap to open ${I.next}</span>
+      ${creditLine(pictureOf(item)) ? `<span class="credit">${esc(creditLine(pictureOf(item)))}</span>` : ""}
     </div>
   </div>`;
   hydrate(card);
@@ -1353,8 +1443,9 @@ function paintFeedBg(el, item, turned) {
   }
   bg.dataset.id = item?.id || "";
   if (!item) { bg.innerHTML = ""; bg.className = "feed-bg"; el.style.removeProperty("--tint"); return; }
-  const src = item.kind === KIND.PHOTO && item.blobId ? null : item.imageUrl || null;
-  const blobId = item.kind === KIND.PHOTO && item.blobId ? item.thumbId || item.blobId : null;
+  const pic = pictureOf(item);
+  const src = pic && pic.src ? pic.src : null;
+  const blobId = pic && pic.blobId ? pic.blobId : null;
   bg.className = "feed-bg" + (turned || both ? " show" : "") + (src || blobId ? " pic" : " drawn");
   bg.innerHTML = src || blobId
     ? `<img alt="" ${blobId ? `data-blob="${esc(blobId)}"` : `src="${esc(src)}"`} onerror="this.parentElement.classList.replace('pic','drawn');this.outerHTML=this.parentElement.dataset.cover">`
@@ -1595,6 +1686,21 @@ function openEdit(id) {
   const wrap = sheet(`
     <div class="sheet-head"><h2>Edit</h2><button class="x" type="button" data-close aria-label="Close">${I.close}</button></div>
     <p class="note">${esc(KIND_LABEL[item.kind] || "Item")} · saved ${esc(ago(item.created))}${item.fileName ? ` · ${esc(item.fileName)}` : ""}</p>
+    ${item.kind !== KIND.PHOTO ? `<div class="pic-edit">
+      <div class="pic-prev" id="ed-pic"></div>
+      <div class="pic-side">
+        <span class="k">Picture</span>
+        <span class="note" id="ed-pic-credit"></span>
+        <div class="pic-acts">
+          <button class="btn" type="button" id="ed-pic-choose">${I.attach}Choose</button>
+          <button class="btn" type="button" id="ed-pic-find" ${ai.relayBase() ? "" : "disabled"}>${I.requeue}Find another</button>
+          <button class="btn ghost-danger" type="button" id="ed-pic-remove">${I.trash}Remove</button>
+        </div>
+      </div>
+      <div class="field pic-q"><label for="ed-pic-q">Find a photo of <span class="hint">${ai.relayBase() ? "a few words, then Find another" : "needs the relay (Settings)"}</span></label>
+        <input id="ed-pic-q" type="text" autocomplete="off" value="${esc(item.cover?.q || photoWords(item))}"></div>
+      <input type="file" id="ed-pic-file" accept="image/*" hidden>
+    </div>` : ""}
     ${words ? f("text", item.kind === KIND.QUOTE ? "Quote" : "Note", item.text, { area: true }) : f("title", "Title", item.title)}
     ${item.kind === KIND.QUOTE || item.kind === KIND.VIDEO ? f("author", item.kind === KIND.QUOTE ? "Who said it" : "Channel", item.author) : ""}
     ${item.kind === KIND.PHOTO ? `<label class="check"><input type="checkbox" id="ed-book" ${item.book ? "checked" : ""}><span>This is a book I want to read<small>Done becomes "I've read it", and counts toward what you like rather than as a recent read.</small></span></label>
@@ -1616,6 +1722,7 @@ function openEdit(id) {
     </div>`, { tall: true, label: "Edit" });
 
   const val = (k) => $(`#ed-${k}`, wrap)?.value;
+  if (item.kind !== KIND.PHOTO) bindPictureEdit(wrap, id);
   const save = async () => {
     const cur = byId(id);
     if (!cur) { closeSheet(); return; }
@@ -1691,6 +1798,71 @@ function openEdit(id) {
   $("#ed-delete", wrap).addEventListener("click", () => { closeSheet(); deleteItem(id); });
 }
 
+/* The Picture section of Edit: changes apply at once, and show on the card behind the sheet. */
+function bindPictureEdit(wrap, id) {
+  const prev = $("#ed-pic", wrap), credit = $("#ed-pic-credit", wrap);
+  const show = () => {
+    const it = byId(id);
+    const pic = pictureOf(it);
+    prev.innerHTML = pic ? (pic.blobId ? `<img alt="" data-blob="${esc(pic.blobId)}">` : `<img alt="" src="${esc(pic.src)}">`) : coverSvg(it);
+    hydrate(prev);
+    credit.textContent = !pic ? (it.coverOff ? "Removed. The card shows a drawn cover." : "None yet. The card shows a drawn cover.")
+      : pic.from === "mine" ? "Your photo." : pic.from === "page" ? "The page's own picture." : pic.from === "search" ? creditLine(pic) : "";
+    $("#ed-pic-remove", wrap).disabled = !pic;
+  };
+  const after = () => { show(); if (state.feed) renderFeed(); renderFront(); };
+  show();
+  const file = $("#ed-pic-file", wrap);
+  $("#ed-pic-choose", wrap).addEventListener("click", () => { unlock(); file.click(); });
+  file.addEventListener("change", async () => {
+    const f = file.files && file.files[0];
+    file.value = "";
+    if (!f) return;
+    const blob = (await shrinkImage(f)) || f;
+    const cur = byId(id);
+    const blobId = db.newId();
+    await db.blobs.put(blobId, blob);
+    if (cur.cover && cur.cover.blobId) await db.blobs.remove(cur.cover.blobId);
+    await saveItem({ ...cur, cover: { blobId, from: "mine", pinned: true }, coverOff: false, tint: undefined });
+    tick(true);
+    after();
+  });
+  $("#ed-pic-find", wrap).addEventListener("click", async () => {
+    const btn = $("#ed-pic-find", wrap);
+    const cur = byId(id);
+    const q = ($("#ed-pic-q", wrap).value || "").trim() || photoWords(cur);
+    const skip = cur.cover && cur.cover.from === "search" && cur.cover.q === q ? (cur.cover.i || 0) + 1 : 0;
+    btn.disabled = true;
+    credit.textContent = "Looking…";
+    const upd = await findPhoto(cur, { query: q, skip, pin: true });
+    btn.disabled = false;
+    if (!upd) { credit.textContent = `No photos found for "${q}". Try other words.`; return; }
+    tick(true);
+    after();
+  });
+  $("#ed-pic-remove", wrap).addEventListener("click", async () => {
+    const cur = byId(id);
+    if (cur.cover && cur.cover.blobId) await db.blobs.remove(cur.cover.blobId);
+    await saveItem({ ...cur, cover: null, coverOff: true, tint: undefined });
+    tick(true);
+    after();
+  });
+}
+
+/** A chosen photo, scaled down to a phone screen's worth so it stays small on the device. */
+async function shrinkImage(file) {
+  try {
+    const bmp = await createImageBitmap(file);
+    const scale = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+    const c = document.createElement("canvas");
+    c.width = Math.round(bmp.width * scale); c.height = Math.round(bmp.height * scale);
+    c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
+    return await new Promise((r) => c.toBlob(r, "image/jpeg", 0.85));
+  } catch {
+    return null; // a format this browser can't decode: keep the original
+  }
+}
+
 /*
  * Delete for good, with Undo. The record goes at once; its stored file waits
  * out the undo window, so Undo brings back everything.
@@ -1719,6 +1891,7 @@ async function deleteItem(id) {
     if (undone) return;
     if (item.blobId) await db.blobs.remove(item.blobId);
     if (item.thumbId) await db.blobs.remove(item.thumbId);
+    if (item.cover && item.cover.blobId) await db.blobs.remove(item.cover.blobId);
   }, 7000);
   toast("Deleted.", {
     action: "Undo",
@@ -2048,8 +2221,8 @@ function openSettings() {
     try {
       await ai.testPplxKey();
       say(pSt, "Key and relay work. Find something new now uses Perplexity, and links get their pictures.");
-      state.items = state.items.map((i) => ({ ...i, previewTries: 0 }));
-      previewPending();
+      state.items = state.items.map((i) => ({ ...i, pageTries: 0, coverTries: 0 }));
+      picturePending();
       $("#set-discover", wrap).disabled = false;
     } catch (e) {
       noteError(e, { quiet: true, where: "settings: Perplexity test" });
