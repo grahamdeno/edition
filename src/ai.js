@@ -119,7 +119,35 @@ const ENRICH_SHAPE =
   '"intent": one of "read", "watch", "listen", "reference", "idea", "task" (what the person most likely saved it for), ' +
   '"points": array of 0-3 short key points (only for documents, PDFs, long notes or photos of pages; otherwise []), ' +
   '"transcript": string (for a photo or screenshot with readable text such as a whiteboard, page, slide or sign: that text, cleaned up, max 1500 chars; otherwise ""), ' +
-  '"quote": null, or {"text": string, "author": string} when the item is really a quotation worth keeping as one}';
+  '"quote": null, or {"text": string, "author": string} when the item is really a quotation worth keeping as one, ' +
+  '"hook": string (see Hook)}';
+
+/*
+ * The hook is the face-down side of the card: one line that reminds the
+ * person what this is. It must say what kind of thing it is to them (a read,
+ * a talk to watch, an episode to listen to, a reference, an idea, a task),
+ * so the card still tells them what they'd be doing.
+ */
+const HOOK_RULE =
+  "Hook: one line, max 90 characters, for the face of the card in their reading app. " +
+  "Say plainly what kind of thing it is to them, using the verb that fits: a read, something to watch, " +
+  "something to listen to, a reference, an idea, or something to act on (for example \"A 20-minute read on how Basecamp bets on six-week cycles\" " +
+  "or \"A talk to watch on running retros that people actually use\"). Be specific to this item. Mention their context below only when it " +
+  "clearly connects. Never claim to know why they saved it. No hype, no exclamation marks, no quotation marks around it.";
+
+/** What else the reader is doing, so a hook can connect to it. */
+function contextLines(context) {
+  if (!context) return [];
+  const list = (a) => (a || []).slice(0, 5).map((t) => `- ${t}`).join("\n");
+  return [
+    context.around?.length && `Saved around the same time:\n${list(context.around)}`,
+    context.finished?.length && `Recently finished:\n${list(context.finished)}`,
+  ].filter(Boolean);
+}
+
+function cleanHook(h) {
+  return clip(String(h || "").replace(/^["'\u201C\u2018]+|["'\u201D\u2019]+$/g, "").replace(/\s+/g, " "), 110);
+}
 
 /** The reader's tags, as a prompt line asking the model to reuse them. */
 export function vocabLine(vocab) {
@@ -141,9 +169,9 @@ const INTENTS = new Set(["read", "watch", "listen", "reference", "idea", "task"]
  * `blob` is the original file for photos, PDFs and text files.
  * Links are judged from the URL and any note; the browser can't fetch the page.
  */
-export async function enrich(item, blob, { vocab = [] } = {}) {
+export async function enrich(item, blob, { vocab = [], context = null } = {}) {
   const { parts, item: it } = await contentParts(item, blob);
-  parts.push({ type: "text", text: [...describe(it), "", vocabLine(vocab), ENRICH_SHAPE].join("\n") });
+  parts.push({ type: "text", text: [...describe(it), ...contextLines(context), "", vocabLine(vocab), ENRICH_SHAPE, HOOK_RULE].join("\n") });
   const out = parseJson(textOf(await call({ content: parts, system: ENRICH_SYSTEM, maxTokens: 1200 })));
   const quote = out.quote && typeof out.quote === "object" && out.quote.text ? { text: clip(out.quote.text, 600), author: clip(out.quote.author, 80) } : null;
   return {
@@ -155,7 +183,22 @@ export async function enrich(item, blob, { vocab = [] } = {}) {
     points: Array.isArray(out.points) ? out.points.slice(0, 3).map((p) => clip(p, 160)).filter(Boolean) : [],
     transcript: clip(out.transcript, 1500),
     quote,
+    hook: cleanHook(out.hook),
   };
+}
+
+/**
+ * Write just the hook for an item that was read before hooks existed. Uses
+ * what Edition already knows about it (no file upload), so it's a small call.
+ */
+export async function hook(item, { context = null } = {}) {
+  const lines = [...describe({ ...item, text: item.text ? String(item.text).slice(0, 3000) : "" }),
+    item.intent && `Saved for: ${item.intent}`,
+    item.tags?.length && `Tags: ${item.tags.join(", ")}`,
+    item.transcript && `Text in the picture: ${String(item.transcript).slice(0, 800)}`,
+    ...contextLines(context), "", HOOK_RULE, 'Return JSON: {"hook": string}'].filter(Boolean);
+  const out = parseJson(textOf(await call({ content: lines.join("\n"), system: ENRICH_SYSTEM, maxTokens: 200 })));
+  return cleanHook(out.hook);
 }
 
 /** What the model is shown of an item: the file itself where it can read one. */

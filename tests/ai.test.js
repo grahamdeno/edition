@@ -104,3 +104,23 @@ test("untagged picks are tagged in one call, by index, ignoring bad rows", async
   assert.equal(sent.length, 1);
   assert.match(promptOf(sent[0]), /1 \| B \| Because \| https:\/\/b\.test/);
 });
+
+test("enrich asks for a card face that names what you'd be doing, with your context", async () => {
+  const sent = stubApi({ title: "T", summary: "S", tags: [], minutes: 20, intent: "read", points: [], transcript: "", quote: null, hook: "“A 20-minute read on six-week cycles”" });
+  const out = await enrich({ kind: "link", url: "https://a.test/x" }, null, { context: { around: ["Roadmap notes"], finished: ["Shape Up"] } });
+  assert.equal(out.hook, "A 20-minute read on six-week cycles");
+  const p = promptOf(sent[0]);
+  assert.match(p, /Saved around the same time:\n- Roadmap notes/);
+  assert.match(p, /Recently finished:\n- Shape Up/);
+  assert.match(p, /a read, something to watch, something to listen to/);
+});
+
+test("a card face can be written later from what's already known, in one small call", async () => {
+  const { hook } = await import("../src/ai.js");
+  const sent = stubApi({ hook: "A talk to watch on retros that teams actually use" });
+  const h = await hook({ kind: "video", title: "Retros", intent: "watch", tags: ["agile"] }, { context: { around: [], finished: [] } });
+  assert.equal(h, "A talk to watch on retros that teams actually use");
+  assert.match(promptOf(sent[0]), /Saved for: watch/);
+  assert.equal(sent[0].max_tokens, 200);
+  assert.equal(typeof sent[0].messages[0].content, "string"); // no file upload
+});
