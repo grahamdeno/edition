@@ -579,3 +579,130 @@ export function screenSuggestions(picks, profile) {
   const max = suggestMaxMinutes(profile);
   return picks.filter((p) => !blocked.has(hostOf(p.url)) && !(max && p.minutes && p.minutes > max * 1.5));
 }
+
+/* ---- Tags: one vocabulary, kept tidy ----
+ * Tags are what Edition learns from, so "agile" and "agile methods" counting
+ * as two interests dilutes everything. The AI is shown the tags already in
+ * use and reuses them; renames and merges made in Settings are kept as
+ * aliases, so a merged tag never comes back; a deleted tag maps to "".
+ */
+
+export const MAX_TAGS = 6;
+
+/** One tag, cleaned: lowercase, no #, single spaces, at most 32 characters. */
+export function normTag(t) {
+  return String(t ?? "").toLowerCase().trim().replace(/^#+/, "").replace(/[\s_]+/g, " ").trim().slice(0, 32).trim();
+}
+
+/** Follow aliases to the tag in use now ("" means deleted). Stops on a loop. */
+export function resolveTag(tag, aliases = {}) {
+  let t = normTag(tag);
+  const seen = new Set();
+  while (aliases && Object.prototype.hasOwnProperty.call(aliases, t) && !seen.has(t)) {
+    seen.add(t);
+    t = normTag(aliases[t]);
+    if (!t) return "";
+  }
+  return t;
+}
+
+/** Clean, resolve and de-duplicate a list of tags. */
+export function canonTags(tags, aliases = {}, max = MAX_TAGS) {
+  const out = [];
+  for (const raw of tags || []) {
+    const t = resolveTag(raw, aliases);
+    if (t && !out.includes(t)) out.push(t);
+  }
+  return out.slice(0, max);
+}
+
+/** Tags in use, most used first: the vocabulary the AI is asked to reuse. */
+export function tagVocab(items, n = 40) {
+  const c = new Map();
+  for (const i of items) for (const raw of i.tags || []) {
+    const t = normTag(raw);
+    if (t) c.set(t, (c.get(t) || 0) + 1);
+  }
+  return [...c.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, n).map(([t]) => t);
+}
+
+/**
+ * Every tag with how many items carry it and what your verdicts say about it
+ * (the same score ranking uses). Returns [{ tag, count, score }] most used first.
+ */
+export function tagStats(items) {
+  const profile = interestProfile(items);
+  const c = new Map();
+  for (const i of items) for (const raw of i.tags || []) {
+    const t = normTag(raw);
+    if (t) c.set(t, (c.get(t) || 0) + 1);
+  }
+  return [...c.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([tag, count]) => ({ tag, count, score: Math.round((profile.tags[tag] || 0) * 10) / 10 }));
+}
+
+/**
+ * Rename `from` to `to` on every item (a merge when `to` is already in use),
+ * or remove it when `to` is "". Returns only the items that changed.
+ */
+export function renameTag(items, from, to) {
+  const f = normTag(from), t = normTag(to);
+  if (!f || f === t) return [];
+  const out = [];
+  for (const i of items) {
+    const tags = (i.tags || []).map(normTag);
+    if (!tags.includes(f)) continue;
+    const next = [];
+    for (const x of tags.map((x) => (x === f ? t : x))) if (x && !next.includes(x)) next.push(x);
+    out.push({ ...i, tags: next });
+  }
+  return out;
+}
+
+/** Record a rename or delete so future AI tags follow it. Returns new aliases. */
+export function addAlias(aliases, from, to) {
+  const f = normTag(from), t = normTag(to);
+  const next = { ...(aliases || {}) };
+  if (!f || f === t) return next;
+  delete next[t]; // the target is a tag in use again
+  for (const k of Object.keys(next)) if (normTag(next[k]) === f) next[k] = t; // earlier merges into `from` follow it
+  next[f] = t;
+  return next;
+}
+
+/** A tag you type yourself is wanted: drop any alias that would delete or move it. */
+export function releaseTags(aliases, tags) {
+  const next = { ...(aliases || {}) };
+  for (const t of tags || []) delete next[normTag(t)];
+  return next;
+}
+
+/** Carry what suggestions learned about a tag over to its new name (or drop it). */
+export function renameInSuggestProfile(profile, from, to) {
+  const f = normTag(from), t = normTag(to);
+  const p = { ...emptySuggestProfile(), ...profile, topics: { ...(profile?.topics || {}) }, deeper: { ...(profile?.deeper || {}) } };
+  for (const key of ["topics", "deeper"]) {
+    const map = p[key];
+    if (!(f in map)) continue;
+    if (t) map[t] = Math.round(((map[t] || 0) + map[f]) * 10) / 10;
+    delete map[f];
+    if (t && map[t] === 0) delete map[t];
+  }
+  return p;
+}
+
+/**
+ * Tags from your own vocabulary that appear in some text, as whole words.
+ * Used when a suggestion arrives untagged and there's no Anthropic key to ask.
+ */
+export function localTags(text, vocab, max = 3) {
+  const s = ` ${String(text || "").toLowerCase().replace(/[^a-z0-9+#.\- ]+/g, " ")} `;
+  const out = [];
+  for (const t of vocab || []) {
+    if (out.length >= max) break;
+    const words = normTag(t).replace(/[^a-z0-9+#.\- ]+/g, " ").trim();
+    if (words && s.includes(` ${words} `) && !out.includes(normTag(t))) out.push(normTag(t));
+  }
+  return out;
+}

@@ -20,6 +20,7 @@ import {
   detectText, draftFromFile, describeDraft, fitToTime, circling, fading, isFaded, FADE_DAYS, youtubeId,
   SUGGESTIONS_PER_DAY, WHY_NOT, WHY_NOT_LABEL, emptySuggestProfile, learnFromSuggestion, suggestionGuide,
   screenSuggestions, suggestMaxMinutes,
+  canonTags, tagVocab, tagStats, renameTag, addAlias, releaseTags, renameInSuggestProfile, localTags, normTag, MAX_TAGS,
 } from "./model.js";
 import * as db from "./db.js";
 import { captureText, captureFile, captureTransfer, readClipboard, captureShares } from "./capture.js";
@@ -29,7 +30,7 @@ import { tick, unlock, soundOn, setSound } from "./feel.js";
 import { I } from "./icons.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "3.7.2";
+export const VERSION = "3.8.0";
 const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 
 const KIND_LABEL = { link: "Link", note: "Note", quote: "Quote", photo: "Photo", pdf: "PDF", text: "Text", video: "Video", audio: "Audio", file: "File" };
@@ -60,6 +61,7 @@ const state = {
   reader: null,      // { mode: "edition" | "inbox" | "single", ids: [], index }
   feed: null,        // { ids: [], index, total, turned: Set, tally }
   suggest: null,     // what your answers to suggestions taught (see model.js)
+  tagAliases: {},    // renames, merges and deletes made in Settings > Tags (see model.js)
   capWhy: "",
 };
 
@@ -96,6 +98,7 @@ async function boot() {
   state.items = await db.items.all();
   state.edition = await db.meta.get("edition", null);
   state.suggest = await db.meta.get("suggest", null) || emptySuggestProfile();
+  state.tagAliases = await db.meta.get("tagAliases", null) || {};
   const seeded = await seedSamples();
   const shared = await importShares();
   const linked = await importFromUrl();
@@ -311,6 +314,11 @@ async function importFromUrl() {
 
 /* ================= AI work ================= */
 
+/** Your tags, most used first: what every AI tag job is asked to reuse. */
+const vocab = () => tagVocab(state.items);
+/** Tags from the AI, cleaned and run through your renames and merges. */
+const tidyTags = (tags) => canonTags(tags, state.tagAliases, 3);
+
 let enrichRunning = false;
 async function enrichPending() {
   if (enrichRunning || !ai.settings.enabled()) return;
@@ -322,14 +330,15 @@ async function enrichPending() {
       state.enriching.add(next.id);
       try {
         const blob = next.blobId && [KIND.PHOTO, KIND.PDF, KIND.TEXT].includes(next.kind) ? await db.blobs.get(next.blobId) : null;
-        const out = await ai.enrich(next, blob);
+        const out = await ai.enrich(next, blob, { vocab: vocab() });
+        const tags = tidyTags(out.tags);
         const cur = byId(next.id);
         if (cur) {
           const upd = {
             ...cur,
             title: cur.editedAt ? cur.title : out.title || cur.title,
             summary: out.summary || cur.summary,
-            tags: out.tags.length ? out.tags : cur.tags,
+            tags: tags.length ? tags : cur.tags,
             minutes: out.minutes || cur.minutes,
             intent: out.intent || cur.intent,
             points: out.points.length ? out.points : cur.points,
@@ -368,8 +377,8 @@ async function findNew(statusEl) {
   set(ai.settings.pplxEnabled() ? "Searching Perplexity for something worth your time…" : "Searching for something worth your time…");
   try {
     const known = new Set(state.items.map((i) => i.url).filter(Boolean));
-    const picks = await ai.discover(interestProfile(state.items), { known, guide: suggestionGuide(state.suggest) });
-    const fresh = screenSuggestions(picks.filter((p) => !known.has(p.url)), state.suggest);
+    const picks = await ai.discover(interestProfile(state.items), { known, guide: suggestionGuide(state.suggest), vocab: vocab() });
+    const fresh = await tagPicks(screenSuggestions(picks.filter((p) => !known.has(p.url)), state.suggest));
     for (const p of fresh) {
       const item = createItem(
         { kind: KIND.LINK, url: p.url, title: p.title, summary: p.why, tags: p.tags, minutes: p.minutes },
@@ -385,6 +394,29 @@ async function findNew(statusEl) {
     noteError(e, { quiet: true, where: ai.settings.pplxEnabled() ? "discover (Perplexity)" : "discover (Claude)" });
     set(e.message || "Search failed.", true);
   }
+}
+
+/*
+ * Every suggestion should carry tags, or your verdict on it teaches nothing.
+ * Untagged picks (a Perplexity result used as is) are tagged in one call
+ * when there's an Anthropic key; otherwise they borrow your own tags from
+ * their words. Either way, tags go through your renames and merges.
+ */
+async function tagPicks(picks) {
+  const v = vocab();
+  const bare = picks.map((p, k) => (tidyTags(p.tags).length ? -1 : k)).filter((k) => k >= 0);
+  let got = {};
+  if (bare.length && ai.settings.enabled()) {
+    try {
+      const res = await ai.tagItems(bare.map((k) => picks[k]), { vocab: v });
+      bare.forEach((k, j) => { if (res[j]) got[k] = res[j]; });
+    } catch (e) { noteError(e, { quiet: true, where: "tag suggestions" }); }
+  }
+  return picks.map((p, k) => {
+    let tags = tidyTags(got[k] || p.tags);
+    if (!tags.length) tags = tidyTags(localTags(`${p.title} ${p.why || ""}`, v));
+    return { ...p, tags };
+  });
 }
 
 /* ================= Front page ================= */
@@ -1423,6 +1455,7 @@ function openEdit(id) {
       ${f("tags", "Tags", (item.tags || []).join(", "), { ph: "scrum, ai" })}
       ${f("minutes", "Minutes", estimateMinutes(item), { type: "number" })}
     </div>
+    ${ai.settings.enabled() ? `<button class="btn retag" type="button" id="ed-retag">Re-tag with AI</button>` : ""}
     <span class="st" id="ed-st" role="status"></span>
     <button class="btn primary" type="button" id="ed-save">Save</button>
     <div class="danger">
@@ -1454,7 +1487,15 @@ function openEdit(id) {
       if (cur.kind === KIND.VIDEO || vid) { next.videoId = vid || undefined; if (vid) next.kind = KIND.VIDEO; }
     }
     next.why = (val("why") || "").trim().slice(0, 140);
-    next.tags = (val("tags") || "").split(",").map((t) => t.trim().toLowerCase()).filter(Boolean).slice(0, 6);
+    const typed = canonTags((val("tags") || "").split(","), {}, MAX_TAGS);
+    const had = new Set((cur.tags || []).map(normTag));
+    // A tag you type yourself is wanted, even one you once merged away or deleted.
+    const released = releaseTags(state.tagAliases, typed.filter((t) => !had.has(t)));
+    if (Object.keys(released).length !== Object.keys(state.tagAliases).length) {
+      state.tagAliases = released;
+      await db.meta.set("tagAliases", released);
+    }
+    next.tags = typed;
     const m = Math.round(+val("minutes"));
     next.minutes = Number.isFinite(m) && m > 0 ? Math.min(m, 600) : cur.minutes;
     await saveItem(next);
@@ -1465,6 +1506,25 @@ function openEdit(id) {
   };
   $("#ed-save", wrap).addEventListener("click", save);
   wrap.querySelectorAll("input").forEach((i) => i.addEventListener("keydown", (e) => { if (e.key === "Enter") save(); }));
+  $("#ed-retag", wrap)?.addEventListener("click", async () => {
+    const btn = $("#ed-retag", wrap), st = $("#ed-st", wrap);
+    const cur = byId(id);
+    if (!cur) return;
+    btn.disabled = true;
+    st.classList.remove("err");
+    st.textContent = "Reading it again for tags…";
+    try {
+      const blob = cur.blobId && [KIND.PHOTO, KIND.PDF, KIND.TEXT].includes(cur.kind) ? await db.blobs.get(cur.blobId) : null;
+      const tags = tidyTags(await ai.retag(cur, blob, { vocab: vocab() }));
+      if (!tags.length) throw new Error("No tags came back. Try again.");
+      $("#ed-tags", wrap).value = tags.join(", ");
+      st.textContent = "New tags filled in. Save to keep them.";
+    } catch (e) {
+      noteError(e, { quiet: true, where: "re-tag" });
+      st.textContent = e.message || "Couldn't re-tag.";
+      st.classList.add("err");
+    } finally { btn.disabled = false; }
+  });
   $("#ed-delete", wrap).addEventListener("click", () => { closeSheet(); deleteItem(id); });
 }
 
@@ -1737,6 +1797,10 @@ function openSettings() {
       <h3>Suggestions</h3>
       <div id="sug-profile"></div>
     </div>
+    <div class="section" id="set-tags">
+      <h3>Tags</h3>
+      <div id="tag-list"></div>
+    </div>
     <div class="section">
       <h3>Sounds</h3>
       <div class="chips" role="group" aria-label="Sounds" style="margin:0;padding:0">
@@ -1798,6 +1862,7 @@ function openSettings() {
     say(st, "Key removed. Edition works without AI.");
   });
   renderSuggestProfile(wrap);
+  renderTagList(wrap);
   refreshProblems(wrap);
   $("#set-pr-copy", wrap).addEventListener("click", copyDiagnostics);
   $("#set-pr-clear", wrap).addEventListener("click", () => { clearProblems(); refreshProblems(wrap); });
@@ -1906,6 +1971,111 @@ function renderSuggestProfile(wrap) {
     await save();
   }));
   $("#sug-reset", box)?.addEventListener("click", async () => { state.suggest = emptySuggestProfile(); await save(); toast("Forgotten. Suggestions start fresh."); });
+}
+
+/* ================= Tags ================= */
+
+/* Settings > Tags: every tag with its count; tap one to rename, merge or delete it. */
+function renderTagList(wrap) {
+  const box = $("#tag-list", wrap);
+  if (!box) return;
+  const stats = tagStats(state.items);
+  const al = Object.entries(state.tagAliases || {}).sort((a, b) => a[0].localeCompare(b[0]));
+  box.innerHTML = (stats.length
+    ? `<div class="chips tag-chips">${stats.map((s) => `<button class="chip tag-chip" type="button" data-tag="${esc(s.tag)}">${esc(s.tag)} <span class="n">${s.count}</span></button>`).join("")}</div>
+       <p class="note">Tap a tag to rename it, merge it into another, or delete it. The AI is shown these tags and reuses them before making new ones.</p>`
+    : `<p class="note">No tags yet. With an API key, each save is tagged as it arrives; you can also type tags when you edit an item.</p>`)
+    + (al.length ? `<div class="sug-row"><span class="k">Kept from your merges and deletes</span><div class="chips">${al.map(([f, t]) =>
+      `<button class="chip unlearn" type="button" data-alias="${esc(f)}" aria-label="Forget ${esc(f)}">${esc(f)} ${t ? `→ ${esc(t)}` : "(deleted)"} ${I.close}</button>`).join("")}</div>
+      <p class="note">New tags follow these. Tap one to forget it, so the old name can be used again.</p></div>` : "");
+  box.querySelectorAll("[data-tag]").forEach((b) => b.addEventListener("click", () => openTag(b.dataset.tag)));
+  box.querySelectorAll("[data-alias]").forEach((b) => b.addEventListener("click", async () => {
+    const next = { ...state.tagAliases };
+    delete next[b.dataset.alias];
+    state.tagAliases = next;
+    await db.meta.set("tagAliases", next);
+    renderTagList(wrap);
+  }));
+}
+
+function backToTags() {
+  openSettings();
+  $("#set-tags")?.scrollIntoView({ block: "start" });
+}
+
+function openTag(tag) {
+  const s = tagStats(state.items).find((x) => x.tag === tag) || { tag, count: 0, score: 0 };
+  const others = tagStats(state.items).map((x) => x.tag).filter((t) => t !== tag);
+  const lean = s.score > 0 ? `Your verdicts lean toward it (+${s.score}).` : s.score < 0 ? `Your verdicts lean away from it (${s.score}).` : "No verdicts on it yet.";
+  const wrap = sheet(`
+    <div class="sheet-head"><h2>${esc(tag)}</h2><button class="x" type="button" data-close aria-label="Close">${I.close}</button></div>
+    <p class="note">On ${s.count} item${s.count === 1 ? "" : "s"}. ${lean}</p>
+    <div class="field"><label for="tg-to">New name, or a tag to merge it into</label>
+      <input id="tg-to" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" list="tg-others" value="${esc(tag)}"></div>
+    <datalist id="tg-others">${others.map((t) => `<option value="${esc(t)}">`).join("")}</datalist>
+    ${others.length ? `<div class="chips tag-chips" aria-label="Merge into">${others.slice(0, 12).map((t) => `<button class="chip" type="button" data-into="${esc(t)}">${esc(t)}</button>`).join("")}</div>` : ""}
+    <span class="st" id="tg-st" role="status"></span>
+    <div class="two">
+      <button class="btn" type="button" id="tg-back">Back</button>
+      <button class="btn primary" type="button" id="tg-go" disabled>Rename</button>
+    </div>
+    <div class="danger">
+      <button class="btn ghost-danger" type="button" id="tg-del">${I.trash}Delete this tag</button>
+      <p class="note">Removes it from every item and keeps the AI from using it again. The items themselves stay.</p>
+    </div>`, { label: `Tag ${tag}` });
+  const input = $("#tg-to", wrap), go = $("#tg-go", wrap);
+  const sync = () => {
+    const to = normTag(input.value);
+    go.disabled = !to || to === tag;
+    go.textContent = others.includes(to) ? `Merge into ${to}` : "Rename";
+  };
+  input.addEventListener("input", sync);
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !go.disabled) go.click(); });
+  wrap.querySelectorAll("[data-into]").forEach((b) => b.addEventListener("click", () => { input.value = b.dataset.into; sync(); }));
+  $("#tg-back", wrap).addEventListener("click", backToTags);
+  go.addEventListener("click", async () => {
+    const to = normTag(input.value);
+    const merge = others.includes(to);
+    const n = await changeTag(tag, to);
+    backToTags();
+    toast(merge ? `Merged ${tag} into ${to} on ${n} item${n === 1 ? "" : "s"}.` : `Renamed to ${to}.`, { action: "Undo", onAction: undoTagChange });
+  });
+  $("#tg-del", wrap).addEventListener("click", async () => {
+    const n = await changeTag(tag, "");
+    backToTags();
+    toast(`Deleted ${tag} from ${n} item${n === 1 ? "" : "s"}.`, { action: "Undo", onAction: undoTagChange });
+  });
+}
+
+/*
+ * Rename, merge (to a tag in use) or delete (to "") a tag everywhere: on every
+ * item, in what suggestions learned, and as an alias so the AI follows it.
+ * Keeps what it replaced, for Undo.
+ */
+let lastTagChange = null;
+async function changeTag(from, to) {
+  const changed = renameTag(state.items, from, to);
+  lastTagChange = { items: changed.map((c) => byId(c.id)), aliases: state.tagAliases, suggest: state.suggest };
+  for (const it of changed) await saveItem(it);
+  state.tagAliases = addAlias(state.tagAliases, from, to);
+  state.suggest = renameInSuggestProfile(state.suggest, from, to);
+  await db.meta.set("tagAliases", state.tagAliases);
+  await db.meta.set("suggest", state.suggest);
+  refresh();
+  return changed.length;
+}
+
+async function undoTagChange() {
+  const b = lastTagChange;
+  if (!b) return;
+  lastTagChange = null;
+  for (const it of b.items) if (it) await saveItem(it);
+  state.tagAliases = b.aliases;
+  state.suggest = b.suggest;
+  await db.meta.set("tagAliases", b.aliases);
+  await db.meta.set("suggest", b.suggest);
+  refresh();
+  if ($("#tag-list")) renderTagList($(".sheet-wrap"));
 }
 
 /* ================= Problems and diagnostics ================= */

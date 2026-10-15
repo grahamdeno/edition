@@ -11,6 +11,9 @@
  *   discover  search the web for a few new things this reader would want
  *             (Perplexity's Agent API through the reader's relay when its key is set,
  *             else Claude's web search)
+ * Plus two small tag jobs: tagItems (suggestions that arrived untagged) and
+ * retag (fresh tags for one item, on request). Every tag job is shown the
+ * reader's own tags and asked to reuse them before coining new ones.
  */
 
 import { topTags } from "./model.js";
@@ -118,6 +121,18 @@ const ENRICH_SHAPE =
   '"transcript": string (for a photo or screenshot with readable text such as a whiteboard, page, slide or sign: that text, cleaned up, max 1500 chars; otherwise ""), ' +
   '"quote": null, or {"text": string, "author": string} when the item is really a quotation worth keeping as one}';
 
+/** The reader's tags, as a prompt line asking the model to reuse them. */
+export function vocabLine(vocab) {
+  const v = (vocab || []).slice(0, 40);
+  return v.length
+    ? `Tags already in use: ${v.join(", ")}. Reuse one of these whenever it fits; only coin a new tag when none of them does.`
+    : "";
+}
+
+function cleanTags(raw, n = 3) {
+  return Array.isArray(raw) ? raw.slice(0, n).map((t) => String(t).toLowerCase().trim()).filter(Boolean) : [];
+}
+
 const INTENTS = new Set(["read", "watch", "listen", "reference", "idea", "task"]);
 
 /**
@@ -126,7 +141,25 @@ const INTENTS = new Set(["read", "watch", "listen", "reference", "idea", "task"]
  * `blob` is the original file for photos, PDFs and text files.
  * Links are judged from the URL and any note; the browser can't fetch the page.
  */
-export async function enrich(item, blob) {
+export async function enrich(item, blob, { vocab = [] } = {}) {
+  const { parts, item: it } = await contentParts(item, blob);
+  parts.push({ type: "text", text: [...describe(it), "", vocabLine(vocab), ENRICH_SHAPE].join("\n") });
+  const out = parseJson(textOf(await call({ content: parts, system: ENRICH_SYSTEM, maxTokens: 1200 })));
+  const quote = out.quote && typeof out.quote === "object" && out.quote.text ? { text: clip(out.quote.text, 600), author: clip(out.quote.author, 80) } : null;
+  return {
+    title: clip(out.title, 120) || item.title,
+    summary: clip(out.summary, 200),
+    tags: cleanTags(out.tags),
+    minutes: Number.isFinite(+out.minutes) && +out.minutes > 0 ? Math.round(+out.minutes) : undefined,
+    intent: INTENTS.has(out.intent) ? out.intent : undefined,
+    points: Array.isArray(out.points) ? out.points.slice(0, 3).map((p) => clip(p, 160)).filter(Boolean) : [],
+    transcript: clip(out.transcript, 1500),
+    quote,
+  };
+}
+
+/** What the model is shown of an item: the file itself where it can read one. */
+async function contentParts(item, blob) {
   const parts = [];
   if (item.kind === "photo" && blob) {
     const img = await imageForModel(blob);
@@ -138,29 +171,52 @@ export async function enrich(item, blob) {
   } else if (item.kind === "text" && blob) {
     item = { ...item, text: (await blob.text()).slice(0, 12000) };
   }
-  const lines = [
+  return { parts, item };
+}
+
+function describe(item) {
+  return [
     `Kind: ${item.kind}${item.videoId ? " (YouTube)" : ""}`,
     item.title && `Current title: ${item.title}`,
     item.author && `Author or channel: ${item.author}`,
     item.url && `URL: ${item.url}`,
     item.fileName && `File name: ${item.fileName}`,
+    item.why && `Why they saved it: ${item.why}`,
+    item.summary && `Summary: ${item.summary}`,
     item.text && `Text:\n${item.text.slice(0, 12000)}`,
-    "",
-    ENRICH_SHAPE,
-  ].filter((l) => l !== undefined && l !== false);
-  parts.push({ type: "text", text: lines.join("\n") });
-  const out = parseJson(textOf(await call({ content: parts, system: ENRICH_SYSTEM, maxTokens: 1200 })));
-  const quote = out.quote && typeof out.quote === "object" && out.quote.text ? { text: clip(out.quote.text, 600), author: clip(out.quote.author, 80) } : null;
-  return {
-    title: clip(out.title, 120) || item.title,
-    summary: clip(out.summary, 200),
-    tags: Array.isArray(out.tags) ? out.tags.slice(0, 3).map((t) => String(t).toLowerCase().trim()).filter(Boolean) : [],
-    minutes: Number.isFinite(+out.minutes) && +out.minutes > 0 ? Math.round(+out.minutes) : undefined,
-    intent: INTENTS.has(out.intent) ? out.intent : undefined,
-    points: Array.isArray(out.points) ? out.points.slice(0, 3).map((p) => clip(p, 160)).filter(Boolean) : [],
-    transcript: clip(out.transcript, 1500),
-    quote,
-  };
+  ].filter(Boolean);
+}
+
+/**
+ * Fresh tags for one item, on request. Returns 1-3 tags, reusing the
+ * reader's own where they fit.
+ */
+export async function retag(item, blob, { vocab = [] } = {}) {
+  const { parts, item: it } = await contentParts(item, blob);
+  parts.push({ type: "text", text: [...describe(it), "", vocabLine(vocab),
+    'Tag this item for the person who saved it. Return JSON: {"tags": array of 1-3 lowercase topic words}'].filter(Boolean).join("\n") });
+  const out = parseJson(textOf(await call({ content: parts, system: ENRICH_SYSTEM, maxTokens: 200 })));
+  return cleanTags(out.tags);
+}
+
+/**
+ * Tag several links at once from their titles, reasons and addresses: one
+ * call for every suggestion that arrived without tags. Returns { index: tags }.
+ */
+export async function tagItems(list, { vocab = [] } = {}) {
+  if (!list.length) return {};
+  const lines = list.map((p, k) => `${k} | ${p.title || ""} | ${p.why || p.summary || ""} | ${p.url || ""}`).join("\n");
+  const prompt =
+    `Tag each item for one person's private reading app.\n${vocabLine(vocab)}\n\n` +
+    `Items (index | title | why | url):\n${lines}\n\n` +
+    `Return JSON: {"tags":[{"i":integer,"tags":[1-3 lowercase topic words]}]}`;
+  const out = parseJson(textOf(await call({ content: prompt, system: ENRICH_SYSTEM, maxTokens: 600 })));
+  const res = {};
+  for (const r of out.tags || []) {
+    const i = Math.round(+r?.i);
+    if (Number.isInteger(i) && i >= 0 && i < list.length) res[i] = cleanTags(r.tags);
+  }
+  return res;
 }
 
 /**
@@ -192,14 +248,14 @@ export async function rank(queue, profile) {
  * Find a few new things worth reading, using the web search tool.
  * Returns [{ title, url, why, tags }].
  */
-export async function discover(profile, { count = 3, known = new Set(), guide = "" } = {}) {
-  if (settings.pplxEnabled()) return pplxDiscover(profile, { count, known, guide });
-  return claudeDiscover(profile, { count, guide });
+export async function discover(profile, { count = 3, known = new Set(), guide = "", vocab = [] } = {}) {
+  if (settings.pplxEnabled()) return pplxDiscover(profile, { count, known, guide, vocab });
+  return claudeDiscover(profile, { count, guide, vocab });
 }
 
 const BECAUSE = 'why: one plain sentence, max 120 chars, starting "Because you", naming what they finished or keep saving that this connects to';
 
-async function claudeDiscover(profile, { count = 3, guide = "" } = {}) {
+async function claudeDiscover(profile, { count = 3, guide = "", vocab = [] } = {}) {
   const interests = topTags(profile, 10);
   const kept = profile.kept.slice(0, 10).map((i) => `- ${i.title}${i.url ? ` (${i.url})` : ""}`).join("\n");
   const dropped = profile.dropped.slice(0, 6).map((i) => `- ${i.title}`).join("\n");
@@ -210,7 +266,8 @@ async function claudeDiscover(profile, { count = 3, guide = "" } = {}) {
     `Interests, strongest first: ${interests.join(", ") || "(learn from the list below)"}\n` +
     `Recently finished:\n${kept || "(none)"}\n` +
     `Recently let go (avoid these directions):\n${dropped || "(none)"}\n` +
-    `${guide ? `What their answers to past suggestions taught:\n${guide}\n` : ""}\n` +
+    `${guide ? `What their answers to past suggestions taught:\n${guide}\n` : ""}` +
+    `${vocab.length ? `${vocabLine(vocab)}\n` : ""}\n` +
     `Search, then reply with JSON only: {"picks":[{"title":string,"url":string,"why":string (${BECAUSE}),"tags":[1-3 lowercase words],"minutes":integer}]}`;
   const data = await call({
     content: prompt,
@@ -225,7 +282,7 @@ async function claudeDiscover(profile, { count = 3, guide = "" } = {}) {
       title: clip(p.title, 120),
       url: p.url,
       why: clip(p.why, 160),
-      tags: Array.isArray(p.tags) ? p.tags.slice(0, 3).map((t) => String(t).toLowerCase()) : [],
+      tags: cleanTags(p.tags),
       minutes: Number.isFinite(+p.minutes) ? Math.round(+p.minutes) : undefined,
     }));
 }
@@ -366,7 +423,7 @@ const PICKS_SCHEMA = {
   additionalProperties: false,
 };
 
-async function pplxDiscover(profile, { count = 3, known = new Set(), guide = "" } = {}) {
+async function pplxDiscover(profile, { count = 3, known = new Set(), guide = "", vocab = [] } = {}) {
   const interests = topTags(profile, 8);
   const kept = profile.kept.slice(0, 10).map((i) => `- ${i.title}${tagStr(i)}`).join("\n");
   const dropped = profile.dropped.slice(0, 6).map((i) => `- ${i.title}`).join("\n");
@@ -379,7 +436,8 @@ async function pplxDiscover(profile, { count = 3, known = new Set(), guide = "" 
     `Recently finished:\n${kept || "(none)"}\n` +
     `Recently let go (avoid these directions):\n${dropped || "(none)"}\n` +
     `Already saved (skip): ${[...known].slice(0, 30).join(" ") || "(none)"}\n` +
-    `${guide ? `What their answers to past suggestions taught:\n${guide}\n` : ""}\n` +
+    `${guide ? `What their answers to past suggestions taught:\n${guide}\n` : ""}` +
+    `${vocab.length ? `${vocabLine(vocab)}\n` : ""}\n` +
     `For each pick: the title, the exact URL from your search results, ${BECAUSE}, ` +
     `1-3 lowercase topic tags, and minutes to read or watch.`;
   const data = await pplxAgent({
