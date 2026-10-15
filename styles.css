@@ -27,9 +27,11 @@ input, textarea { font: inherit; color: inherit; background: transparent; }
 .app { max-width: 480px; margin: 0 auto; padding: calc(16px + var(--safe-t)) 20px calc(100px + var(--safe-b)); }
 
 /* Edition front page */
-.mast { display: flex; justify-content: space-between; align-items: baseline; font-size: 12px; letter-spacing: 0.04em; color: var(--muted); margin-bottom: 6px; }
+.mast { display: flex; justify-content: space-between; align-items: center; font-size: 12px; letter-spacing: 0.04em; color: var(--muted); margin-bottom: 6px; }
 .mast .date { text-transform: uppercase; }
+.mast-right { display: flex; align-items: center; gap: 10px; }
 .mast .count { color: var(--accent); }
+.settings-btn { width: 32px; height: 32px; border-radius: 50%; background: var(--card); border: 1px solid var(--rim); display: grid; place-items: center; font-size: 16px; }
 
 .title { font-family: var(--serif); font-size: 48px; font-weight: 400; letter-spacing: -0.02em; margin: 4px 0 8px; line-height: 1; }
 .sub { color: var(--fg-2); font-size: 15px; margin: 0 0 18px; line-height: 1.4; }
@@ -63,7 +65,7 @@ input, textarea { font: inherit; color: inherit; background: transparent; }
   box-shadow: 0 8px 24px rgba(0,0,0,0.4); z-index: 5;
 }
 
-/* Capture sheet */
+/* Sheets (capture + settings) */
 .sheet {
   position: fixed; inset: 0; background: var(--bg); z-index: 20;
   padding: calc(16px + var(--safe-t)) 20px calc(24px + var(--safe-b));
@@ -84,6 +86,7 @@ input, textarea { font: inherit; color: inherit; background: transparent; }
 }
 .sheet-actions { display: flex; gap: 10px; margin-top: auto; }
 .sheet-actions .btn { flex: 1; }
+.help { font-size: 13px; color: var(--muted); line-height: 1.4; margin-top: 4px; }
 
 /* Triage */
 .triage { position: fixed; inset: 0; background: var(--bg); z-index: 10; display: flex; flex-direction: column; padding: calc(12px + var(--safe-t)) 16px calc(16px + var(--safe-b)); }
