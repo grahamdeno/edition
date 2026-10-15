@@ -21,7 +21,7 @@ Two screens and no tab bar. The front page scrolls; the reader is full screen. A
 3. **Read.** Tap any story on the front page to read it full screen. The same pill gives Let go, Later or Done, and the next story slides in. The pill and the close button dim while you read and wake when you touch the screen.
 4. **Add.** Corner button, then Add. One box takes a link, a YouTube URL, a quote or a thought; Paste and Attach sit either side of Save, and Edition lists what it found before saving. On a computer, paste or drag anywhere.
 5. **Fading.** A save left untouched for three weeks, or moved later eight times, fades: it stops appearing in editions and waits in the Tideline at the bottom of the front page. Nothing is let go without your verdict: tap Keep for three more weeks, or Let go. Items within a week of fading show the days left and a *Read today* button.
-6. **Back.** On the reader or any sheet, pull down from the top and release to go back, as in Tabs.
+6. **Back.** In the reader, pull down from the top and release to go back to the front page, as in Tabs. Sheets close with a plain drag down.
 
 ## AI (optional)
 
@@ -31,11 +31,13 @@ Add an Anthropic API key in Settings. It stays in this browser's storage and is 
 | --- | --- | --- |
 | Enrich | Each new save | The item's text or URL; photos as a downscaled image; PDFs as the document. Returns a title, why it matters, tags, time, what it was saved for (read, watch, reference, idea, task), up to three key points, any text in a photo, and turns a note that is really a quotation into a quote |
 | Rank | First open each day, or Settings › Rebuild | Titles and tags of your queue, plus what you finished and let go |
-| Discover | Settings or the end of an edition | Your top interests and recent reads; the model searches the web |
+| Discover | Settings or the end of an edition | With a Perplexity key: three search queries built from your top interests go to Perplexity's Search API (`api.perplexity.ai/search`, last month only), and Claude picks the best fits if its key is set. Without one: your interests and recent reads go to Claude, which searches the web |
 
 Your verdicts are the learning signal: finished and read-now items raise their tags; let-go items lower them. Ranking blends the AI score (60%) with a local score (40%) built from age, deferrals and those tag affinities, so the app still orders sensibly with no key at all. AI suggestions are labeled, go through triage like anything else, and are capped at one per edition.
 
-Default model: `claude-haiku-5-5`, changeable in Settings. Every AI action is a paid API call on your account.
+Optional Perplexity key, also in Settings, sent only to Perplexity. Discovery works with either key on its own. Perplexity's API can't read your Perplexity history; share answers or articles from Perplexity into Edition and your verdicts on them steer later searches.
+
+Model: `claude-haiku-5-5`. Every AI action is a paid API call on your account.
 
 ## Samples
 
