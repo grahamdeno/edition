@@ -29,5 +29,7 @@ export const I = {
   next: svg('<path d="M9 5l7 7-7 7"/>'),
   prev: svg('<path d="M15 5l-7 7 7 7"/>'),
   down: svg('<path d="M12 5v13M6.5 12.5L12 18l5.5-5.5"/>'),
+  edit: svg('<path d="M4.5 19.5l1-4.2L15.8 5a2 2 0 0 1 2.9 0l.3.3a2 2 0 0 1 0 2.9L8.7 18.5z"/><path d="M13.5 7.3l3.2 3.2"/>'),
+  trash: svg('<path d="M4.5 7h15M9.5 7V4.8h5V7"/><path d="M6.5 7l.9 12.2a1.5 1.5 0 0 0 1.5 1.3h6.2a1.5 1.5 0 0 0 1.5-1.3L17.5 7"/><path d="M10 11v6M14 11v6"/>'),
   keep: svg('<path d="M7 4.5h10v15l-5-3.5-5 3.5z"/>'),
 };
