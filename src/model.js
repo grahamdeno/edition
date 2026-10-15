@@ -332,7 +332,9 @@ export function interestProfile(items) {
   const bump = (map, key, by) => { if (key) map[key] = (map[key] || 0) + by; };
   for (const it of items) {
     let w = 0;
-    if (it.status === STATUS.DONE) w = it.readNow ? 1.5 : 1;
+    // Suggestions: a yes counts more; a no is handled by the suggestion profile, not here.
+    if (it.suggested && it.status === STATUS.ARCHIVED) continue;
+    if (it.status === STATUS.DONE) w = it.readNow || it.suggested ? 1.5 : 1;
     else if (it.status === STATUS.ARCHIVED && !it.washedOut) w = -1;
     else if (it.status === STATUS.ARCHIVED && it.washedOut) w = -0.5;
     if (!w) continue;
@@ -502,4 +504,78 @@ export function fading(items, edition, { now = Date.now(), limit = 5, within = 7
     .filter((e) => e.faded || e.left <= within)
     .sort((a, b) => Number(b.faded) - Number(a.faded) || a.left - b.left || b.days - a.days)
     .slice(0, limit);
+}
+
+/* ---- Suggestions: what the AI suggests, and what your answers teach it ----
+ * A suggestion is an item Find something new brought in (suggested: true).
+ * Your verdicts on suggestions train a separate, durable suggestion profile,
+ * so "not for me" on an AI pick never pulls down your own saves.
+ */
+
+export const SUGGESTIONS_PER_DAY = 2;
+export const WHY_NOT = Object.freeze({
+  TOPIC: "topic",   // Not my topic: lower these topics for suggestions
+  KNOWN: "known",   // Already know this: no penalty; go deeper next time
+  LONG: "long",     // Too long: lean to shorter pieces
+  SITE: "site",     // Don't trust this site: never suggest from it again
+});
+export const WHY_NOT_LABEL = {
+  topic: "Not my topic", known: "Already know this", long: "Too long", site: "Don't trust this site",
+};
+
+export function emptySuggestProfile() {
+  return { topics: {}, deeper: {}, blocked: [], shorter: 0, updatedAt: 0 };
+}
+
+/**
+ * Fold one verdict on a suggestion into the profile. Keep and Done count more
+ * than they would on your own saves: a yes to something you didn't pick is a
+ * strong signal. A plain Let go with no reason is a mild no on its topics.
+ */
+export function learnFromSuggestion(profile, item, verdict, whyNot = null, now = Date.now()) {
+  const p = {
+    ...emptySuggestProfile(), ...profile,
+    topics: { ...(profile?.topics || {}) }, deeper: { ...(profile?.deeper || {}) }, blocked: [...(profile?.blocked || [])],
+  };
+  const tags = (item.tags || []).map((t) => String(t).toLowerCase()).filter(Boolean);
+  const bump = (map, by) => tags.forEach((t) => { map[t] = Math.round(((map[t] || 0) + by) * 10) / 10; if (map[t] === 0) delete map[t]; });
+  if (verdict === VERDICT.DONE || verdict === VERDICT.READ_NOW) bump(p.topics, 1.5);
+  else if (verdict === VERDICT.LATER) bump(p.topics, 1);
+  else if (verdict === VERDICT.LET_GO) {
+    if (whyNot === WHY_NOT.TOPIC) bump(p.topics, -1.5);
+    else if (whyNot === WHY_NOT.KNOWN) bump(p.deeper, 1);
+    else if (whyNot === WHY_NOT.LONG) p.shorter = Math.min(5, (p.shorter || 0) + 1);
+    else if (whyNot === WHY_NOT.SITE) { const h = hostOf(item.url); if (h && !p.blocked.includes(h)) p.blocked.push(h); }
+    else bump(p.topics, -0.5);
+  }
+  p.updatedAt = now;
+  return p;
+}
+
+/** The longest piece worth suggesting, in minutes (null: no limit yet). */
+export function suggestMaxMinutes(profile) {
+  const s = profile?.shorter || 0;
+  return s <= 0 ? null : Math.max(5, 30 - s * 5);
+}
+
+/** The profile as instructions for whoever does the searching. */
+export function suggestionGuide(profile) {
+  const p = { ...emptySuggestProfile(), ...profile };
+  const sorted = (map, sign) => Object.entries(map).filter(([, v]) => sign * v > 0).sort((a, b) => sign * (b[1] - a[1])).map(([t]) => t);
+  const welcome = sorted(p.topics, 1).slice(0, 8), avoid = sorted(p.topics, -1).slice(0, 10), deeper = sorted(p.deeper, 1).slice(0, 6);
+  const max = suggestMaxMinutes(p);
+  return [
+    welcome.length && `Topics they welcomed from past suggestions: ${welcome.join(", ")}.`,
+    avoid.length && `Topics they turned down; avoid them: ${avoid.join(", ")}.`,
+    deeper.length && `They already know the basics of: ${deeper.join(", ")}. Only suggest advanced or unusual pieces on these.`,
+    max && `Keep it short: nothing over about ${max} minutes to read or watch.`,
+    p.blocked.length && `Never suggest anything from: ${p.blocked.join(", ")}.`,
+  ].filter(Boolean).join("\n");
+}
+
+/** Drop picks from blocked sites and, with a length limit, ones clearly too long. */
+export function screenSuggestions(picks, profile) {
+  const blocked = new Set(profile?.blocked || []);
+  const max = suggestMaxMinutes(profile);
+  return picks.filter((p) => !blocked.has(hostOf(p.url)) && !(max && p.minutes && p.minutes > max * 1.5));
 }

@@ -192,12 +192,14 @@ export async function rank(queue, profile) {
  * Find a few new things worth reading, using the web search tool.
  * Returns [{ title, url, why, tags }].
  */
-export async function discover(profile, { count = 3, known = new Set() } = {}) {
-  if (settings.pplxEnabled()) return pplxDiscover(profile, { count, known });
-  return claudeDiscover(profile, { count });
+export async function discover(profile, { count = 3, known = new Set(), guide = "" } = {}) {
+  if (settings.pplxEnabled()) return pplxDiscover(profile, { count, known, guide });
+  return claudeDiscover(profile, { count, guide });
 }
 
-async function claudeDiscover(profile, { count = 3 } = {}) {
+const BECAUSE = 'why: one plain sentence, max 120 chars, starting "Because you", naming what they finished or keep saving that this connects to';
+
+async function claudeDiscover(profile, { count = 3, guide = "" } = {}) {
   const interests = topTags(profile, 10);
   const kept = profile.kept.slice(0, 10).map((i) => `- ${i.title}${i.url ? ` (${i.url})` : ""}`).join("\n");
   const dropped = profile.dropped.slice(0, 6).map((i) => `- ${i.title}`).join("\n");
@@ -207,8 +209,9 @@ async function claudeDiscover(profile, { count = 3 } = {}) {
     `papers or talks, published in the last year, not news briefs or listicles. Avoid anything they already have.\n\n` +
     `Interests, strongest first: ${interests.join(", ") || "(learn from the list below)"}\n` +
     `Recently finished:\n${kept || "(none)"}\n` +
-    `Recently let go (avoid these directions):\n${dropped || "(none)"}\n\n` +
-    `Search, then reply with JSON only: {"picks":[{"title":string,"url":string,"why":string (max 120 chars, plain, why it fits them),"tags":[1-3 lowercase words],"minutes":integer}]}`;
+    `Recently let go (avoid these directions):\n${dropped || "(none)"}\n` +
+    `${guide ? `What their answers to past suggestions taught:\n${guide}\n` : ""}\n` +
+    `Search, then reply with JSON only: {"picks":[{"title":string,"url":string,"why":string (${BECAUSE}),"tags":[1-3 lowercase words],"minutes":integer}]}`;
   const data = await call({
     content: prompt,
     maxTokens: 2500,
@@ -363,7 +366,7 @@ const PICKS_SCHEMA = {
   additionalProperties: false,
 };
 
-async function pplxDiscover(profile, { count = 3, known = new Set() } = {}) {
+async function pplxDiscover(profile, { count = 3, known = new Set(), guide = "" } = {}) {
   const interests = topTags(profile, 8);
   const kept = profile.kept.slice(0, 10).map((i) => `- ${i.title}${tagStr(i)}`).join("\n");
   const dropped = profile.dropped.slice(0, 6).map((i) => `- ${i.title}`).join("\n");
@@ -375,8 +378,9 @@ async function pplxDiscover(profile, { count = 3, known = new Set() } = {}) {
     `Interests, strongest first: ${interests.join(", ") || "(learn from the list below)"}\n` +
     `Recently finished:\n${kept || "(none)"}\n` +
     `Recently let go (avoid these directions):\n${dropped || "(none)"}\n` +
-    `Already saved (skip): ${[...known].slice(0, 30).join(" ") || "(none)"}\n\n` +
-    `For each pick: the title, the exact URL from your search results, why it fits them (one plain sentence, max 120 characters), ` +
+    `Already saved (skip): ${[...known].slice(0, 30).join(" ") || "(none)"}\n` +
+    `${guide ? `What their answers to past suggestions taught:\n${guide}\n` : ""}\n` +
+    `For each pick: the title, the exact URL from your search results, ${BECAUSE}, ` +
     `1-3 lowercase topic tags, and minutes to read or watch.`;
   const data = await pplxAgent({
     preset: PPLX_PRESET,
