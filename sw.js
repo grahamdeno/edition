@@ -4,7 +4,7 @@
  * Bump VERSION with each release so phones pick up the new shell.
  */
 
-const VERSION = "3.4.1";
+const VERSION = "3.5.0";
 const CACHE = `edition-${VERSION}`;
 const SHELL = [
   "./",
@@ -25,8 +25,14 @@ const SHELL = [
   "icons/apple-touch-icon.png",
 ];
 
+// Install fetches the whole shell fresh from the server (past the browser's
+// HTTP cache), so a release is never a mix of old and new files.
 self.addEventListener("install", (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  e.waitUntil(
+    caches.open(CACHE)
+      .then((c) => c.addAll(SHELL.map((u) => new Request(u, { cache: "reload" }))))
+      .then(() => self.skipWaiting()),
+  );
 });
 
 self.addEventListener("activate", (e) => {
@@ -46,7 +52,7 @@ self.addEventListener("fetch", (e) => {
   if (e.request.method !== "GET" || url.origin !== location.origin) return;
   // Network first so a deploy shows up on the next launch; cache when offline.
   e.respondWith(
-    fetch(e.request)
+    fetch(e.request, { cache: "no-cache" }) // revalidate, so a reload after an update gets the new files
       .then((res) => {
         if (res.ok) {
           const copy = res.clone();

@@ -192,8 +192,8 @@ a { color: inherit; text-decoration: none; }
   background-size: 260% 100%; background-position: 150% 0;
 }
 /* Coin spinning to a stop: fast turns that slow, a last wobble, then flat. */
-.fab.spin { animation: coin 1.9s linear both, rim 1.9s ease-out both; }
-.fab.spin::after { animation: glint 1.9s linear both; }
+.fab.spin { animation: coin 2.4s linear both, rim 2.4s ease-out both; }
+.fab.spin::after { animation: glint 2.4s linear both; }
 @keyframes coin {
   0%   { transform: perspective(260px) rotateY(0deg); }
   18%  { transform: perspective(260px) rotateY(360deg); }
@@ -222,16 +222,8 @@ a { color: inherit; text-decoration: none; }
   30%      { border-color: rgba(240, 190, 140, 0.95); box-shadow: 0 0 18px rgba(217, 149, 95, 0.45), 0 4px 16px rgba(0, 0, 0, 0.4); }
 }
 .fab .i { width: 24px; height: 24px; transition: transform 0.2s ease; }
+.corner.open { z-index: 27; opacity: 1; transform: none; } /* + stays above the ring, as its close button */
 .corner.open .fab .i { transform: rotate(45deg); }
-.fan { display: none; flex-direction: column; align-items: flex-end; gap: 8px; }
-.corner.open .fan { display: flex; }
-.fan button {
-  display: flex; align-items: center; gap: 10px; height: 46px; padding: 0 16px 0 14px; border-radius: 23px;
-  background: rgba(36, 37, 42, 0.94); border: 1px solid var(--line); font-size: 15px; white-space: nowrap;
-  -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
-}
-.fan button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
-.fan .count { font-size: 12px; color: var(--accent); }
 .scrim { position: fixed; inset: 0; z-index: 20; background: rgba(0, 0, 0, 0.45); }
 
 /* ================= Reader (stories) ================= */
@@ -427,7 +419,7 @@ a { color: inherit; text-decoration: none; }
 .flip { position: relative; width: 100%; height: 100%; transform-style: preserve-3d; transition: transform 0.5s cubic-bezier(0.3, 0.7, 0.2, 1); }
 .feed-card.turned .flip { transform: rotateY(180deg); }
 .face {
-  position: absolute; inset: 0; padding: 0 92px 8px var(--gutter-l); text-align: left;
+  position: absolute; inset: 0; padding: 0 var(--gutter-r) 8px var(--gutter-l); text-align: left;
   display: flex; flex-direction: column; justify-content: flex-end; gap: 14px; overflow: hidden;
   -webkit-backface-visibility: hidden; backface-visibility: hidden;
 }
@@ -445,7 +437,7 @@ a { color: inherit; text-decoration: none; }
 
 /* Face up: what it is, with your reason in small type */
 .card-face { transform: rotateY(180deg); }
-.card-face .pic { position: relative; flex: 0 1 auto; min-height: 0; max-height: 44%; border-radius: 16px; overflow: hidden; background: #1E1F23; margin-right: -72px; }
+.card-face .pic { position: relative; flex: 0 1 auto; min-height: 0; max-height: 44%; border-radius: 16px; overflow: hidden; background: #1E1F23; }
 .card-face .pic img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .card-face .pic .play { position: absolute; inset: 0; display: grid; place-items: center; color: #fff; }
 .card-face .ttl { font: 400 48px/0.98 var(--serif); text-wrap: balance; overflow-wrap: anywhere; }
@@ -461,20 +453,32 @@ a { color: inherit; text-decoration: none; }
 .open-hint { display: inline-flex; align-items: center; gap: 4px; font-size: 14px; font-weight: 600; color: var(--text); }
 .open-hint .i { width: 16px; height: 16px; }
 
-/* The rail: verdicts down the right side, above the corner button */
-.rail {
-  position: absolute; z-index: 4; right: calc(var(--safe-r) + 20px); bottom: calc(var(--safe-b) + 112px);
-  display: flex; flex-direction: column; align-items: center; gap: 14px;
+/* The + ring, as on Tabs' Play button */
+.fab { touch-action: none; -webkit-touch-callout: none; }
+.corner.open { z-index: 27; opacity: 1; transform: none; } /* + stays above the ring, as its close button */
+.corner.open .fab .i { transform: rotate(45deg); }
+.ringx { position: fixed; inset: 0; z-index: 26; opacity: 0; transition: opacity 0.14s; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.ringx.on { opacity: 1; }
+.ring-bg {
+  position: fixed; width: 400px; height: 400px; margin: -200px 0 0 -200px; border-radius: 50%;
+  background: rgba(22, 23, 27, 0.94); border: 1px solid var(--line); box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+  transform: scale(0.7); transition: transform 0.18s cubic-bezier(0.2, 1, 0.3, 1);
 }
-.rail:empty { display: none; }
-.rail-item { display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 11px; color: #C9C2B9; }
-.rail-item button {
-  width: 50px; height: 50px; border-radius: 25px; display: grid; place-items: center;
-  background: rgba(30, 31, 35, 0.92); border: 1px solid rgba(236, 232, 227, 0.16);
+.ring-bg.wide { width: 560px; height: 560px; margin: -280px 0 0 -280px; }
+.ringx.on .ring-bg { transform: none; }
+.ri {
+  position: fixed; width: 50px; height: 50px; margin: -25px 0 0 -25px; border-radius: 50%; display: grid; place-items: center;
+  background: #24252A; border: 1px solid rgba(236, 232, 227, 0.16); color: var(--text);
+  transform: scale(0.6); opacity: 0; transition: transform 0.18s cubic-bezier(0.2, 1, 0.3, 1), opacity 0.14s, border-color 0.1s, box-shadow 0.1s;
 }
-.rail-item button:active { transform: scale(0.94); }
-.rail-item button.primary { width: 56px; height: 56px; border-radius: 28px; background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
-.rail-item button.primary .i { width: 24px; height: 24px; }
+.ringx.on .ri { transform: none; opacity: 1; }
+.ri span { position: absolute; top: 100%; left: 50%; transform: translateX(-50%); margin-top: 4px; font-size: 11px; color: #C9C2B9; white-space: nowrap; pointer-events: none; }
+.ri span.in { top: 50%; margin-top: 0; transform: translate(-50%, -50%); }
+.ri.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.ringx.on .ri.on { transform: scale(1.16); border-color: var(--accent); box-shadow: 0 0 14px rgba(217, 149, 95, 0.45); }
+.ri.on span { color: var(--accent); font-weight: 600; }
+@media (prefers-reduced-motion: reduce) { .ringx, .ring-bg, .ri { transition: none; } }
 
 /* Finish card */
 .feed-card.end-card { bottom: calc(var(--safe-b) + 16px); overflow-y: auto; touch-action: pan-y; perspective: none; scrollbar-width: none; }

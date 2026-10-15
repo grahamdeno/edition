@@ -27,7 +27,7 @@ import { tick, unlock, soundOn, setSound } from "./feel.js";
 import { I } from "./icons.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "3.4.1";
+export const VERSION = "3.5.0";
 const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 
 const KIND_LABEL = { link: "Link", note: "Note", quote: "Quote", photo: "Photo", pdf: "PDF", text: "Text", video: "Video", audio: "Audio", file: "File" };
@@ -81,7 +81,26 @@ async function boot() {
   openFeed(); // new saves (including anything just shared) come first in the feed
   startCoin();
   enrichPending();
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+  registerWorker();
+}
+
+/*
+ * Updates, as in Tabs. When a new release has been saved in the background,
+ * offer to switch to it now ("Update ready · Reload"); otherwise it's used on
+ * the next launch. Coming back to the app checks for a release too, since an
+ * installed app that's only resumed never reloads the page.
+ */
+function registerWorker() {
+  if (!("serviceWorker" in navigator)) return;
+  const hadWorker = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (hadWorker) toast("Update ready", { action: "Reload", onAction: () => location.reload(), sticky: true });
+  });
+  navigator.serviceWorker.register("sw.js").then((reg) => {
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") reg?.update?.().catch(() => {});
+    });
+  }).catch(() => {});
 }
 
 /** Sample items, loaded once per device so a new install has something to show. */
@@ -401,15 +420,7 @@ function renderFront() {
     </section>` : ""}
   </main>
   <div class="corner" id="corner">
-    <div class="fan" id="fan">
-      <button type="button" class="primary" data-act="add">${I.plus}Add</button>
-      ${state.feed
-        ? `<button type="button" data-act="front">${I.edition}Front page</button>`
-        : `<button type="button" data-act="feed">${I.read}Back to the feed</button>`}
-      <button type="button" data-act="library">${I.search}Search</button>
-      <button type="button" data-act="settings">${I.settings}Settings</button>
-    </div>
-    <button class="fab" type="button" id="fab" aria-label="Menu" aria-expanded="false">${I.plus}</button>
+    <button class="fab" type="button" id="fab" aria-label="Menu: tap, or hold and slide" aria-expanded="${ringEl ? "true" : "false"}">${I.plus}</button>
   </div>`;
   const front = $("#front");
   front.scrollTop = scrollTop;
@@ -508,10 +519,9 @@ function bindFront() {
   app.querySelectorAll('[data-act="front"]').forEach((b) => b.addEventListener("click", () => { closeMenu(); closeFeed(); }));
   app.querySelectorAll('[data-act="feed"]').forEach((b) => b.addEventListener("click", () => { closeMenu(); openFeed(); }));
 
-  // The corner button: tap to open the menu; it dims while you scroll and after a few idle seconds.
-  const corner = $("#corner"), fab = $("#fab");
-  fab.addEventListener("click", () => (corner.classList.contains("open") ? closeMenu() : openMenu()));
-  front.addEventListener("scroll", () => { if (!corner.classList.contains("open")) sleepCorner(); }, { passive: true });
+  // The corner button: tap for the ring, or hold and slide; it dims while you scroll and after a few idle seconds.
+  bindFab($("#fab"));
+  front.addEventListener("scroll", () => { if (!ringEl) sleepCorner(); }, { passive: true });
   wakeCorner();
 }
 
@@ -525,7 +535,7 @@ const COIN_EVERY_MS = 6000;
 let coinTimer = 0;
 function spinCoin() {
   const fab = $("#fab"), corner = $("#corner");
-  if (!fab || state.reader || $(".sheet-wrap") || corner.classList.contains("open")) return;
+  if (!fab || state.reader || $(".sheet-wrap") || ringEl) return;
   if (document.hidden || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
   fab.classList.remove("spin");
   void fab.offsetWidth; // restart the animation
@@ -549,25 +559,147 @@ function wakeCorner() {
 }
 function sleepCorner() {
   const corner = $("#corner");
-  if (corner && !corner.classList.contains("open")) corner.classList.add("asleep");
+  if (corner && !ringEl) corner.classList.add("asleep");
 }
-function openMenu() {
-  const corner = $("#corner");
-  corner.classList.add("open");
-  corner.classList.remove("asleep");
-  $("#fab").setAttribute("aria-expanded", "true");
-  const scrim = document.createElement("div");
-  scrim.className = "scrim";
-  scrim.addEventListener("click", closeMenu);
-  app.insertBefore(scrim, corner);
+/*
+ * The + ring, as on Tabs' Play button. Tap + and a ring of controls opens
+ * around it: tap one. Or hold + and slide your thumb to one and let go.
+ * Inner arc: what you can do with the card on screen (Read, Done, Keep or
+ * Later, Let go). Outer arc: Add, Search, Front page or Feed, Settings.
+ * Both arcs run from straight left of + to straight up, where a right thumb reaches.
+ */
+const RING_HOLD_MS = 400;
+const RING_R = [140, 226];
+const RING_FROM = 196; // degrees: just above straight left, so the lowest controls clear the bottom edge
+let ringEl = null;
+
+function ringItems() {
+  const f = state.feed;
+  const id = f && !state.reader ? f.ids[f.index] : null;
+  const item = id && byId(id);
+  const inner = [];
+  if (item) {
+    const keep = item.status === STATUS.INBOX || isFaded(item);
+    // Listed left to up: Read sits straight up, nearest the thumb's natural sweep.
+    inner.push(
+      { id: "letgo", label: "Let go", icon: I.letGo, run: () => feedVerdict(id, VERDICT.LET_GO) },
+      { id: "later", label: keep ? "Keep" : "Later", icon: keep ? I.keep : I.later, run: () => feedVerdict(id, VERDICT.LATER) },
+      { id: "done", label: "Done", icon: I.done, run: () => feedVerdict(id, VERDICT.DONE) },
+      { id: "read", label: "Read", icon: I.read, primary: true, run: () => openStories("single", id) },
+    );
+  }
+  const outer = [
+    { id: "settings", label: "Settings", icon: I.settings, run: openSettings },
+    { id: "library", label: "Search", icon: I.search, run: () => { state.libQuery = ""; openLibrary(); } },
+    f ? { id: "front", label: "Front page", icon: I.edition, run: closeFeed } : { id: "feed", label: "Feed", icon: I.read, run: openFeed },
+    { id: "add", label: "Add", icon: I.plus, primary: !item, run: openAdd },
+  ];
+  return inner.length ? [inner, outer] : [outer];
 }
-function closeMenu() {
-  const corner = $("#corner");
-  if (!corner) return;
-  corner.classList.remove("open");
-  $("#fab").setAttribute("aria-expanded", "false");
-  $(".scrim")?.remove();
+
+function openRing(live) {
+  closeRing(true);
+  const fab = $("#fab");
+  if (!fab) return;
+  $(".toast")?.remove(); // nothing sits over the ring
   wakeCorner();
+  const r = fab.getBoundingClientRect(), cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+  const arcs = ringItems();
+  const all = arcs.flat();
+  let buttons = "";
+  arcs.forEach((list, ai) => list.forEach((it, k) => {
+    const deg = RING_FROM + (list.length === 1 ? 270 - RING_FROM : ((270 - RING_FROM) * k) / (list.length - 1));
+    const a = (deg * Math.PI) / 180, rad = RING_R[ai];
+    // Inner arc: labels sit inside the arc, toward +, where there's room. Outer arc: under each control.
+    const lab = ai === 0
+      ? `<span class="in" style="left:calc(50% + ${(-Math.cos(a) * 46).toFixed(1)}px);top:calc(50% + ${(-Math.sin(a) * 46).toFixed(1)}px)">${esc(it.label)}</span>`
+      : `<span>${esc(it.label)}</span>`;
+    buttons += `<button class="ri${it.primary ? " primary" : ""}" type="button" data-r="${it.id}" aria-label="${esc(it.label)}" style="left:${(cx + rad * Math.cos(a)).toFixed(1)}px;top:${(cy + rad * Math.sin(a)).toFixed(1)}px">${it.icon}${lab}</button>`;
+  }));
+  const el = document.createElement("div");
+  el.className = "ringx";
+  el.dataset.live = live ? "1" : "0";
+  el.setAttribute("role", "menu");
+  el.innerHTML = `<div class="ring-bg ${arcs.length > 1 ? "wide" : ""}" style="left:${cx}px;top:${cy}px"></div>${buttons}`;
+  document.body.appendChild(el);
+  ringEl = el;
+  fab.setAttribute("aria-expanded", "true");
+  $("#corner")?.classList.add("open");
+  requestAnimationFrame(() => el.classList.add("on"));
+  el.querySelectorAll(".ri").forEach((b) => b.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    const it = all.find((x) => x.id === b.dataset.r);
+    closeRing();
+    it?.run();
+  }));
+  el.addEventListener("click", (e) => { if (e.target === el || e.target.classList.contains("ring-bg")) closeRing(); });
+  el._items = all;
+  tick();
+}
+
+function closeRing(now = false) {
+  if (!ringEl) return;
+  const el = ringEl;
+  ringEl = null;
+  el.classList.remove("on");
+  if (now) el.remove(); else setTimeout(() => el.remove(), 150);
+  $("#fab")?.setAttribute("aria-expanded", "false");
+  $("#corner")?.classList.remove("open");
+  wakeCorner();
+}
+const closeMenu = () => closeRing();
+
+/** While the thumb is down after a hold: light the control nearest it. */
+function pickRing(x, y) {
+  if (!ringEl) return null;
+  let best = null, gap = 44;
+  ringEl.querySelectorAll(".ri").forEach((b) => {
+    const r = b.getBoundingClientRect();
+    const d = Math.hypot(x - (r.left + r.width / 2), y - (r.top + r.height / 2));
+    if (d < gap) { gap = d; best = b; }
+  });
+  ringEl.querySelectorAll(".ri").forEach((b) => b.classList.toggle("on", b === best));
+  if (best && ringEl.dataset.lit !== best.dataset.r) tick();
+  ringEl.dataset.lit = best ? best.dataset.r : "";
+  return best;
+}
+
+let fabHold = { timer: 0, x: 0, y: 0, opened: false };
+function bindFab(fab) {
+  fab.addEventListener("pointerdown", (e) => {
+    fabHold.opened = false; fabHold.x = e.clientX; fabHold.y = e.clientY;
+    clearTimeout(fabHold.timer);
+    fabHold.timer = setTimeout(() => { fabHold.opened = true; openRing(true); }, RING_HOLD_MS);
+  });
+  // After a hold, the click that follows isn't a toggle.
+  fab.addEventListener("click", (e) => {
+    clearTimeout(fabHold.timer);
+    if (fabHold.opened) { e.preventDefault(); fabHold.opened = false; return; }
+    if (ringEl) closeRing(); else openRing(false);
+  });
+  fab.addEventListener("contextmenu", (e) => e.preventDefault());
+}
+
+function bindRingGlobal() {
+  window.addEventListener("pointermove", (e) => {
+    if (!ringEl) {
+      if (fabHold.timer && Math.hypot(e.clientX - fabHold.x, e.clientY - fabHold.y) > 12) { clearTimeout(fabHold.timer); fabHold.timer = 0; }
+      return;
+    }
+    if (ringEl.dataset.live === "1") pickRing(e.clientX, e.clientY);
+  });
+  const up = () => {
+    clearTimeout(fabHold.timer); fabHold.timer = 0;
+    if (!ringEl || ringEl.dataset.live !== "1") return;
+    ringEl.dataset.live = "0";
+    const sel = ringEl.querySelector(".ri.on");
+    if (!sel) return; // let go without choosing: the ring stays open to tap
+    const it = ringEl._items.find((x) => x.id === sel.dataset.r);
+    closeRing();
+    it?.run();
+  };
+  window.addEventListener("pointerup", up);
+  window.addEventListener("pointercancel", up);
 }
 
 async function oneMore() {
@@ -812,7 +944,7 @@ function bindStoryGestures(el) {
  * edition, then a finish card. Each card starts face down on why you saved it
  * (your words when you gave them) and turns over with a tap. Swipe up for the
  * next card and down for the one before; on the first card, pull down for the
- * front page. The verdicts sit in a rail on the right.
+ * front page. The verdicts are in the + ring (hold + and slide, or tap +).
  */
 
 const FEED_STEP = 70;
@@ -835,7 +967,6 @@ function openFeed() {
     <div class="segs" id="feed-segs" aria-hidden="true"></div>
     <div class="feed-top"><span class="where" id="feed-where"></span><span class="left" id="feed-left"></span></div>
     <div class="feed-card" id="feed-card"></div>
-    <div class="rail" id="rail" role="group" aria-label="Verdict"></div>
     <div class="pull-tip" id="feed-tip" aria-hidden="true">${I.down}<span>Release for the front page</span></div>
   </div>`;
   document.body.appendChild(el);
@@ -871,10 +1002,11 @@ function feedMeta(item) {
 }
 
 function renderFeed() {
+  if (ringEl) closeRing(true);
   const f = state.feed;
   const el = $(".feed");
   if (!f || !el) return;
-  const card = $("#feed-card", el), rail = $("#rail", el);
+  const card = $("#feed-card", el);
   const settled = f.total - f.ids.length;
   $("#feed-segs", el).innerHTML = f.total > 1 ? Array.from({ length: f.total }, (_, i) => `<span class="${i < settled + f.index + 1 ? "on" : ""}"></span>`).join("") : "";
   const id = f.ids[f.index];
@@ -886,7 +1018,6 @@ function renderFeed() {
   if (!item) {
     $("#feed-where", el).textContent = dateLabel();
     $("#feed-left", el).textContent = "";
-    rail.innerHTML = "";
     card.className = "feed-card end-card";
     card.innerHTML = feedEnd();
     bindFeedEnd(card);
@@ -928,13 +1059,6 @@ function renderFeed() {
   hydrate(card);
   requestAnimationFrame(() => { card.style.transition = ""; });
 
-  const keep = inbox || isFaded(item);
-  const b = (act, label, icon, primary) => `<span class="rail-item"><button type="button" class="${primary ? "primary" : ""}" data-rail="${act}" aria-label="${label}">${icon}</button><span>${label}</span></span>`;
-  rail.innerHTML = b("read", "Read", I.read, true) + b(VERDICT.DONE, "Done", I.done) + b(VERDICT.LATER, keep ? "Keep" : "Later", keep ? I.keep : I.later) + b(VERDICT.LET_GO, "Let go", I.letGo);
-  rail.querySelectorAll("[data-rail]").forEach((x) => x.addEventListener("click", () => {
-    if (x.dataset.rail === "read") openStories("single", id);
-    else feedVerdict(id, x.dataset.rail);
-  }));
 }
 
 /** Add or change your reason for a save; it becomes the face of its card. */
@@ -1650,7 +1774,7 @@ function bindPull({ scroller, target, host, label, onBack }) {
 }
 
 let toastTimer;
-function toast(msg, { action, onAction, high = false } = {}) {
+function toast(msg, { action, onAction, high = false, sticky = false } = {}) {
   $(".toast")?.remove();
   clearTimeout(toastTimer);
   const el = document.createElement("div");
@@ -1659,10 +1783,11 @@ function toast(msg, { action, onAction, high = false } = {}) {
   el.innerHTML = `<span>${esc(msg)}</span>${action ? `<button type="button">${esc(action)}</button>` : ""}`;
   if (action) $("button", el).addEventListener("click", () => { el.remove(); onAction && onAction(); });
   document.body.appendChild(el);
-  toastTimer = setTimeout(() => el.remove(), action ? 5000 : 2500);
+  if (!sticky) toastTimer = setTimeout(() => el.remove(), action ? 5000 : 2500);
 }
 
 function wireGlobal() {
+  bindRingGlobal();
   window.addEventListener("error", (e) => noteError(e, { where: "page" }));
   window.addEventListener("unhandledrejection", (e) => noteError(e, { where: "promise" }));
   onFirstProblem(() => toast("Something went wrong. Your saves are safe.", { action: "Copy details", onAction: copyDiagnostics }));
