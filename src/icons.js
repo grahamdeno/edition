@@ -28,5 +28,6 @@ export const I = {
   menu: svg('<circle cx="6" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="18" cy="12" r="1.3"/>'),
   next: svg('<path d="M9 5l7 7-7 7"/>'),
   prev: svg('<path d="M15 5l-7 7 7 7"/>'),
+  down: svg('<path d="M12 5v13M6.5 12.5L12 18l5.5-5.5"/>'),
   keep: svg('<path d="M7 4.5h10v15l-5-3.5-5 3.5z"/>'),
 };

@@ -17,7 +17,7 @@
 import {
   VERDICT, STATUS, KIND, dayKey, applyVerdict, restore, buildEdition, editionView,
   interestProfile, estimateMinutes, counts, migrateLegacy, createItem, EDITION_SIZE,
-  detectText, draftFromFile, describeDraft, fitToTime, circling, fading,
+  detectText, draftFromFile, describeDraft, fitToTime, circling, fading, isFaded, FADE_DAYS,
 } from "./model.js";
 import * as db from "./db.js";
 import { captureText, captureFile, captureTransfer, readClipboard, captureShares } from "./capture.js";
@@ -26,7 +26,7 @@ import * as ai from "./ai.js";
 import { tick, unlock, soundOn, setSound } from "./feel.js";
 import { I } from "./icons.js";
 
-export const VERSION = "3.0.0";
+export const VERSION = "3.1.0";
 
 const KIND_LABEL = { link: "Link", note: "Note", quote: "Quote", photo: "Photo", pdf: "PDF", text: "Text", video: "Video", audio: "Audio", file: "File" };
 const TIME = [
@@ -129,6 +129,8 @@ function topUpEdition() {
 }
 
 async function addToEdition(id) {
+  const item = byId(id);
+  if (item && isFaded(item)) await saveItem(restore(item));
   topUpEdition();
   const ed = state.edition && state.edition.date === dayKey() ? state.edition : { date: dayKey(), ids: [] };
   if (ed.ids.includes(id)) return;
@@ -377,11 +379,15 @@ function renderFront() {
     </section>` : ""}
     ${waiting.length ? `<section class="sec">
       <span class="label">Tideline</span>
-      <h2>Waiting longest</h2>
-      <div class="tide">${waiting.map(({ item, days }) => `<div class="tide-row">
-        <span class="bar" style="opacity:${Math.max(0.25, 1 - days / 30).toFixed(2)}"></span>
-        <button class="txt" type="button" data-open="${esc(item.id)}"><span class="t">${esc(item.title)}</span><span class="s">In your queue ${days} day${days === 1 ? "" : "s"}</span></button>
-        <button class="rescue" type="button" data-rescue="${esc(item.id)}">Read today</button></div>`).join("")}</div>
+      <h2>Fading</h2>
+      <p class="rising">Untouched for ${FADE_DAYS / 7} weeks, a save fades out of your editions. It waits here until you decide.</p>
+      <div class="tide">${waiting.map(({ item, days, left, faded }) => `<div class="tide-row ${faded ? "faded" : ""}">
+        <span class="bar" style="opacity:${faded ? 0.18 : Math.max(0.3, left / 7).toFixed(2)}"></span>
+        <button class="txt" type="button" data-open="${esc(item.id)}"><span class="t">${esc(headline(item))}</span>
+          <span class="s">${faded ? "Faded. Your call." : `Fades in ${left} day${left === 1 ? "" : "s"}`}</span></button>
+        ${faded
+          ? `<button class="rescue ghost" type="button" data-letgo="${esc(item.id)}">Let go</button><button class="rescue" type="button" data-keep="${esc(item.id)}">Keep</button>`
+          : `<button class="rescue" type="button" data-rescue="${esc(item.id)}">Read today</button>`}</div>`).join("")}</div>
     </section>` : ""}
   </main>
   <div class="corner" id="corner">
@@ -449,6 +455,20 @@ function bindFront() {
     tick(true);
     renderFront();
     toast("Added to today's edition.");
+  }));
+  front.querySelectorAll("[data-keep]").forEach((b) => b.addEventListener("click", async () => {
+    const before = byId(b.dataset.keep);
+    await saveItem(restore(before));
+    tick(true);
+    renderFront();
+    toast("Kept. Back in your queue for three more weeks.", { action: "Undo", onAction: async () => { await saveItem(before); renderFront(); } });
+  }));
+  front.querySelectorAll("[data-letgo]").forEach((b) => b.addEventListener("click", async () => {
+    const before = byId(b.dataset.letgo);
+    await saveItem(applyVerdict(before, VERDICT.LET_GO, { stage: "edition" }));
+    tick(true);
+    renderFront();
+    toast("Let go.", { action: "Undo", onAction: async () => { await saveItem(before); renderFront(); } });
   }));
   const more = $('[data-act="one-more"]', front);
   if (more) more.addEventListener("click", oneMore);
@@ -534,6 +554,7 @@ function openStories(mode, startId) {
   document.body.appendChild(el);
   el.querySelector("[data-close]").addEventListener("click", closeReader);
   bindStoryGestures(el);
+  bindPull({ scroller: $("#story", el), target: $("#story", el), host: $(".reader-inner", el), label: "Release for the front page", onBack: closeReader });
   el.addEventListener("pointerdown", wakeReader, true);
   renderStory();
   wakeReader();
@@ -584,8 +605,8 @@ function renderStory() {
   const open = item.status === STATUS.QUEUED || item.status === STATUS.INBOX;
   const b = (v, label, icon, primary) => `<button type="button" class="${primary ? "primary" : ""}" data-v="${v}">${icon}<span>${label}</span></button>`;
   if (open) {
-    const later = item.status === STATUS.INBOX ? "Keep" : "Later";
-    verdicts.innerHTML = b(VERDICT.LET_GO, "Let go", I.letGo) + b(VERDICT.LATER, later, item.status === STATUS.INBOX ? I.keep : I.later) + b(VERDICT.DONE, "Done", I.done, true);
+    const keep = item.status === STATUS.INBOX || isFaded(item);
+    verdicts.innerHTML = b(VERDICT.LET_GO, "Let go", I.letGo) + b(VERDICT.LATER, keep ? "Keep" : "Later", keep ? I.keep : I.later) + b(VERDICT.DONE, "Done", I.done, true);
   } else {
     verdicts.innerHTML = `<button type="button" data-requeue>${I.requeue}<span>Requeue</span></button><button type="button" class="primary" data-close>${I.done}<span>Close</span></button>`;
   }
@@ -648,7 +669,8 @@ async function storyVerdict(id, verdict) {
   const before = byId(id);
   if (!r || !before) return;
   const stage = before.status === STATUS.INBOX ? "inbox" : "edition";
-  const after = applyVerdict(before, verdict, { stage });
+  // Keeping a faded item resets its clock instead of counting another deferral.
+  const after = verdict === VERDICT.LATER && isFaded(before) ? restore(before) : applyVerdict(before, verdict, { stage });
   await saveItem(after);
   tick(true);
   const at = r.ids.indexOf(id);
@@ -659,8 +681,8 @@ async function storyVerdict(id, verdict) {
   if (story) { story.style.opacity = "0"; story.style.transform = verdict === VERDICT.LET_GO ? "translateX(-40px)" : "translateY(-24px)"; }
   setTimeout(renderStory, 140);
   const words = {
-    [VERDICT.LET_GO]: after.washedOut ? "Washed out." : "Let go.",
-    [VERDICT.LATER]: stage === "inbox" ? "Kept for a future edition." : after.washedOut ? "Moved later too often. Washed out." : "Moved to a later edition.",
+    [VERDICT.LET_GO]: "Let go.",
+    [VERDICT.LATER]: stage === "inbox" ? "Kept for a future edition." : after.fadedAt ? "Moved later eight times. It's waiting in the Tideline." : "Moved to a later edition.",
     [VERDICT.DONE]: "Marked done.",
   };
   toast(words[verdict], {
@@ -895,7 +917,7 @@ function renderList() {
   list.innerHTML = rows.length
     ? rows.map((i) => `<button class="lib-row" type="button" data-open="${esc(i.id)}">
         <span class="t">${esc(headline(i))}</span><span class="a">${esc(ago(i.created, true))}</span>
-        <span class="k">${esc(KIND_LABEL[i.kind] || "")} · ${statusWord[i.status] || ""}${i.washedOut ? " · washed out" : ""}</span></button>`).join("")
+        <span class="k">${esc(KIND_LABEL[i.kind] || "")} · ${isFaded(i) ? "Faded" : statusWord[i.status] || ""}</span></button>`).join("")
     : '<p class="empty">Nothing matches.</p>';
   list.querySelectorAll("[data-open]").forEach((b) => b.addEventListener("click", () => { closeSheet(); openStories("single", b.dataset.open); }));
 }
@@ -910,8 +932,6 @@ function openSettings() {
       <h3>AI (Anthropic API)</h3>
       <div class="field"><label for="set-key">API key</label>
         <input id="set-key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-ant-…" value="${esc(ai.settings.key())}"></div>
-      <div class="field"><label for="set-model">Model</label>
-        <input id="set-model" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" value="${esc(ai.settings.model())}"></div>
       <div class="two">
         <button class="btn primary" type="button" id="set-save">Save and test</button>
         <button class="btn" type="button" id="set-clear">Remove key</button>
@@ -958,7 +978,7 @@ function openSettings() {
   const say = (el, msg, err) => { el.textContent = msg; el.classList.toggle("err", !!err); };
   $("#set-save", wrap).addEventListener("click", async () => {
     ai.settings.setKey($("#set-key", wrap).value.trim());
-    ai.settings.setModel($("#set-model", wrap).value.trim() || ai.DEFAULT_MODEL);
+    ai.settings.setModel(""); // always the default model; clears any old override
     if (!ai.settings.enabled()) { say(st, "No key saved."); return; }
     say(st, "Testing…");
     try {
@@ -1036,6 +1056,8 @@ function sheet(html, { tall = false, label = "" } = {}) {
   wrap.addEventListener("click", (e) => { if (e.target === wrap) closeSheet(); });
   wrap.querySelectorAll("[data-close]").forEach((b) => b.addEventListener("click", closeSheet));
   document.body.appendChild(wrap);
+  const panel = $(".sheet", wrap);
+  bindPull({ scroller: panel, target: panel, host: wrap, label: "Release to close", onBack: closeSheet });
   return wrap;
 }
 
@@ -1044,6 +1066,50 @@ function closeSheet() {
   if (s) s.remove();
   if (lastFocus && lastFocus.focus && document.contains(lastFocus)) lastFocus.focus();
   lastFocus = null;
+}
+
+/*
+ * Pull down and release to go back, as in Tabs. At the top of a scrolling
+ * pane, pull down: the pane follows at half the finger's pace and a pill says
+ * where release will take you; past 90px it lights up, and letting go goes
+ * back. Pull less and it springs back. Touch events, because iOS hands a
+ * pointer gesture to the scroller before a pull can claim it.
+ */
+const PULL = 90;
+function bindPull({ scroller, target, host, label, onBack }) {
+  const tip = document.createElement("div");
+  tip.className = "pull-tip";
+  tip.setAttribute("aria-hidden", "true");
+  tip.innerHTML = `${I.down}<span>${esc(label)}</span>`;
+  host.appendChild(tip);
+  let x0 = 0, y0 = null, dy = 0, lit = false;
+  const reset = () => {
+    y0 = null; dy = 0; lit = false;
+    tip.style.opacity = ""; tip.classList.remove("go");
+    target.style.transition = "transform 0.2s ease";
+    target.style.transform = "";
+  };
+  scroller.addEventListener("touchstart", (e) => {
+    if (scroller.scrollTop > 0 || e.touches.length !== 1) return;
+    if (e.target.closest("input, textarea, iframe, video, audio, .chips, .tray")) return;
+    x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; dy = 0;
+  }, { passive: true });
+  scroller.addEventListener("touchmove", (e) => {
+    if (y0 == null) return;
+    const dx = e.touches[0].clientX - x0;
+    dy = e.touches[0].clientY - y0;
+    if (dy <= 0 || scroller.scrollTop > 0 || Math.abs(dx) > dy) { if (dy < -4 || Math.abs(dx) > Math.max(dy, 12)) reset(); return; }
+    e.preventDefault();
+    target.style.transition = "none";
+    target.style.transform = `translateY(${Math.min(dy, PULL * 1.6) * 0.5}px)`;
+    tip.style.opacity = String(Math.min(1, dy / PULL));
+    const go = dy >= PULL;
+    if (go && !lit) tick();
+    lit = go;
+    tip.classList.toggle("go", go);
+  }, { passive: false });
+  scroller.addEventListener("touchend", () => { if (y0 == null) return; const go = dy >= PULL; reset(); if (go) onBack(); });
+  scroller.addEventListener("touchcancel", reset);
 }
 
 let toastTimer;
