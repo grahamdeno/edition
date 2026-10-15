@@ -31,11 +31,15 @@ Add an Anthropic API key in Settings. It stays in this browser's storage and is 
 | --- | --- | --- |
 | Enrich | Each new save | The item's text or URL; photos as a downscaled image; PDFs as the document. Returns a title, why it matters, tags, time, what it was saved for (read, watch, reference, idea, task), up to three key points, any text in a photo, and turns a note that is really a quotation into a quote |
 | Rank | First open each day, or Settings › Rebuild | Titles and tags of your queue, plus what you finished and let go |
-| Discover | Settings or the end of an edition | With a Perplexity key: three search queries built from your top interests go to Perplexity's Search API (`api.perplexity.ai/search`, last month only), and Claude picks the best fits if its key is set. Without one: your interests and recent reads go to Claude, which searches the web |
+| Discover | Settings or the end of an edition | With a Perplexity key: your top interests and recent reads go to Perplexity's Agent API (`POST /v1/agent`, preset `low`, structured JSON picks) through your relay; links are checked against the search results it actually returned. Without one: the same goes to Claude, which searches the web |
 
 Your verdicts are the learning signal: finished and read-now items raise their tags; let-go items lower them. Ranking blends the AI score (60%) with a local score (40%) built from age, deferrals and those tag affinities, so the app still orders sensibly with no key at all. AI suggestions are labeled, go through triage like anything else, and are capped at one per edition.
 
-Optional Perplexity key, also in Settings, sent only to Perplexity. Discovery works with either key on its own. Perplexity's API can't read your Perplexity history; share answers or articles from Perplexity into Edition and your verdicts on them steer later searches.
+Optional Perplexity key, also in Settings. Perplexity blocks calls made straight from a web page, so Edition sends them through a small Cloudflare Worker you deploy once (`relay/`, about five minutes, free). The key stays on your phone and passes through the relay untouched. Perplexity's API can't read your Perplexity history; share answers or articles from Perplexity into Edition and your verdicts on them steer later searches.
+
+## Problems
+
+As in Tabs, errors are kept on the phone (the last 20). Settings > Problems shows the latest and **Copy diagnostics** copies a report (version, device, item counts, which keys are set, the problems) with no titles, notes, links or keys. The first problem in a session shows a toast with Copy details.
 
 Model: `claude-haiku-5-5`. Every AI action is a paid API call on your account.
 

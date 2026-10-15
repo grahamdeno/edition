@@ -25,8 +25,10 @@ import { sampleItems } from "./samples.js";
 import * as ai from "./ai.js";
 import { tick, unlock, soundOn, setSound } from "./feel.js";
 import { I } from "./icons.js";
+import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "3.2.0";
+export const VERSION = "3.3.0";
+const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 
 const KIND_LABEL = { link: "Link", note: "Note", quote: "Quote", photo: "Photo", pdf: "PDF", text: "Text", video: "Video", audio: "Audio", file: "File" };
 const TIME = [
@@ -106,7 +108,7 @@ async function removeSamples() {
 /** Today's edition, rebuilt on a new day (ranked by the AI first when a key is set). */
 async function ensureEdition({ force = false } = {}) {
   const isNewDay = !state.edition || state.edition.date !== dayKey();
-  if ((isNewDay || force) && ai.settings.enabled()) await rankQueue().catch(() => {});
+  if ((isNewDay || force) && ai.settings.enabled()) await rankQueue().catch((e) => noteError(e, { quiet: true, where: "rank" }));
   const next = buildEdition(state.items, force ? null : state.edition);
   if (next !== state.edition) {
     state.edition = next;
@@ -273,6 +275,7 @@ async function enrichPending() {
           await saveItem(upd);
         }
       } catch (e) {
+        noteError(e, { quiet: true, where: `enrich ${next.kind}` });
         const cur = byId(next.id);
         if (cur) await saveItem({ ...cur, enrichTries: (cur.enrichTries || 0) + 1 });
         if (e.status === 401 || e.message === "No API key set.") { toast(e.message); break; }
@@ -307,6 +310,7 @@ async function findNew(statusEl) {
     set(fresh.length ? `${fresh.length} suggestion${fresh.length === 1 ? "" : "s"} added to your inbox.` : "Nothing new turned up. Try again later.");
     if (fresh.length) { closeSheet(); renderFront(); }
   } catch (e) {
+    noteError(e, { quiet: true, where: ai.settings.pplxEnabled() ? "discover (Perplexity)" : "discover (Claude)" });
     set(e.message || "Search failed.", true);
   }
 }
@@ -967,12 +971,14 @@ function openSettings() {
       <h3>Discovery (Perplexity API)</h3>
       <div class="field"><label for="set-pplx">API key</label>
         <input id="set-pplx" type="password" autocomplete="off" spellcheck="false" placeholder="pplx-…" value="${esc(ai.settings.pplxKey())}"></div>
+      <div class="field"><label for="set-relay">Relay address</label>
+        <input id="set-relay" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://edition-relay.you.workers.dev" value="${esc(ai.settings.relay())}"></div>
       <div class="two">
         <button class="btn primary" type="button" id="set-pplx-save">Save and test</button>
         <button class="btn" type="button" id="set-pplx-clear">Remove key</button>
       </div>
       <span class="st" id="set-pplx-st" role="status"></span>
-      <p class="note">With this key, Find something new searches Perplexity for recent articles on what you keep finishing. With the Anthropic key too, Claude picks the best fits from those results. Without it, Claude does the searching. Sent only to Perplexity.</p>
+      <p class="note">With this key, Find something new asks Perplexity to search for popular recent articles on what you keep finishing. Perplexity blocks calls made straight from a web app, so they go through your own relay (a free Cloudflare Worker; steps in the repo's relay folder). The key stays on this phone and passes through the relay to Perplexity. Without a Perplexity key, Claude does the searching.</p>
     </div>
     <div class="section">
       <h3>Edition</h3>
@@ -1007,6 +1013,15 @@ function openSettings() {
       <input type="file" id="set-import-file" accept="application/json,.json" hidden>
       <p class="note">Exports titles, notes, links and history as JSON. Photos and files stay on this device.</p>
     </div>
+    <div class="section">
+      <h3>Problems</h3>
+      <p class="note" id="set-pr-n"></p>
+      <div class="two">
+        <button class="btn" type="button" id="set-pr-copy">Copy diagnostics</button>
+        <button class="btn" type="button" id="set-pr-clear">Clear</button>
+      </div>
+      <p class="note">Errors are kept on this phone (the last 20) and never sent anywhere. Copy them into a message when something isn't working. No titles, notes, links or keys are included.</p>
+    </div>
     <p class="version">Edition ${VERSION} · ${c.inbox} inbox · ${c.queued} queued · ${c.done} done · ${c.archived} let go</p>`, { label: "Settings" });
 
   const st = $("#set-st", wrap);
@@ -1022,23 +1037,37 @@ function openSettings() {
       state.items = state.items.map((i) => ({ ...i, enrichTries: 0 }));
       $("#set-discover", wrap).disabled = false;
       enrichPending();
-    } catch (e) { say(st, e.message, true); }
+    } catch (e) {
+      noteError(e, { quiet: true, where: "settings: Anthropic test" });
+      say(st, e.message, true);
+      refreshProblems(wrap);
+    }
   });
   $("#set-clear", wrap).addEventListener("click", () => {
     ai.settings.setKey("");
     $("#set-key", wrap).value = "";
     say(st, "Key removed. Edition works without AI.");
   });
+  refreshProblems(wrap);
+  $("#set-pr-copy", wrap).addEventListener("click", copyDiagnostics);
+  $("#set-pr-clear", wrap).addEventListener("click", () => { clearProblems(); refreshProblems(wrap); });
   const pSt = $("#set-pplx-st", wrap);
   $("#set-pplx-save", wrap).addEventListener("click", async () => {
     ai.settings.setPplxKey($("#set-pplx", wrap).value.trim());
+    const relay = ai.relayBase($("#set-relay", wrap).value);
+    ai.settings.setRelay(relay);
+    $("#set-relay", wrap).value = relay;
     if (!ai.settings.pplxEnabled()) { say(pSt, "No key saved."); return; }
     say(pSt, "Testing…");
     try {
       await ai.testPplxKey();
-      say(pSt, "Key works. Find something new now uses Perplexity.");
+      say(pSt, "Key and relay work. Find something new now uses Perplexity.");
       $("#set-discover", wrap).disabled = false;
-    } catch (e) { say(pSt, e.message, true); }
+    } catch (e) {
+      noteError(e, { quiet: true, where: "settings: Perplexity test" });
+      say(pSt, e.message, true);
+      refreshProblems(wrap);
+    }
   });
   $("#set-pplx-clear", wrap).addEventListener("click", () => {
     ai.settings.setPplxKey("");
@@ -1054,7 +1083,7 @@ function openSettings() {
       closeSheet(); renderFront(); toast("Today's edition is rebuilt.");
     } catch (e) { say(edSt, e.message || "Could not rebuild.", true); }
   });
-  $("#set-discover", wrap).addEventListener("click", () => findNew(edSt));
+  $("#set-discover", wrap).addEventListener("click", () => findNew(edSt).finally(() => refreshProblems(wrap)));
   const smSt = $("#set-sm-st", wrap);
   $("#set-samples-load", wrap).addEventListener("click", async () => {
     const n = await seedSamples({ force: true });
@@ -1093,6 +1122,51 @@ function openSettings() {
       closeSheet(); renderFront(); toast(`Imported ${n} items.`);
     } catch (e) { say(st, e.message, true); }
   });
+}
+
+/* ================= Problems and diagnostics ================= */
+
+function refreshProblems(wrap) {
+  const n = $("#set-pr-n", wrap);
+  if (!n) return;
+  const last = problems[problems.length - 1];
+  n.textContent = problems.length
+    ? `${problems.length} logged on this phone. Latest: ${last.where}: ${last.msg}`
+    : "Nothing logged.";
+  $("#set-pr-clear", wrap).disabled = !problems.length;
+}
+
+/** Everything useful for fixing a problem, and nothing private. */
+async function diagnostics() {
+  const est = await navigator.storage?.estimate?.().catch(() => null);
+  const mb = (n) => (n / 1048576).toFixed(1) + " MB";
+  const c = counts(state.items);
+  const relay = ai.relayBase();
+  return [
+    `Edition ${VERSION}, ${new Date().toISOString()}`,
+    navigator.userAgent,
+    `Home Screen app: ${matchMedia("(display-mode: standalone)").matches || navigator.standalone ? "yes" : "no"}; screen ${innerWidth}x${innerHeight}; offline copy: ${navigator.serviceWorker?.controller ? "yes" : "no"}`,
+    `Items: ${c.inbox} inbox, ${c.queued} queued, ${c.done} done, ${c.archived} let go; storage ${est ? `${mb(est.usage)} of ${mb(est.quota)}` : "unknown"}`,
+    `Anthropic key: ${ai.settings.enabled() ? "set" : "none"}; Perplexity key: ${ai.settings.pplxEnabled() ? "set" : "none"}; relay: ${relay ? new URL(relay).host : "none"}`,
+    `Problems (${problems.length}):`,
+    ...(problems.length ? problems.slice().reverse().map(formatProblem) : ["- none"]),
+  ].join("\n");
+}
+
+async function copyDiagnostics() {
+  const text = await diagnostics();
+  try { await navigator.clipboard.writeText(text); toast("Diagnostics copied. Paste them into a message."); }
+  catch { showToCopy(text); }
+}
+
+/** When the clipboard is blocked: show the text selected, ready to copy by hand. */
+function showToCopy(text) {
+  const wrap = sheet(`
+    <div class="sheet-head"><h2>Diagnostics</h2><button class="x" type="button" data-close aria-label="Close">${I.close}</button></div>
+    <p class="note">Select all and copy, then paste into a message.</p>
+    <textarea class="diag" readonly rows="14">${esc(text)}</textarea>`, { label: "Diagnostics" });
+  const ta = $(".diag", wrap);
+  ta.focus(); ta.select();
 }
 
 /* ================= Sheets, toasts, global input ================= */
@@ -1199,6 +1273,9 @@ function toast(msg, { action, onAction, high = false } = {}) {
 }
 
 function wireGlobal() {
+  window.addEventListener("error", (e) => noteError(e, { where: "page" }));
+  window.addEventListener("unhandledrejection", (e) => noteError(e, { where: "promise" }));
+  onFirstProblem(() => toast("Something went wrong. Your saves are safe.", { action: "Copy details", onAction: copyDiagnostics }));
   window.addEventListener("pointerdown", unlock, { once: true });
   // Any touch wakes the corner button on the front page.
   window.addEventListener("pointerdown", () => { if (!state.reader) wakeCorner(); }, true);
@@ -1263,5 +1340,6 @@ function size(b) { return b > 1048576 ? (b / 1048576).toFixed(1) + " MB" : Math.
 function withTimeout(p, ms) { return Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error("Timed out")), ms))]); }
 
 boot().catch((e) => {
+  noteError(e, { quiet: true, where: "start" });
   app.innerHTML = `<main class="front"><div class="empty-front"><h2>Something broke.</h2><p>${esc(e && e.message)}</p></div></main>`;
 });

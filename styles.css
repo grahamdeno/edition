@@ -406,3 +406,6 @@ a { color: inherit; text-decoration: none; }
 .dropzone.on { display: grid; }
 
 @media (prefers-reduced-motion: reduce) { .story, .corner, .verdicts, .reader-top { transition: none; } .fab.spin, .fab.spin::after { animation: none; } }
+
+/* Diagnostics text when the clipboard is blocked */
+.diag { width: 100%; padding: 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--panel); color: var(--muted); font: 400 16px/1.4 var(--mono); resize: none; }

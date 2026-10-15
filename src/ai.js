@@ -9,7 +9,8 @@
  *             note is really a quote
  *   rank      score the queue 0..100 using what the reader finished and let go
  *   discover  search the web for a few new things this reader would want
- *             (Perplexity's Search API when its key is set, else Claude's web search)
+ *             (Perplexity's Agent API through the reader's relay when its key is set,
+ *             else Claude's web search)
  */
 
 import { topTags } from "./model.js";
@@ -23,7 +24,7 @@ const MAX_IMAGE_EDGE = 1568;
 const KEY_STORE = "edition.apiKey";
 const MODEL_STORE = "edition.model";
 const PPLX_STORE = "edition.perplexityKey";
-const PPLX_URL = "https://api.perplexity.ai/search";
+const RELAY_STORE = "edition.perplexityRelay";
 
 export const settings = {
   key: () => safeGet(KEY_STORE),
@@ -34,6 +35,8 @@ export const settings = {
   pplxKey: () => safeGet(PPLX_STORE),
   setPplxKey: (k) => safeSet(PPLX_STORE, k),
   pplxEnabled: () => Boolean(safeGet(PPLX_STORE)),
+  relay: () => safeGet(RELAY_STORE),
+  setRelay: (u) => safeSet(RELAY_STORE, u),
   /** Discovery works with either key: Perplexity when set, Claude's web search otherwise. */
   canDiscover: () => Boolean(safeGet(PPLX_STORE) || safeGet(KEY_STORE)),
 };
@@ -224,107 +227,169 @@ async function claudeDiscover(profile, { count = 3 } = {}) {
     }));
 }
 
-/* ---- Perplexity Search API ---- */
+/* ---- Perplexity Agent API ----
+ * Perplexity refuses calls made straight from a web page (no CORS), so the
+ * request goes through the reader's own relay (relay/perplexity-relay.js, a
+ * Cloudflare Worker). The key stays on this phone and rides along in the
+ * Authorization header; the relay only forwards it.
+ */
 
-async function pplxSearch(body) {
+const PPLX_DIRECT = "https://api.perplexity.ai";
+const PPLX_PRESET = "low"; // web search plus a short read of a page or two
+
+export function relayBase(raw = settings.relay()) {
+  let s = String(raw || "").trim().replace(/\/+$/, "");
+  if (!s) return "";
+  if (!/^https?:\/\//.test(s)) s = `https://${s}`;
+  try { const u = new URL(s); return u.origin + u.pathname.replace(/\/+$/, ""); } catch { return ""; }
+}
+
+async function pplxAgent(body) {
   const key = settings.pplxKey();
   if (!key) throw new AiError("No Perplexity key set.");
+  const base = relayBase();
+  const url = `${base || PPLX_DIRECT}/v1/agent`;
   let res;
   try {
-    res = await fetch(PPLX_URL, {
+    res = await fetch(url, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
       body: JSON.stringify(body),
     });
   } catch {
-    // A network error here is usually Perplexity refusing calls from a browser app.
-    throw new AiError("Couldn't reach Perplexity. Check your connection; if this keeps happening, Perplexity is blocking calls from the app.");
+    throw new AiError(base
+      ? `Couldn't reach your relay at ${new URL(base).host}. Check the address and that the Worker is deployed.`
+      : "Perplexity blocks calls made straight from a web app. Add your relay address in Settings.", 0);
   }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const detail = Array.isArray(data?.detail) ? data.detail.map((d) => d.msg).join("; ") : data?.error?.message || data?.detail;
-    throw new AiError(res.status === 401 ? "The Perplexity key was rejected." : detail || `Perplexity request failed (${res.status}).`, res.status);
+    const msg = data?.error?.message || (Array.isArray(data?.detail) ? data.detail.map((d) => d.msg).join("; ") : data?.detail);
+    if (res.status === 401) throw new AiError("The Perplexity key was rejected.", 401);
+    if (res.status === 403 && base) throw new AiError(msg || "Your relay refused the request (origin not allowed).", 403);
+    if (res.status === 429) {
+      const wait = res.headers.get("retry-after");
+      throw new AiError(`Perplexity is rate limiting. Try again${wait ? ` in ${wait} seconds` : " shortly"}.`, 429);
+    }
+    throw new AiError(msg ? `Perplexity: ${msg}` : `Perplexity request failed (${res.status}).`, res.status);
   }
+  if (data.status === "failed" || data.error) throw new AiError(`Perplexity: ${data.error?.message || "the request failed."}`, res.status);
   return data;
 }
 
-/** Check a Perplexity key with the smallest search. */
+/** The answer text: every output_text part of the message items, joined. */
+export function outputText(data) {
+  return (data.output || [])
+    .filter((o) => o.type === "message")
+    .flatMap((o) => (Array.isArray(o.content) ? o.content : []))
+    .filter((c) => c.type === "output_text")
+    .map((c) => c.text)
+    .join("");
+}
+
+/** Every web result the agent saw, in order. */
+export function searchResultsOf(data) {
+  return (data.output || []).filter((o) => o.type === "search_results").flatMap((o) => o.results || []);
+}
+
+/** Check a Perplexity key (and the relay) with the cheapest preset. */
 export async function testPplxKey() {
-  await pplxSearch({ query: "edition reading app", max_results: 1, search_type: "fast" });
+  const data = await pplxAgent({ preset: "fast", input: "Reply with the word ok." });
+  if (!outputText(data)) throw new AiError("Perplexity answered, but with no text.");
   return true;
 }
 
-/** Search queries from what the reader keeps finishing. */
-export function discoveryQueries(profile, n = 3) {
-  const tags = topTags(profile, n);
-  if (tags.length) return tags.map((t) => `best recent in-depth article or essay on ${t}`);
-  return profile.kept.slice(0, n).map((i) => `articles like "${i.title}"`);
-}
-
 /**
- * Flatten Perplexity results (one list per query when several are sent) and
- * take picks round-robin across queries, skipping links already saved.
+ * Take results in order, skipping links already saved or repeated.
  */
-export function pickResults(results, queries, { count = 3, known = new Set() } = {}) {
-  const lists = Array.isArray(results[0]) ? results : [results];
-  const seen = new Set(known), picks = [];
-  for (let round = 0; picks.length < count && round < 20; round++) {
-    let any = false;
-    lists.forEach((list, qi) => {
-      const r = list[round];
-      if (!r) return;
-      any = true;
-      if (picks.length >= count || !/^https?:\/\//.test(r.url || "") || seen.has(r.url)) return;
-      seen.add(r.url);
-      picks.push({ ...r, query: queries[qi] || queries[0] });
-    });
-    if (!any) break;
+export function pickResults(results, { count = 3, known = new Set() } = {}) {
+  const seen = new Set([...known].map(normUrl)), picks = [];
+  for (const r of results) {
+    if (picks.length >= count) break;
+    if (!r || !/^https?:\/\//.test(r.url || "") || seen.has(normUrl(r.url))) continue;
+    seen.add(normUrl(r.url));
+    picks.push(r);
   }
   return picks;
 }
 
-async function pplxDiscover(profile, { count = 3, known = new Set() } = {}) {
-  const queries = discoveryQueries(profile);
-  if (!queries.length) throw new AiError("Finish or let go of a few items first, so there is something to learn from.");
-  const data = await pplxSearch({ query: queries, max_results: 8, search_recency_filter: "month", max_tokens_per_page: 256 });
-  const results = data.results || [];
-  const tagOf = (q) => { const t = topTags(profile, 3).find((x) => q.includes(x)); return t ? [t] : []; };
-  // With a Claude key, let Claude choose the best fits from Perplexity's candidates.
-  if (settings.enabled()) {
-    const pool = pickResults(results, queries, { count: 15, known });
-    if (pool.length) {
-      try { return await chooseFromPool(profile, pool, count); } catch { /* fall back to Perplexity's order */ }
-    }
+function normUrl(u) { return String(u || "").replace(/#.*$/, "").replace(/\/+$/, "").toLowerCase(); }
+
+/**
+ * Keep only picks whose link the search actually returned (the model can
+ * misremember a URL), then fill any gap from the search results themselves.
+ */
+export function reconcilePicks(picks, results, { count = 3, known = new Set() } = {}) {
+  const real = new Map(results.map((r) => [normUrl(r.url), r]));
+  const seen = new Set([...known].map(normUrl)), out = [];
+  for (const p of picks || []) {
+    if (out.length >= count) break;
+    const k = normUrl(p && p.url);
+    if (!real.has(k) || seen.has(k)) continue;
+    seen.add(k);
+    out.push({
+      title: clip(p.title || real.get(k).title, 120),
+      url: real.get(k).url,
+      why: clip(p.why, 160),
+      tags: Array.isArray(p.tags) ? p.tags.slice(0, 3).map((t) => String(t).toLowerCase().trim()).filter(Boolean) : [],
+      minutes: Number.isFinite(+p.minutes) && +p.minutes > 0 ? Math.round(+p.minutes) : undefined,
+    });
   }
-  return pickResults(results, queries, { count, known }).map((r) => ({
-    title: clip(r.title, 120),
-    url: r.url,
-    why: clip(r.snippet, 160),
-    tags: tagOf(r.query),
-    minutes: undefined,
-  }));
+  for (const r of pickResults(results, { count: count - out.length, known: new Set([...seen]) })) {
+    out.push({ title: clip(r.title, 120), url: r.url, why: clip(r.snippet, 160), tags: [], minutes: undefined });
+  }
+  return out;
 }
 
-async function chooseFromPool(profile, pool, count) {
-  const kept = profile.kept.slice(0, 10).map((i) => `- ${i.title}${tagStr(i)}`).join("\n") || "(none)";
-  const dropped = profile.dropped.slice(0, 6).map((i) => `- ${i.title}`).join("\n") || "(none)";
-  const list = pool.map((r, n) => `${n} | ${r.title} | ${r.url} | ${clip(r.snippet, 200)}`).join("\n");
-  const prompt =
-    `Pick the ${count} best fits for this person's private reading edition from search results. Prefer substantial ` +
-    `articles and essays over news briefs, listicles and product pages.\n\nThey finished:\n${kept}\n\nThey let go:\n${dropped}\n\n` +
-    `Results (n | title | url | snippet):\n${list}\n\n` +
-    `Reply with JSON only: {"picks":[{"n":integer,"title":string (plain, max 80 chars),"why":string (max 120 chars, plain, why it fits them),"tags":[1-3 lowercase words],"minutes":integer}]}`;
-  const out = parseJson(textOf(await call({ content: prompt, maxTokens: 1000 })));
-  return (out.picks || [])
-    .filter((p) => pool[p.n])
-    .slice(0, count)
-    .map((p) => ({
-      title: clip(p.title || pool[p.n].title, 120),
-      url: pool[p.n].url,
-      why: clip(p.why, 160),
-      tags: Array.isArray(p.tags) ? p.tags.slice(0, 3).map((t) => String(t).toLowerCase()) : [],
-      minutes: Number.isFinite(+p.minutes) ? Math.round(+p.minutes) : undefined,
-    }));
+const PICKS_SCHEMA = {
+  type: "object",
+  properties: {
+    picks: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          title: { type: "string" },
+          url: { type: "string" },
+          why: { type: "string" },
+          tags: { type: "array", items: { type: "string" } },
+          minutes: { type: "integer" },
+        },
+        required: ["title", "url", "why", "tags", "minutes"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["picks"],
+  additionalProperties: false,
+};
+
+async function pplxDiscover(profile, { count = 3, known = new Set() } = {}) {
+  const interests = topTags(profile, 8);
+  const kept = profile.kept.slice(0, 10).map((i) => `- ${i.title}${tagStr(i)}`).join("\n");
+  const dropped = profile.dropped.slice(0, 6).map((i) => `- ${i.title}`).join("\n");
+  if (!interests.length && !kept) throw new AiError("Finish or let go of a few items first, so there is something to learn from.");
+  const input =
+    `Search the web for ${count} articles, essays or talks this person would want in their private daily reading. ` +
+    `Favour pieces that are popular and widely shared right now, published in the last month or two, and substantial: ` +
+    `no news briefs, listicles or product pages.\n\n` +
+    `Interests, strongest first: ${interests.join(", ") || "(learn from the list below)"}\n` +
+    `Recently finished:\n${kept || "(none)"}\n` +
+    `Recently let go (avoid these directions):\n${dropped || "(none)"}\n` +
+    `Already saved (skip): ${[...known].slice(0, 30).join(" ") || "(none)"}\n\n` +
+    `For each pick: the title, the exact URL from your search results, why it fits them (one plain sentence, max 120 characters), ` +
+    `1-3 lowercase topic tags, and minutes to read or watch.`;
+  const data = await pplxAgent({
+    preset: PPLX_PRESET,
+    instructions: "You find reading for one person's private reading app. Write plainly. No hype.",
+    input,
+    response_format: { type: "json_schema", json_schema: { name: "picks", schema: PICKS_SCHEMA, strict: true } },
+  });
+  const results = searchResultsOf(data);
+  let picks = [];
+  try { picks = parseJson(outputText(data)).picks || []; } catch { /* use the raw results below */ }
+  const out = reconcilePicks(picks, results, { count, known });
+  if (!out.length) throw new AiError("Perplexity didn't turn up anything new. Try again later.");
+  return out;
 }
 
 function tagStr(i) { return i.tags && i.tags.length ? ` [${i.tags.join(", ")}]` : ""; }
