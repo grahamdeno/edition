@@ -1,6 +1,6 @@
 /*
  * Sample items, so a fresh install shows what Edition does: links, YouTube
- * videos, quotes and photos across the inbox and queue.
+ * videos, quotes and photos across the inbox, queue, done and let go.
  * Each carries `sample: true`; Settings › Samples removes them in one tap.
  * Photos are free stock images served by picsum.photos.
  */
@@ -12,7 +12,7 @@ const DAY = 86400000;
 // [status, days ago saved, draft, enrichment]
 const SAMPLES = [
   // ---- Inbox: waiting for a first verdict ----
-  [STATUS.INBOX, 0, draftFromUrl("https://www.youtube.com/watch?v=UF8uR6Z6KLc"), {
+  [STATUS.ARCHIVED, 0, draftFromUrl("https://www.youtube.com/watch?v=UF8uR6Z6KLc"), {
     title: "Steve Jobs' 2005 Stanford commencement address",
     summary: "Three short stories on connecting the dots, love and loss, and death. Fifteen minutes that hold up.",
     tags: ["career", "talks"], minutes: 15,
@@ -34,12 +34,12 @@ const SAMPLES = [
   }],
 
   // ---- Queue: kept for a future edition ----
-  [STATUS.QUEUED, 4, draftFromUrl("https://martinfowler.com/articles/is-quality-worth-cost.html"), {
+  [STATUS.ARCHIVED, 4, draftFromUrl("https://martinfowler.com/articles/is-quality-worth-cost.html"), {
     title: "Is high quality software worth the cost?",
     summary: "Fowler's case that internal quality lowers cost within weeks, useful when trading off tech debt in planning.",
     tags: ["software", "planning"], minutes: 18,
   }],
-  [STATUS.QUEUED, 7, draftFromUrl("https://basecamp.com/shapeup"), {
+  [STATUS.ARCHIVED, 7, draftFromUrl("https://basecamp.com/shapeup"), {
     title: "Shape Up",
     summary: "Basecamp's free book on six-week cycles and shaping work before betting on it. A useful contrast to sprints.",
     tags: ["product", "agile", "planning"], minutes: 120,
@@ -50,7 +50,7 @@ const SAMPLES = [
     summary: "A used pair of Marsblade O1 inline skates, regular width, size 10, listed on SidelineSwap.",
     tags: ["shopping", "hockey"], minutes: 2,
   }],
-  [STATUS.INBOX, 0, draftFromUrl("https://www.instagram.com/reel/DdtbG_7J1Ri/"), {
+  [STATUS.QUEUED, 0, draftFromUrl("https://www.instagram.com/reel/DdtbG_7J1Ri/"), {
     title: "Instagram reel",
     summary: "A saved Instagram reel.",
     tags: ["social"], minutes: 1,
@@ -60,7 +60,7 @@ const SAMPLES = [
     summary: "Check whether your email address has been exposed in a data breach.",
     tags: ["security"], minutes: 2,
   }],
-  [STATUS.INBOX, 1, draftFromUrl("https://www.thecordeliawilmington.com/floor-plan/the-eva-6/"), {
+  [STATUS.QUEUED, 1, draftFromUrl("https://www.thecordeliawilmington.com/floor-plan/the-eva-6/"), {
     title: "The Eva floor plan at The Cordelia",
     summary: "The Eva floor plan at The Cordelia in Wilmington.",
     tags: ["housing"], minutes: 2,
@@ -70,7 +70,7 @@ const SAMPLES = [
     summary: "An elongated hexagon moss agate ring with floral cluster accents, 14K gold plated sterling silver, from ENVNIS.",
     tags: ["shopping", "gifts"], minutes: 2,
   }],
-  [STATUS.INBOX, 2, draftFromUrl("https://www.bakedbymelissa.com/collections/cupcakes"), {
+  [STATUS.QUEUED, 2, draftFromUrl("https://www.bakedbymelissa.com/collections/cupcakes"), {
     title: "Baked by Melissa cupcakes",
     summary: "Bite-size gourmet cupcakes, ordered online and shipped nationwide.",
     tags: ["shopping", "gifts"], minutes: 2,
@@ -80,7 +80,7 @@ const SAMPLES = [
     summary: "Boarderie's classic birthday dessert board.",
     tags: ["shopping", "gifts"], minutes: 2,
   }],
-  [STATUS.INBOX, 3, draftFromUrl("https://www.hikarustudio.co/products/kintsugi-repair-kit"), {
+  [STATUS.DONE, 3, draftFromUrl("https://www.hikarustudio.co/products/kintsugi-repair-kit"), {
     title: "Hikaru kintsugi repair kit",
     summary: "A kintsugi kit for repairing broken ceramics, from Hikaru Studio.",
     tags: ["shopping", "crafts"], minutes: 2,
