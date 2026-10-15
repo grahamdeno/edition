@@ -14,9 +14,13 @@ Built like [Scales](https://github.com/grahamdeno/scales) and [Tabs](https://git
                         Read now
 ```
 
-Edition opens on a feed, not a menu: one card at a time, nothing to choose before you start. The front page and the reader sit behind it; Add, Search and Settings open as sheets from one corner button, which dims after three idle seconds.
+Edition opens on a feed, not a menu: one card at a time, nothing to choose before you start. The front page and the reader sit behind it.
 
-1. **Feed.** New saves first, then today's edition, then a finish card. Each card starts face down on why you saved it: your own words if you gave a reason when saving, otherwise what you saved it for and why it might matter. Tap to turn it over and see what it is; tap again to open it. Read, Done, Keep or Later, and Let go sit in a rail on the right. Swipe up for the next card, down for the one before. On the first card, pull down for the front page. The finish card says what you did and shows anything fading.
+**The + ring**, as on Tabs' Play button: tap + and a ring of controls opens around it, or hold + and slide your thumb to one and let go. The inner arc acts on the card on screen (Read, Done, Keep or Later, Let go); the outer arc has Add, Search, Front page and Settings. + dims after three idle seconds and catches the light every six.
+
+**Updates**, as in Tabs: when a new release has downloaded in the background, Edition shows *Update ready* with a Reload button; returning to the app checks for one.
+
+1. **Feed.** New saves first, then today's edition, then a finish card. Each card starts face down on why you saved it: your own words if you gave a reason when saving, otherwise what you saved it for and why it might matter. Tap to turn it over and see what it is; tap again to open it. Read, Done, Keep or Later, and Let go are in the + ring. Swipe up for the next card, down for the one before. On the first card, pull down for the front page. The finish card says what you did and shows anything fading.
 2. **Front page.** Today's edition set like a newspaper, with the themes you keep circling and anything fading. Reach it by pulling down on the first card, or from the menu.
 3. **Sort.** When new saves arrive, a line at the top says how many. Tap it and they open full screen, one at a time. Tap Let go, Keep or Done in the bottom-right pill. Swipe left or right to skip ahead or go back.
 4. **Read.** Tap any story on the front page to read it full screen. The same pill gives Let go, Later or Done, and the next story slides in. The pill and the close button dim while you read and wake when you touch the screen.
