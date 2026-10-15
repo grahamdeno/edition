@@ -18,15 +18,16 @@ function render() {
   const total = edition.length + doneCount;
 
   if (edition.length === 0) {
-    app.innerHTML = '<div class="done-screen"><h1>You\'re done.</h1><p>Today\'s edition is finished.</p></div><button class="add-btn" aria-label="Add">+</button>';
+    app.innerHTML = '<div class="mast"><span class="date">' + formatDate() + '</span><div class="mast-right"><button class="settings-btn" aria-label="Settings">⚙</button></div></div><div class="done-screen"><h1>You\'re done.</h1><p>Today\'s edition is finished.</p></div><button class="add-btn" aria-label="Add">+</button>';
     app.querySelector(".add-btn").onclick = function () { openCapture(); };
+    app.querySelector(".settings-btn").onclick = openSettings;
     return;
   }
 
   const lead = edition[0];
   const rest = edition.slice(1);
   let html = '';
-  html += '<div class="mast"><span class="date">' + formatDate() + '</span><span class="count">' + edition.length + ' items</span></div>';
+  html += '<div class="mast"><span class="date">' + formatDate() + '</span><div class="mast-right"><span class="count">' + edition.length + ' items</span><button class="settings-btn" aria-label="Settings">⚙</button></div></div>';
   html += '<h1 class="title">The Edition</h1>';
   html += '<p class="sub">Today\'s front page, built from your saves. Finish it and you\'re done.</p>';
   html += '<button class="lead" data-id="' + lead.id + '">';
@@ -49,6 +50,7 @@ function render() {
     el.addEventListener("click", function () { openTriage(el.dataset.id); });
   });
   app.querySelector(".add-btn").onclick = function () { openCapture(); };
+  app.querySelector(".settings-btn").onclick = openSettings;
 }
 
 function card(item) {
@@ -60,6 +62,38 @@ function row(item) {
   return '<button class="row" data-id="' + item.id + '"><span class="t">' + escapeHtml(item.title) + '</span><span class="meta">' + (item.category || item.type) + '</span></button>';
 }
 
+function openSettings() {
+  const existing = document.querySelector(".sheet");
+  if (existing) existing.remove();
+
+  const sheet = document.createElement("div");
+  sheet.className = "sheet";
+  let html = '<div class="sheet-head"><h2>Settings</h2><button class="back" aria-label="Close">×</button></div>';
+  html += '<div class="field"><label>Anthropic API key</label><input id="set-key" type="password" placeholder="sk-ant-..." /></div>';
+  html += '<p class="help">Used to categorize and summarize items when you save them. Stored only on this device.</p>';
+  html += '<div id="set-status" class="clip-note" style="display:none"></div>';
+  html += '<div class="sheet-actions"><button class="btn" id="set-clear">Clear</button><button class="btn primary" id="set-save">Save</button></div>';
+  sheet.innerHTML = html;
+  document.body.appendChild(sheet);
+
+  sheet.querySelector("#set-key").value = getKey();
+  sheet.querySelector(".back").onclick = function () { sheet.remove(); };
+  sheet.querySelector("#set-clear").onclick = function () {
+    setKey("");
+    sheet.querySelector("#set-key").value = "";
+    const status = sheet.querySelector("#set-status");
+    status.style.display = "block";
+    status.textContent = "Key cleared.";
+  };
+  sheet.querySelector("#set-save").onclick = function () {
+    const key = sheet.querySelector("#set-key").value.trim();
+    setKey(key);
+    const status = sheet.querySelector("#set-status");
+    status.style.display = "block";
+    status.textContent = key ? "Key saved." : "Key cleared.";
+  };
+}
+
 function openCapture(prefill) {
   const existing = document.querySelector(".sheet");
   if (existing) existing.remove();
@@ -67,7 +101,6 @@ function openCapture(prefill) {
   const isUrl = prefill && /^https?:\/\//i.test(prefill.trim());
   const titleGuess = isUrl ? "" : (prefill || "").slice(0, 80);
   const bodyGuess = isUrl ? prefill.trim() : (prefill || "");
-  const hasKey = !!getKey();
 
   const sheet = document.createElement("div");
   sheet.className = "sheet";
@@ -76,7 +109,7 @@ function openCapture(prefill) {
   html += '<div class="field"><label>Title</label><input id="cap-title" placeholder="What is this?" /></div>';
   html += '<div class="field"><label>Link or text</label><textarea id="cap-body" placeholder="Paste a URL or a thought"></textarea></div>';
   html += '<div class="field"><label>Note (optional)</label><input id="cap-note" placeholder="Why it might matter" /></div>';
-  html += '<div class="field"><label>Anthropic API key ' + (hasKey ? "(saved)" : "") + '</label><input id="cap-key" type="password" placeholder="sk-ant-..." /></div>';
+  if (!getKey()) html += '<p class="help">Add an Anthropic key in Settings to auto-categorize saves.</p>';
   html += '<div id="cap-status" class="clip-note" style="display:none"></div>';
   html += '<div class="sheet-actions"><button class="btn" id="cap-paste">Paste</button><button class="btn primary" id="cap-save">Save</button></div>';
   sheet.innerHTML = html;
@@ -84,7 +117,6 @@ function openCapture(prefill) {
 
   sheet.querySelector("#cap-title").value = titleGuess;
   sheet.querySelector("#cap-body").value = bodyGuess;
-  sheet.querySelector("#cap-key").value = getKey();
 
   sheet.querySelector(".back").onclick = function () { sheet.remove(); };
   sheet.querySelector("#cap-paste").onclick = async function () {
@@ -100,15 +132,14 @@ function openCapture(prefill) {
     const title = sheet.querySelector("#cap-title").value.trim();
     const body = sheet.querySelector("#cap-body").value.trim();
     const note = sheet.querySelector("#cap-note").value.trim();
-    const key = sheet.querySelector("#cap-key").value.trim();
     if (!title && !body) return;
-    setKey(key);
 
     const status = sheet.querySelector("#cap-status");
     const saveBtn = sheet.querySelector("#cap-save");
     saveBtn.disabled = true;
     saveBtn.textContent = "Saving...";
 
+    const key = getKey();
     let analysis = null;
     if (key) {
       status.style.display = "block";
