@@ -319,6 +319,18 @@ async function importFromUrl() {
 
 /** Your tags, most used first: what every AI tag job is asked to reuse. */
 const vocab = () => tagVocab(state.items);
+/** What else is going on around an item, so its card face can connect to it. */
+function contextFor(item) {
+  const DAY = 86400000;
+  const around = state.items
+    .filter((i) => i.id !== item.id && !i.suggested && !i.sample && Math.abs((i.created || 0) - (item.created || 0)) < 3 * DAY)
+    .sort((a, b) => Math.abs(a.created - item.created) - Math.abs(b.created - item.created))
+    .slice(0, 5).map(headline);
+  const finished = state.items.filter((i) => i.status === STATUS.DONE && i.id !== item.id)
+    .sort((a, b) => (b.doneAt || 0) - (a.doneAt || 0)).slice(0, 5).map(headline);
+  return { around, finished };
+}
+
 /** Tags from the AI, cleaned and run through your renames and merges. */
 const tidyTags = (tags) => canonTags(tags, state.tagAliases, 3);
 
@@ -333,7 +345,7 @@ async function enrichPending() {
       state.enriching.add(next.id);
       try {
         const blob = next.blobId && [KIND.PHOTO, KIND.PDF, KIND.TEXT].includes(next.kind) ? await db.blobs.get(next.blobId) : null;
-        const out = await ai.enrich(next, blob, { vocab: vocab() });
+        const out = await ai.enrich(next, blob, { vocab: vocab(), context: contextFor(next) });
         const tags = tidyTags(out.tags);
         const cur = byId(next.id);
         if (cur) {
@@ -346,6 +358,7 @@ async function enrichPending() {
             intent: out.intent || cur.intent,
             points: out.points.length ? out.points : cur.points,
             transcript: out.transcript || cur.transcript,
+            hook: out.hook || cur.hook,
             enrichedAt: Date.now(),
           };
           // A note that turns out to be a quotation is filed as one.
@@ -368,9 +381,36 @@ async function enrichPending() {
         if (state.feed && state.feed.ids[state.feed.index] === next.id && !feedDrag) renderFeed();
       }
     }
+    await backfillHooks();
   } finally {
     enrichRunning = false;
     if (!state.reader && !$(".sheet-wrap")) renderFront();
+  }
+}
+
+/*
+ * Items read before card faces existed get one now: a small call each, cards
+ * in the feed first. Your own reason always wins, so those are skipped.
+ */
+const needsHook = (i) => i.enrichedAt && !i.hook && !i.why && !i.suggested && (i.hookTries || 0) < 2
+  && (i.status === STATUS.INBOX || i.status === STATUS.QUEUED);
+async function backfillHooks() {
+  for (;;) {
+    if (!ai.settings.enabled()) return;
+    const order = [...(state.feed?.ids.slice(state.feed.index) || []), ...state.items.map((i) => i.id)];
+    const next = order.map(byId).find((i) => i && needsHook(i));
+    if (!next) return;
+    try {
+      const line = await ai.hook(next, { context: contextFor(next) });
+      const cur = byId(next.id);
+      if (cur) await saveItem(line ? { ...cur, hook: line } : { ...cur, hookTries: (cur.hookTries || 0) + 1 });
+    } catch (e) {
+      noteError(e, { quiet: true, where: "card face" });
+      const cur = byId(next.id);
+      if (cur) await saveItem({ ...cur, hookTries: (cur.hookTries || 0) + 1 });
+      if (e.status === 401 || e.status === 429) return;
+    }
+    if (state.feed && state.feed.ids[state.feed.index] === next.id && !feedDrag && !state.feed.turned.has(next.id)) renderFeed();
   }
 }
 
@@ -1163,7 +1203,16 @@ function closeFeed() {
   renderFront();
 }
 
-/** What a face-down card says: your reason first, else what you saved it for. */
+/** What you'd be doing with it, for the line above an AI-written card face. */
+function doingFor(item) {
+  const byIntent = { read: "something to read", watch: "something to watch", listen: "something to listen to",
+    reference: "kept for reference", idea: "an idea to come back to", task: "something to act on" };
+  const byKind = { video: byIntent.watch, audio: byIntent.listen, quote: "words to keep", note: "a thought to come back to",
+    photo: "a picture you kept", link: byIntent.read, pdf: byIntent.read, text: byIntent.read, file: "a file you saved" };
+  return byIntent[item.intent] || byKind[item.kind] || "something you saved";
+}
+
+/** What a face-down card says: your reason first, then Edition's guess, else what you saved it for. */
 function hookFor(item) {
   const what = {
     read: "Something you meant to read.", watch: "Something you meant to watch.", listen: "Something you meant to listen to.",
@@ -1180,6 +1229,7 @@ function hookFor(item) {
   const since = item.status === STATUS.INBOX ? (ago(item.created) === "today" ? "Saved today" : `Saved ${ago(item.created)}`) : `From ${ago(item.created)}`;
   const sub = item.ai?.why || item.summary || "";
   if (item.why) return { kicker: since, lead: "You wrote when you saved it:", big: `“${item.why}”`, mine: true, sub };
+  if (item.hook) return { kicker: since, lead: `Edition's guess · ${doingFor(item)}`, big: item.hook, mine: false, guess: true, sub: "" };
   return { kicker: since, lead: "", big: what[item.intent] || byKind[item.kind] || "Something you saved.", mine: false, sub };
 }
 
@@ -1224,7 +1274,7 @@ function renderFeed() {
     <div class="face hook-face" data-turn role="button" tabindex="${turned ? -1 : 0}" aria-label="Turn the card over">
       <span class="kicker">${esc(h.kicker)}</span>
       ${h.lead ? `<span class="lead-in">${esc(h.lead)}</span>` : ""}
-      <span class="big ${h.mine ? "mine" : ""}">${esc(h.big)}</span>
+      <span class="big ${h.mine ? "mine" : ""}${h.guess ? " guess" : ""}">${esc(h.big)}</span>
       ${h.sub ? `<span class="sub">${esc(h.sub)}</span>` : ""}
       <span class="meta">${esc(feedMeta(item))}</span>
       <span class="turn">Tap to turn ${I.requeue}</span>
@@ -1239,7 +1289,7 @@ function renderFeed() {
         ? `<span class="mine-line sug"><span class="k">Suggested because</span><span class="w">${esc(item.suggestReason || "it fits what you finish")}</span></span>`
         : item.why
           ? `<span class="mine-line"><span class="k">Why you saved it</span><span class="w">“${esc(item.why)}”</span></span>`
-          : `<button class="add-why" type="button" data-add-why>${I.plus}Add why you saved it</button>`}
+          : `<button class="add-why" type="button" data-add-why>${I.plus}${item.hook ? "Correct Edition's guess" : "Add why you saved it"}</button>`}
       <span class="open-hint">Tap to open ${I.next}</span>
     </div>
   </div>`;
@@ -1255,8 +1305,8 @@ function askWhy(id) {
   const wrap = sheet(`
     <div class="sheet-head"><h2>Why you saved it</h2><button class="x" type="button" data-close aria-label="Close">${I.close}</button></div>
     <p class="note">${esc(headline(item))}</p>
-    <div class="field"><label for="why-in">In your words</label>
-      <input id="why-in" type="text" autocomplete="off" maxlength="140" placeholder="Read this before the roadmap review" value="${esc(item.why || "")}"></div>
+    <div class="field"><label for="why-in">In your words${!item.why && item.hook ? ` <span class="hint">Edition's guess, ready to correct</span>` : ""}</label>
+      <input id="why-in" type="text" autocomplete="off" maxlength="140" placeholder="Read this before the roadmap review" value="${esc(item.why || item.hook || "")}"></div>
     <button class="btn primary" type="button" id="why-save">Save</button>`, { label: "Why you saved it" });
   const input = $("#why-in", wrap);
   const save = async () => {
@@ -1269,6 +1319,7 @@ function askWhy(id) {
   $("#why-save", wrap).addEventListener("click", save);
   input.addEventListener("keydown", (e) => { if (e.key === "Enter") save(); });
   input.focus();
+  input.select();
 }
 
 /*
@@ -1279,10 +1330,21 @@ function askWhy(id) {
 function paintFeedBg(el, item, turned) {
   const bg = $("#feed-bg", el);
   if (!bg) return;
+  const both = picBoth();
+  el.classList.toggle("pic-both", both);
+  // A new card: hide the old picture at once, with no fade, so the next card's
+  // picture never shows through before its face does.
+  if (bg.dataset.id !== (item?.id || "")) {
+    bg.style.transition = "none";
+    bg.classList.remove("show");
+    void bg.offsetWidth;
+    requestAnimationFrame(() => { bg.style.transition = ""; });
+  }
+  bg.dataset.id = item?.id || "";
   if (!item) { bg.innerHTML = ""; bg.className = "feed-bg"; el.style.removeProperty("--tint"); return; }
   const src = item.kind === KIND.PHOTO && item.blobId ? null : item.imageUrl || null;
   const blobId = item.kind === KIND.PHOTO && item.blobId ? item.thumbId || item.blobId : null;
-  bg.className = "feed-bg" + (turned ? " show" : "") + (src || blobId ? " pic" : " drawn");
+  bg.className = "feed-bg" + (turned || both ? " show" : "") + (src || blobId ? " pic" : " drawn");
   bg.innerHTML = src || blobId
     ? `<img alt="" ${blobId ? `data-blob="${esc(blobId)}"` : `src="${esc(src)}"`} onerror="this.parentElement.classList.replace('pic','drawn');this.outerHTML=this.parentElement.dataset.cover">`
     : coverSvg(item);
@@ -1525,7 +1587,8 @@ function openEdit(id) {
     ${words ? f("text", item.kind === KIND.QUOTE ? "Quote" : "Note", item.text, { area: true }) : f("title", "Title", item.title)}
     ${item.kind === KIND.QUOTE || item.kind === KIND.VIDEO ? f("author", item.kind === KIND.QUOTE ? "Who said it" : "Channel", item.author) : ""}
     ${hasUrl ? f("url", "Link", item.url, { type: "url", ph: "https://" }) : ""}
-    ${f("why", "Why you saved it", item.why, { hint: "the face of its card", ph: "Read this before the roadmap review" })}
+    ${f("why", "Why you saved it", item.why, { hint: "the face of its card", ph: item.hook || "Read this before the roadmap review" })}
+    ${!item.why && item.hook ? `<button class="chip use-guess" type="button" id="ed-guess">Edit Edition's guess</button>` : ""}
     ${!words ? f("note", "Your note", item.kind === KIND.LINK ? item.text : item.note, { area: true, ph: "Anything you want to remember about it" }) : ""}
     <div class="two">
       ${f("tags", "Tags", (item.tags || []).join(", "), { ph: "scrum, ai" })}
@@ -1582,6 +1645,12 @@ function openEdit(id) {
   };
   $("#ed-save", wrap).addEventListener("click", save);
   wrap.querySelectorAll("input").forEach((i) => i.addEventListener("keydown", (e) => { if (e.key === "Enter") save(); }));
+  $("#ed-guess", wrap)?.addEventListener("click", (e) => {
+    const input = $("#ed-why", wrap);
+    input.value = byId(id)?.hook || "";
+    input.focus(); input.select();
+    e.currentTarget.remove();
+  });
   $("#ed-retag", wrap)?.addEventListener("click", async () => {
     const btn = $("#ed-retag", wrap), st = $("#ed-st", wrap);
     const cur = byId(id);
@@ -1878,6 +1947,14 @@ function openSettings() {
       <div id="tag-list"></div>
     </div>
     <div class="section">
+      <h3>Card picture</h3>
+      <div class="chips" role="group" aria-label="Card picture" style="margin:0;padding:0">
+        <button class="chip" type="button" data-pic="0" aria-pressed="${!picBoth()}">Back only</button>
+        <button class="chip" type="button" data-pic="1" aria-pressed="${picBoth()}">Both sides</button>
+      </div>
+      <p class="note">Where a card's picture shows in the feed: behind the side you turn to, or behind both sides.</p>
+    </div>
+    <div class="section">
       <h3>Sounds</h3>
       <div class="chips" role="group" aria-label="Sounds" style="margin:0;padding:0">
         <button class="chip" type="button" data-sound="1" aria-pressed="${soundOn()}">On</button>
@@ -1991,6 +2068,11 @@ function openSettings() {
     say(smSt, `Removed ${n} sample items.`);
     renderFront();
   });
+  wrap.querySelectorAll("[data-pic]").forEach((b) => b.addEventListener("click", () => {
+    setPicBoth(b.dataset.pic === "1");
+    wrap.querySelectorAll("[data-pic]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+    if (state.feed) renderFeed();
+  }));
   wrap.querySelectorAll("[data-sound]").forEach((b) => b.addEventListener("click", () => {
     setSound(b.dataset.sound === "1");
     wrap.querySelectorAll("[data-sound]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
@@ -2050,6 +2132,12 @@ function renderSuggestProfile(wrap) {
   }));
   $("#sug-reset", box)?.addEventListener("click", async () => { state.suggest = emptySuggestProfile(); await save(); toast("Forgotten. Suggestions start fresh."); });
 }
+
+/* ================= Card pictures ================= */
+
+const PIC_BOTH = "edition.picBoth";
+function picBoth() { try { return localStorage.getItem(PIC_BOTH) === "1"; } catch { return false; } }
+function setPicBoth(on) { try { localStorage.setItem(PIC_BOTH, on ? "1" : "0"); } catch { /* storage blocked */ } }
 
 /* ================= Tags ================= */
 
