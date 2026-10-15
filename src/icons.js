@@ -25,4 +25,8 @@ export const I = {
   requeue: svg('<path d="M4.5 12a7.5 7.5 0 1 0 2.2-5.3"/><path d="M4.5 4.5v4h4"/>'),
   arrow: svg('<path d="M5 12h13M13 7l5 5-5 5"/>'),
   play: svg('<path d="M8 5.5v13l10.5-6.5z"/>'),
+  menu: svg('<circle cx="6" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="18" cy="12" r="1.3"/>'),
+  next: svg('<path d="M9 5l7 7-7 7"/>'),
+  prev: svg('<path d="M15 5l-7 7 7 7"/>'),
+  keep: svg('<path d="M7 4.5h10v15l-5-3.5-5 3.5z"/>'),
 };

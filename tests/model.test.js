@@ -164,3 +164,37 @@ test("to-dos and plain notes are not mistaken for quotes", () => {
   assert.equal(parseQuote("Finish the PI objectives draft. - Friday"), null);
   assert.equal(detectText("Ask about the sprint review format before Thursday")[0].kind, KIND.NOTE);
 });
+
+import { fitToTime, circling, fading } from "../src/model.js";
+
+test("fitToTime keeps order and skips what doesn't fit", () => {
+  const p = [{ minutes: 8 }, { minutes: 25 }, { minutes: 1 }, { minutes: 2 }];
+  assert.deepEqual(fitToTime(p, 10).map((x) => x.minutes), [8, 1]);
+  assert.equal(fitToTime(p, 0).length, 4);
+});
+
+test("circling finds repeated themes and marks rising ones", () => {
+  const items = [
+    { status: STATUS.QUEUED, tags: ["AI"], created: NOW },
+    { status: STATUS.DONE, tags: ["ai"], created: NOW },
+    { status: STATUS.QUEUED, tags: ["guitar"], created: NOW - 40 * DAY },
+    { status: STATUS.ARCHIVED, tags: ["guitar"], created: NOW },
+    { status: STATUS.QUEUED, tags: ["once"], created: NOW },
+  ];
+  const c = circling(items, { now: NOW });
+  assert.equal(c.length, 1);
+  assert.equal(c[0].tag, "ai");
+  assert.equal(c[0].rising, true);
+});
+
+test("fading lists the oldest queue items outside the edition", () => {
+  const items = [
+    { id: "a", status: STATUS.QUEUED, queuedAt: NOW - 20 * DAY },
+    { id: "b", status: STATUS.QUEUED, queuedAt: NOW - 2 * DAY },
+    { id: "c", status: STATUS.QUEUED, queuedAt: NOW - 30 * DAY },
+    { id: "d", status: STATUS.DONE, queuedAt: NOW - 90 * DAY },
+  ];
+  const f = fading(items, { ids: ["c"] }, { now: NOW });
+  assert.deepEqual(f.map((x) => x.item.id), ["a", "b"]);
+  assert.equal(f[0].days, 20);
+});

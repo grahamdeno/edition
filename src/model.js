@@ -429,3 +429,54 @@ export function migrateLegacy(old) {
     ai: null,
   };
 }
+
+/*
+ * Front-page helpers: what fits the time you have (Shelf), the themes you keep
+ * coming back to (Constellation), and the queue items that have waited longest
+ * (Tideline). All pure, so they are tested with the rest of the model.
+ */
+
+/** Pages, in order, that fit within `minutes`. Skips any page too long to fit. */
+export function fitToTime(pages, minutes) {
+  if (!minutes) return pages;
+  const out = [];
+  let used = 0;
+  for (const p of pages) {
+    const m = estimateMinutes(p);
+    if (used + m <= minutes) { out.push(p); used += m; }
+  }
+  return out;
+}
+
+/**
+ * Themes you keep circling: tags across your queue and recent saves, weighted
+ * up by what you finish. Returns [{ tag, count, rising }] largest first.
+ */
+export function circling(items, { now = Date.now(), limit = 5 } = {}) {
+  const counts = new Map();
+  const recent = new Map();
+  for (const i of items) {
+    if (i.status === STATUS.ARCHIVED) continue;
+    const w = i.status === STATUS.DONE ? 1.5 : 1;
+    for (const raw of i.tags || []) {
+      const t = String(raw).toLowerCase();
+      counts.set(t, (counts.get(t) || 0) + w);
+      if (now - (i.created || 0) < 14 * DAY) recent.set(t, (recent.get(t) || 0) + 1);
+    }
+  }
+  return [...counts.entries()]
+    .filter(([, c]) => c >= 2)
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, limit)
+    .map(([tag, c]) => ({ tag, count: Math.round(c), rising: (recent.get(tag) || 0) >= 2 }));
+}
+
+/** Queue items outside today's edition that have waited longest, oldest first. */
+export function fading(items, edition, { now = Date.now(), limit = 3 } = {}) {
+  const inEdition = new Set(edition?.ids || []);
+  return items
+    .filter((i) => i.status === STATUS.QUEUED && !inEdition.has(i.id))
+    .map((i) => ({ item: i, days: Math.floor((now - (i.queuedAt || i.created)) / DAY) }))
+    .sort((a, b) => b.days - a.days)
+    .slice(0, limit);
+}

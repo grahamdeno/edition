@@ -14,14 +14,13 @@ Built like [Scales](https://github.com/grahamdeno/scales) and [Tabs](https://git
                         Read now
 ```
 
-Every screen has the same shape: a top bar, one card, one row of actions and the tab bar. Everything you touch sits in the bottom third, within reach of one thumb, and every verdict is a single tap.
+Two screens and no tab bar. The front page scrolls; the reader is full screen. Add, Search and Settings open as sheets from one corner button, which dims after three idle seconds so the page is all reading space.
 
-1. **Add.** Tap **+**. One box takes a link, a YouTube URL, a quote or a thought; Paste and Attach sit either side of Save. Edition lists what it found before it saves. On a computer, paste or drag anywhere in the window. On Android and desktop Chrome, Edition appears in the share sheet.
-2. **Triage.** New saves land in the Inbox one card at a time. Tap Let go, Later, Done or Read, or swipe the card: left to let go, right to read, up for later.
-3. **Read the edition.** The items you keep come back as today's edition, one card at a time, with the same four actions. The bar under the title shows how far through you are.
-4. **Read.** The reader shows the whole item with the time left at the top. The thin line on the right edge shows progress; drag it to jump.
-5. **Library.** Search everything and filter by Queue, Inbox, Done, Let go or All. Anything let go can be requeued.
-6. **Let things go.** "Later" on an edition card moves it to a future edition. Do that eight times and it washes out of the queue. Nothing is deleted.
+1. **Front page.** Today's edition set like a newspaper: a lead story, two smaller ones, then rows. Tap *I have 10 min*, *30 min* or *An evening* and it shows only what fits. Below it: the themes you keep circling (tap one to see everything on it) and the items that have waited longest in your queue, each with *Read today*.
+2. **Sort.** When new saves arrive, a line at the top says how many. Tap it and they open full screen, one at a time. Tap Let go, Keep or Done in the bottom-right pill. Swipe left or right to skip ahead or go back.
+3. **Read.** Tap any story on the front page to read it full screen. The same pill gives Let go, Later or Done, and the next story slides in. The pill and the close button dim while you read and wake when you touch the screen.
+4. **Add.** Corner button, then Add. One box takes a link, a YouTube URL, a quote or a thought; Paste and Attach sit either side of Save, and Edition lists what it found before saving. On a computer, paste or drag anywhere.
+5. **Let things go.** "Later" on an edition story moves it to a future edition. Do that eight times and it washes out of the queue. Nothing is deleted; Search can open and requeue anything.
 
 ## AI (optional)
 
@@ -76,8 +75,8 @@ Bump `VERSION` in `sw.js` and `src/app.js` with each release so installed copies
 
 ## Design
 
-Calm tactical: graphite surfaces, warm off-white text and one orange accent kept for the main action. Barlow for text, Barlow Condensed for titles in sentence case, IBM Plex Mono for the small metadata line. One icon set drawn as SVG at a single stroke weight.
+Near-black ground, warm off-white text and one copper accent. Instrument Serif for headlines, Geist for reading and labels. One SVG icon set at a single stroke weight.
 
-The page itself never scrolls, pans or zooms: only the card and lists scroll inside it, text fields use 16px type so iOS doesn't zoom on focus, and double-tap zoom is off.
+The page itself never scrolls, pans or zooms: only the front page column, the story and sheets scroll inside it; text fields use 16px type so iOS doesn't zoom on focus; double-tap zoom is off.
 
 MIT.
