@@ -32,7 +32,7 @@ import { I } from "./icons.js";
 import { topicColor, coverSvg, dominantColor } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "3.11.0";
+export const VERSION = "3.11.1";
 const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 
 const KIND_LABEL = { link: "Link", note: "Note", quote: "Quote", photo: "Photo", pdf: "PDF", text: "Text", video: "Video", audio: "Audio", file: "File" };
@@ -735,6 +735,15 @@ async function picturePending() {
       // Items waiting for the AI get their picture right after it reads them.
       const next = state.items.find((i) => (i.status === STATUS.INBOX || i.status === STATUS.QUEUED) && !pictureOf(i) && !i.coverOff
         && (i.coverTries || 0) < 2 && !(ai.settings.enabled() && !i.enrichedAt && (i.enrichTries || 0) < 2));
+      // Links that fell back to a found photo look once more at their own page, which can now offer the article's first image.
+      const recheck = !next && state.items.find((i) => i.kind === KIND.LINK && i.url && !i.imageUrl && !i.coverOff
+        && i.cover && i.cover.from === "search" && !i.cover.pinned && (i.articleImgV || 0) < 1);
+      if (recheck) {
+        await saveItem({ ...recheck, articleImgV: 1, pageTries: 0 });
+        const upd = await fetchPage(byId(recheck.id));
+        if (upd && state.feed && state.feed.ids[state.feed.index] === upd.id && !feedDrag) renderFeed();
+        continue;
+      }
       if (!next) break;
       let upd = next;
       if (next.kind === KIND.LINK && (next.pageTries || 0) < 2) upd = await fetchPage(next);
@@ -881,6 +890,7 @@ function openRing(live) {
   }));
   el.addEventListener("click", (e) => { if (e.target === el || e.target.classList.contains("ring-bg")) closeRing(); });
   el._items = all;
+  el._cardId = state.feed && !state.reader ? state.feed.ids[state.feed.index] : null;
   tick();
 }
 
@@ -1338,8 +1348,10 @@ const doneLabel = (item) => (item && item.book ? "I've read it" : "Done");
 const doneToast = (item) => (item && item.book ? "Marked as read. It counts toward what you like, not as a recent read." : "Marked done.");
 
 function renderFeed() {
-  if (ringEl) closeRing(true);
   const f = state.feed;
+  // A background refresh of the same card (a picture or summary arriving) leaves an open ring alone;
+  // only a different card closes it, since its actions belong to the card it was opened on.
+  if (ringEl && (!f || ringEl._cardId !== f.ids[f.index])) closeRing(true);
   const el = $(".feed");
   if (!f || !el) return;
   const card = $("#feed-card", el);

@@ -70,3 +70,25 @@ test("relay photo search goes to Openverse and returns picks", async () => {
   assert.equal((await res.json()).photos[0].src, "https://x/a.jpg");
   assert.match(seen[0], /^https:\/\/api\.openverse\.org\/v1\/images\/\?q=stack%20of%20books/);
 });
+
+import { articleImage } from "../relay/perplexity-relay.js";
+
+test("article image: first large photo, not icons, logos, ads or pixels", () => {
+  const html = `<body><header><img src="/logo.png" width="400"></header><article>
+    <img src="/img/author-avatar.jpg" class="avatar">
+    <img src="/pixel.gif" width="1" height="1">
+    <img src="/icons/share.png" width="24" height="24">
+    <img src="data:image/png;base64,AAAA">
+    <img src="/ads/banner-300.jpg" width="300">
+    <img data-src="/img/lazy.jpg" src="/img/placeholder.jpg" srcset="/img/hero-800.jpg 800w, /img/hero-1600.jpg 1600w" alt="Harbor at dawn">
+    <img src="/img/second.jpg"></article></body>`;
+  assert.equal(articleImage(html, "https://site.test/story"), "https://site.test/img/hero-1600.jpg");
+  assert.equal(articleImage(`<main><img src="photo.jpg" width="1200"></main>`, "https://a.test/x/"), "https://a.test/x/photo.jpg");
+  assert.equal(articleImage(`<body><img src="/logo.svg"><img src="/i.png" width="16"></body>`, "https://a.test"), null);
+});
+
+test("relay preview falls back to the article's image when there's no preview picture", async () => {
+  globalThis.fetch = async () => new Response(`<html><head><title>T</title></head><body><article><p>Text.</p><img src="/photos/lead.jpg" width="1200" height="800"></article></body></html>`, { status: 200, headers: { "content-type": "text/html" } });
+  const res = await relay.fetch(new Request("https://w.test/preview?url=" + encodeURIComponent("https://news.test/a"), { headers: { origin: "https://grahamdeno.github.io" } }));
+  assert.equal((await res.json()).image, "https://news.test/photos/lead.jpg");
+});
