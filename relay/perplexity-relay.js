@@ -125,16 +125,51 @@ async function preview(target, cors, wantText = false) {
   const reader = res.body.getReader();
   const dec = new TextDecoder();
   let html = "";
-  const limit = wantText ? 1500000 : 400000;
-  while (html.length < limit) {
+  // Read the <head>; keep going into the article when there's text to read or no preview picture yet.
+  let headOnly = !wantText;
+  while (html.length < 1500000) {
     const { done, value } = await reader.read();
     if (done) break;
     html += dec.decode(value, { stream: true });
-    if (!wantText && /<\/head>/i.test(html)) break;
+    if (headOnly && /<\/head>/i.test(html)) {
+      if (parseMeta(html, url.href).image) break;
+      headOnly = false;
+    }
   }
   try { reader.cancel(); } catch { /* already closed */ }
-  const meta = parseMeta(html, res.url || url.href);
+  const base = res.url || url.href;
+  const meta = parseMeta(html, base);
+  // No preview picture: the article's own first large image, before anything found elsewhere.
+  if (!meta.image) meta.image = articleImage(html, base);
   return out(200, wantText ? { ...meta, text: pageText(html) } : meta);
+}
+
+/*
+ * The first large image in the article (or main, or body). Skips icons, logos,
+ * avatars, badges, sprites, tracking pixels, ads and anything marked small, and
+ * takes the largest size a srcset offers. Returns an absolute address or null.
+ */
+const NOT_A_PHOTO = /(logo|icon|favicon|sprite|avatar|gravatar|badge|emoji|spinner|loader|pixel|spacer|blank|1x1|tracking|beacon|placeholder|button|banner|advert|\bads?\b|doubleclick|adserver|share|social|facebook|twitter|linkedin|pinterest)/i;
+
+export function articleImage(html, base) {
+  const h = String(html).replace(/<(script|style|noscript|nav|header|footer|aside|form)\b[\s\S]*?<\/\1>/gi, " ");
+  const pick = (tag) => { const m = h.match(new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)<\\/${tag}>`, "i")); return m ? m[1] : ""; };
+  const scope = pick("article") || pick("main") || pick("body") || h;
+  const attr = (tag, name) => (tag.match(new RegExp(`\\b${name}\\s*=\\s*["']([^"']*)["']`, "i")) || [])[1] || "";
+  for (const tag of scope.match(/<img\b[^>]*>/gi) || []) {
+    const w = parseInt(attr(tag, "width"), 10), hgt = parseInt(attr(tag, "height"), 10);
+    if ((w && w < 300) || (hgt && hgt < 200)) continue;
+    const cls = `${attr(tag, "class")} ${attr(tag, "id")} ${attr(tag, "alt")}`;
+    if (NOT_A_PHOTO.test(cls) || attr(tag, "role") === "presentation" || attr(tag, "aria-hidden") === "true") continue;
+    // The largest srcset entry, else the lazy-load source, else src.
+    const set = (attr(tag, "srcset") || attr(tag, "data-srcset")).split(",").map((p) => p.trim().split(/\s+/))
+      .filter((p) => p[0]).map(([u, d]) => ({ u, n: parseFloat(d) || 0 })).sort((a, b) => b.n - a.n);
+    let src = (set[0] && set[0].u) || attr(tag, "data-src") || attr(tag, "data-original") || attr(tag, "data-lazy-src") || attr(tag, "src");
+    if (!src || /^data:/i.test(src) || /\.svg(\?|$)/i.test(src) || /\.gif(\?|$)/i.test(src) || NOT_A_PHOTO.test(src)) continue;
+    try { src = new URL(decode(src), base).href; } catch { continue; }
+    if (/^https?:\/\//.test(src)) return src;
+  }
+  return null;
 }
 
 /**
