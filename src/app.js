@@ -33,7 +33,7 @@ import { I, LOGO } from "./icons.js";
 import { topicColor, dominantColor, tintInks } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "4.1.2";
+export const VERSION = "4.2.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 

@@ -1,8 +1,9 @@
 /*
- * Shoebox.
- * A bright white page, warm brown-black ink and one brick-red signature;
- * dark mode is a warm near-black with the same brick red. Photos carry the rest of
- * the colour, and each one tints its own post faintly.
+ * Shoebox: Grape soda.
+ * A lavender-white page, deep grape ink and one violet signature, with a
+ * soft gold underline on your own words. Dark mode is a deep plum, not black,
+ * with the same violet. Photos carry the rest of the colour, and each one
+ * tints its own post faintly.
  * Instrument Serif for your own words and headlines, Geist for everything else.
  *
  * Layout: one timeline column (max 600px). Your face sits in a rail on the
@@ -16,30 +17,33 @@
  */
 
 :root {
-  --bg: #FFFFFF;
-  --fg: #1E1A16;
-  --muted: #5E5751;
-  --faint: #6B635C;
-  --line: #ECE7E3;
-  --line-2: #E2DBD5;
-  --soft: #F6F2EF;
-  --panel: #FAF7F4;
-  --sig: #C2362B;
-  --sig-ink: #A82C22;
-  --sig-soft: #F7E7E4;
+  --bg: #FBF8FF;
+  --fg: #22123B;
+  --muted: #5E5270;
+  --faint: #6E6285;
+  --line: #EBE3F8;
+  --line-2: #DED2F2;
+  --soft: #EFE6FF;
+  --panel: #F6F1FF;
+  --sig: #7B3FF2;
+  --sig-ink: #6A2FE0;
+  --sig-soft: #EFE6FF;
   --on-sig: #FFFFFF;
-  --later: #7E5200;
-  --later-soft: #F6EBD3;
-  --love: #D2344A;
+  --hl: rgba(255, 210, 63, 0.55);
+  --gold: #FFD23F;      /* the + button: never the same colour as the violet buttons under it */
+  --on-gold: #22123B;
+  --later: #7A5300;
+  --later-soft: #FFF1C9;
+  --love: #E0457B;
   --warn: #B3261E;
-  --scrim: rgba(30, 26, 22, 0.42);
-  --toast-bg: #1E1A16;
+  --scrim: rgba(34, 18, 59, 0.42);
+  --toast-bg: #22123B;
   --toast-fg: #FFFFFF;
-  --toast-act: #FFB4A9;
+  --toast-act: #FFD23F;
   --mix: 5%;
-  --logo-box: #C2362B;
-  --logo-rim: #8E2219;
-  --logo-card: #FFF7EE;
+  --logo-box: #7B3FF2;
+  --logo-rim: #4B1FA8;
+  --logo-card: #FFF7DA;
 
   --serif: "Instrument Serif", "Iowan Old Style", Georgia, serif;
   --sans: "Geist", -apple-system, "SF Pro Text", system-ui, sans-serif;
@@ -58,33 +62,63 @@
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #17120F;
-    --fg: #F3EEE9;
-    --muted: #B3AAA2;
-    --faint: #9C938B;
-    --line: #2E2723;
-    --line-2: #3A322D;
-    --soft: #221B17;
-    --panel: #1F1814;
-    --sig: #C2362B;      /* the same brick red as light mode: buttons, tabs, the mark */
-    --sig-ink: #EF6A5D;  /* brick lifted for small text on the dark ground (6:1) */
-    --sig-soft: #3A1C17;
+  :root:not([data-theme="light"]) {
+    --bg: #1B1033;
+    --fg: #F3ECFF;
+    --muted: #B9A9D6;
+    --faint: #9D8DBB;
+    --line: #2E2050;
+    --line-2: #3A2A63;
+    --soft: #2A1B4A;
+    --panel: #22163F;
+    --sig: #7B3FF2;
+    --sig-ink: #B794FF;
+    --sig-soft: #33215C;
     --on-sig: #FFFFFF;
-    --later: #E9B35A;
-    --later-soft: #33270F;
-    --love: #FF6B7D;
+    --hl: rgba(230, 184, 0, 0.42);
+    --later: #FFD23F;
+    --later-soft: #3A2E0A;
+    --love: #FF6FA0;
     --warn: #FF8A80;
-    --scrim: rgba(0, 0, 0, 0.6);
-    --toast-bg: #F3EEE9;
-    --toast-fg: #17120F;
-    --toast-act: #A82C22;
+    --scrim: rgba(8, 4, 20, 0.6);
+    --toast-bg: #F3ECFF;
+    --toast-fg: #1B1033;
+    --toast-act: #6A2FE0;
     --mix: 10%;
-    --logo-box: #C2362B;
-    --logo-rim: #E2574A;
-    --logo-card: #17120F;
+    --logo-box: #7B3FF2;
+    --logo-rim: #B794FF;
+    --logo-card: #2A1B4A;
     color-scheme: dark;
   }
+}
+
+:root[data-theme="dark"] {
+    --bg: #1B1033;
+    --fg: #F3ECFF;
+    --muted: #B9A9D6;
+    --faint: #9D8DBB;
+    --line: #2E2050;
+    --line-2: #3A2A63;
+    --soft: #2A1B4A;
+    --panel: #22163F;
+    --sig: #7B3FF2;
+    --sig-ink: #B794FF;
+    --sig-soft: #33215C;
+    --on-sig: #FFFFFF;
+    --hl: rgba(230, 184, 0, 0.42);
+    --later: #FFD23F;
+    --later-soft: #3A2E0A;
+    --love: #FF6FA0;
+    --warn: #FF8A80;
+    --scrim: rgba(8, 4, 20, 0.6);
+    --toast-bg: #F3ECFF;
+    --toast-fg: #1B1033;
+    --toast-act: #6A2FE0;
+    --mix: 10%;
+    --logo-box: #7B3FF2;
+    --logo-rim: #B794FF;
+    --logo-card: #2A1B4A;
+    color-scheme: dark;
 }
 
 /* On iPhone, an installed web app gets a blurred fade under the status bar that covers
@@ -128,7 +162,7 @@ a { color: inherit; text-decoration: none; }
 .splash-mark { width: 112px; height: 112px; margin-bottom: 10px; }
 .splash-mark .lid { transform-box: view-box; transform-origin: 6px 26px; animation: lid-open 0.8s cubic-bezier(0.3, 0.7, 0.2, 1) 0.15s both; }
 @keyframes lid-open { from { transform: rotate(0deg); } to { transform: rotate(-16deg); } }
-.splash-name { margin: 0; font: 400 2.75rem/1 var(--serif); color: var(--sig); letter-spacing: -0.01em; }
+.splash-name { margin: 0; font: 400 2.75rem/1 var(--serif); color: var(--sig-ink); letter-spacing: -0.01em; }
 .splash-line { margin: 0; font-size: 1rem; color: var(--muted); }
 
 /* ================= Timeline ================= */
@@ -143,7 +177,7 @@ a { color: inherit; text-decoration: none; }
   padding: calc(var(--safe-t) + var(--fade)) var(--gutter-r) 0 var(--gutter-l); border-bottom: 1px solid var(--line);
 }
 .bar { display: flex; align-items: center; gap: 10px; min-height: 56px; }
-.mark { margin: 0; display: flex; align-items: center; gap: 8px; font: 400 1.85rem/1 var(--serif); color: var(--sig); letter-spacing: -0.005em; }
+.mark { margin: 0; display: flex; align-items: center; gap: 8px; font: 400 1.85rem/1 var(--serif); color: var(--sig-ink); letter-spacing: -0.005em; }
 .logo, .logo-svg { width: 32px; height: 32px; display: block; flex: none; }
 .count { margin-left: auto; font-size: 0.875rem; color: var(--muted); font-variant-numeric: tabular-nums; }
 .icon-btn { width: 44px; height: 44px; margin-right: -10px; display: grid; place-items: center; border-radius: 22px; color: var(--fg); }
@@ -196,10 +230,12 @@ a { color: inherit; text-decoration: none; }
 .tag.fade { color: var(--later); background: var(--later-soft); }
 .tag.love { display: inline-flex; align-items: center; gap: 4px; color: var(--love); background: none; padding: 0; }
 .tag.love .i { width: 14px; height: 14px; }
-.say { margin: 4px 0 0; font: 400 1.35rem/1.22 var(--serif); text-wrap: pretty; overflow-wrap: anywhere; white-space: pre-line; }
+.say { margin: 4px 0 0; font: 400 1.35rem/1.22 var(--serif); text-wrap: pretty; overflow-wrap: anywhere; white-space: pre-line;
+  text-decoration-line: underline; text-decoration-color: var(--hl); text-decoration-thickness: 0.32em; text-underline-offset: -0.12em; text-decoration-skip-ink: none; }
 .body { margin: 4px 0 0; overflow-wrap: anywhere; }
 .guess { margin: 4px 0 0; color: var(--muted); overflow-wrap: anywhere; }
-.why-line { margin: 10px 0 0; font: 400 1.1rem/1.3 var(--serif); }
+.why-line { margin: 10px 0 0; font: 400 1.1rem/1.3 var(--serif); text-decoration-line: underline; text-decoration-color: var(--hl); text-decoration-thickness: 0.32em; text-underline-offset: -0.12em; text-decoration-skip-ink: none; }
+.why-line span { text-decoration: none; }
 .why-line span { display: block; font: 500 0.8125rem/1.3 var(--sans); color: var(--muted); }
 .busy { margin: 8px 0 0; font-size: 0.8125rem; color: var(--sig-ink); }
 .quote { margin: 6px 0 0; }
@@ -244,11 +280,14 @@ a { color: inherit; text-decoration: none; }
   display: inline-flex; align-items: center; justify-content: center; gap: 5px;
   color: var(--muted); font-size: 0.875rem; font-weight: 500;
 }
-.act:active { background: var(--soft); }
+.act:active { filter: brightness(0.95); }
+.acts .act[data-v] { background: var(--soft); color: var(--fg); margin-left: 5px; padding: 0 11px 0 9px; min-height: 40px; border-radius: 20px; }
+.acts .act[data-v] .i { color: var(--sig-ink); }
 .act.icon { padding: 0; }
 .act .n { font-size: 0.8125rem; font-variant-numeric: tabular-nums; }
 .act[data-love][aria-pressed="true"] { color: var(--love); }
-.act.done { background: var(--sig); color: var(--on-sig); padding: 0 14px 0 12px; margin-left: 4px; font-weight: 600; }
+.acts .act.done { background: var(--sig); color: var(--on-sig); padding: 0 14px 0 11px; font-weight: 600; box-shadow: 0 4px 12px color-mix(in srgb, var(--sig) 35%, transparent); }
+.acts .act.done .i { color: var(--on-sig); }
 .act.done:active { background: var(--sig-ink); }
 .post.settled .say, .post.settled .quote, .post.settled .pic, .post.settled .card, .post.settled .quick, .post.settled .guess, .post.settled .why-line { opacity: 0.45; }
 .stamp { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 0 12px; margin: 6px 0; border-radius: 16px; font-size: 0.875rem; font-weight: 600; }
@@ -267,7 +306,7 @@ a { color: inherit; text-decoration: none; }
 
 /* ---- The end of Today ---- */
 .end { text-align: center; padding: 40px var(--gutter-r) 24px var(--gutter-l); display: flex; flex-direction: column; align-items: center; gap: 8px; }
-.end h2 { margin: 0; font: 400 2.1rem/1.05 var(--serif); color: var(--sig); text-wrap: balance; }
+.end h2 { margin: 0; font: 400 2.1rem/1.05 var(--serif); color: var(--sig-ink); text-wrap: balance; }
 .end.quiet h2 { color: var(--fg); font-size: 1.6rem; }
 .end p { margin: 0; color: var(--muted); max-width: 34ch; }
 .end-acts { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 10px; }
@@ -300,7 +339,7 @@ a { color: inherit; text-decoration: none; }
 .fab {
   position: fixed; z-index: 8; right: calc(var(--gutter-r) + 4px); bottom: calc(var(--safe-b) + 20px);
   width: 60px; height: 60px; border-radius: 20px; display: grid; place-items: center;
-  background: var(--sig); color: var(--on-sig); box-shadow: 0 8px 22px rgba(194, 54, 43, 0.32);
+  background: var(--gold); color: var(--on-gold); box-shadow: 0 8px 22px rgba(34, 18, 59, 0.28);
 }
 .fab .i { width: 26px; height: 26px; stroke-width: 2.2; }
 .fab:active { transform: scale(0.96); }
