@@ -300,11 +300,15 @@ a { color: inherit; text-decoration: none; }
 .acts .act.done .i { color: var(--on-sig); }
 .act.done:active { background: var(--sig-ink); }
 .post.settled .say, .post.settled .quote, .post.settled .pic, .post.settled .card, .post.settled .quick, .post.settled .guess, .post.settled .why-line { opacity: 0.45; }
-.stamp { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 0 12px; margin: 6px 0; border-radius: 16px; font-size: 0.875rem; font-weight: 600; }
-.stamp .i { width: 16px; height: 16px; }
-.stamp.done { color: var(--sig-ink); background: var(--sig-soft); }
-.stamp.later { color: var(--later); background: var(--later-soft); }
-.stamp.go { color: var(--muted); background: var(--soft); }
+/* What you decided, as status text (not a button), with Undo or Bring back beside it. */
+.settled-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 44px; }
+.stamp { margin: 0; display: inline-flex; align-items: center; gap: 6px; font-size: 0.875rem; font-weight: 500; }
+.stamp .i { width: 16px; height: 16px; flex: none; }
+.stamp.done { color: var(--sig-ink); }
+.stamp.later { color: var(--later); }
+.stamp.go { color: var(--muted); }
+.settled-row .act { background: var(--soft); color: var(--fg); padding: 0 12px 0 10px; min-height: 40px; border-radius: 20px; margin-right: -6px; }
+.settled-row .act .i { width: 18px; height: 18px; color: var(--sig-ink); }
 .undo { min-height: 44px; padding: 0 12px; font-weight: 600; color: var(--fg); text-decoration: underline; text-underline-offset: 3px; }
 
 /* Replies to yourself hang off the post, joined by the line under your face. */
@@ -409,8 +413,23 @@ a { color: inherit; text-decoration: none; }
 .retag, .use-guess { align-self: flex-start; }
 .danger { display: flex; flex-direction: column; gap: 6px; padding-top: 12px; border-top: 1px solid var(--line); }
 .version { font: 500 0.75rem var(--mono); color: var(--faint); }
-.me-row { display: flex; align-items: center; gap: 16px; }
-.me-row .two { flex: 1; }
+/* Settings: grouped rows; the rest folded away under short headings. */
+.group { border: 1px solid var(--line-2); border-radius: 16px; padding: 4px 14px; display: flex; flex-direction: column; gap: 10px; }
+details.group { padding: 0 14px; }
+details.group[open] { padding-bottom: 14px; }
+.group summary { list-style: none; min-height: 52px; display: flex; align-items: center; justify-content: space-between; gap: 8px; font-weight: 600; cursor: pointer; }
+.group summary::-webkit-details-marker { display: none; }
+.group summary::after { content: ""; width: 8px; height: 8px; border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted); transform: rotate(45deg); margin: -4px 4px 0 0; transition: transform 0.2s; }
+.group[open] summary::after { transform: rotate(-135deg); margin-top: 4px; }
+.group summary .sv { margin-left: auto; font-weight: 500; color: var(--muted); font-size: 0.875rem; }
+.row { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 52px; }
+.row + .row { border-top: 1px solid var(--line); }
+.rk { font-weight: 600; }
+.seg { display: flex; padding: 3px; border-radius: 999px; background: var(--soft); }
+.seg button { min-height: 38px; padding: 0 14px; border-radius: 999px; font-size: 0.875rem; font-weight: 500; color: var(--muted); }
+.seg button[aria-pressed="true"] { background: var(--sig); color: var(--on-sig); }
+.me-row { display: flex; align-items: center; gap: 8px; }
+.sub { margin: 4px 0 0; font-size: 0.875rem; font-weight: 600; color: var(--muted); }
 .sug-row { display: flex; flex-direction: column; gap: 6px; }
 .sug-row .k { font-size: 0.8125rem; color: var(--muted); }
 .sug-row .chips, .section .chips, .tag-chips { flex-wrap: wrap; overflow: visible; }

@@ -22,7 +22,7 @@ Built like [Scales](https://github.com/grahamdeno/scales) and [Tabs](https://git
 
 1. **New**: what you saved since you last looked, newest first. Each post is yours: your photo, when you saved it ("last Tuesday"), and your reason in your own words. Keep sends it to your queue; Done and Let go settle it.
 2. **Today's six**: chosen from your queue once a day and never reshuffled. Later moves one to another day.
-3. **From outside your saves**: at most two suggestions a day, written by Shoebox, with Keep or Not for me.
+3. **Top stories**: at most two a day, newest first, written by Shoebox, with Keep or Not for me.
 
 When everything is settled, the end of Today shows what you cleared as a collage with a tally. There's nothing more to scroll until tomorrow.
 
@@ -54,7 +54,7 @@ Add an Anthropic API key in Settings. It stays in this browser's storage and is 
 | Pick picture | Each new link, after Enrich | Up to four of the page's usable pictures (as URLs) with the title and summary. Returns which one represents it best, or none, with alt text |
 | Rank | First open each day, or Settings › Rebuild today | Titles and tags of your queue, plus what you finished, let go and loved |
 | Tag | A suggestion arrives untagged, or Re-tag with AI in Edit | Titles, reasons and links, with your tag list |
-| Discover | Find something new | With a Perplexity key: your top interests go to Perplexity's Agent API through your relay. Without one: the same goes to Claude, which searches the web |
+| Top stories | Get top stories | Your top interests and recent finishes. Asks for the biggest stories of the last three days in those areas, one per event, original reporting from established outlets, biggest first; no opinion, listicles, aggregators or social sites (or sites you marked untrusted). With a Perplexity key it goes to Perplexity's Agent API through your relay, with the search held to the last three days; without one, to Claude's web search |
 
 Your verdicts are the learning signal: finished and loved items raise their tags; let-go items lower them. Ranking blends the AI score (60%) with a local score (40%) built from age, deferrals and those tag affinities, so the app orders sensibly with no key at all.
 

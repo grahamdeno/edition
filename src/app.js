@@ -33,7 +33,7 @@ import { I, LOGO } from "./icons.js";
 import { topicColor, dominantColor, tintInks } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "4.3.0";
+export const VERSION = "4.4.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 
@@ -489,10 +489,10 @@ async function backfillHooks() {
 async function findNew(statusEl) {
   const set = (msg, err) => { if (statusEl) { statusEl.textContent = msg; statusEl.classList.toggle("err", !!err); } };
   if (!ai.settings.canDiscover()) { set("Add a Perplexity or Anthropic key in Settings first.", true); return 0; }
-  set(ai.settings.pplxEnabled() ? "Searching Perplexity for something worth your time…" : "Searching for something worth your time…");
+  set(ai.settings.pplxEnabled() ? "Finding today's top stories with Perplexity…" : "Finding today's top stories…");
   try {
     const known = new Set(state.items.map((i) => i.url).filter(Boolean));
-    const picks = await ai.discover(interestProfile(state.items), { known, guide: suggestionGuide(state.suggest), vocab: vocab() });
+    const picks = await ai.discover(interestProfile(state.items), { known, guide: suggestionGuide(state.suggest), vocab: vocab(), blocked: state.suggest?.blocked || [] });
     const fresh = await tagPicks(screenSuggestions(picks.filter((p) => !known.has(p.url)), state.suggest));
     for (const p of fresh) {
       const item = createItem(
@@ -503,7 +503,7 @@ async function findNew(statusEl) {
       item.enrichedAt = Date.now();
       await saveItem(item);
     }
-    set(fresh.length ? `${fresh.length} suggestion${fresh.length === 1 ? "" : "s"} found. They come after your own saves, two a day.` : "Nothing new turned up. Try again later.");
+    set(fresh.length ? `${fresh.length} top stor${fresh.length === 1 ? "y" : "ies"} found. Two show a day, after your own saves.` : "No new top stories. Try again later.");
     if (fresh.length) picturePending();
     return fresh.length;
   } catch (e) {
@@ -703,7 +703,7 @@ function todaySections() {
   const six = v.pages.filter((p) => !freshIds.has(p.id));
   const sixIds = new Set(six.map((p) => p.id));
   const sugg = state.items.filter((i) => i.suggested && !sixIds.has(i.id) && isNew(i))
-    .sort((a, b) => a.created - b.created).slice(0, SUGGESTIONS_PER_DAY);
+    .sort((a, b) => b.created - a.created).slice(0, SUGGESTIONS_PER_DAY);
   return { fresh, six, sugg, edition: v };
 }
 
@@ -786,7 +786,7 @@ function todayHtml() {
   let h = stripHtml(s);
   if (s.fresh.length) h += sectionHead("New", `${s.fresh.filter(isOpen).length || "All"} to sort`) + s.fresh.map((i) => postHtml(i)).join("");
   if (s.six.length) h += sectionHead("Today's six", `${s.six.filter(isOpen).length} of ${s.six.length} left`) + s.six.map((i) => postHtml(i)).join("");
-  if (s.sugg.length) h += sectionHead("From outside your saves") + s.sugg.map((i) => postHtml(i)).join("");
+  if (s.sugg.length) h += sectionHead("Top stories") + s.sugg.map((i) => postHtml(i)).join("");
   return h + endHtml(s);
 }
 
@@ -823,7 +823,7 @@ function endHtml(s) {
   const open = all.filter(isOpen).length;
   const c = counts(state.items);
   const more = `${c.queued ? `<button class="btn" type="button" data-act="one-more">Read one more</button>` : ""}
-    ${ai.settings.canDiscover() ? `<button class="btn" type="button" data-act="discover">Find something new</button>` : ""}`;
+    ${ai.settings.canDiscover() ? `<button class="btn" type="button" data-act="discover">Get top stories</button>` : ""}`;
   if (!state.items.length) {
     return `<section class="end"><h2>Your shoebox is empty.</h2>
       <p>Save a link, a photo, a thought or a file, and say why if you like. It comes back here.</p>
@@ -914,7 +914,7 @@ function postHtml(item, { compact = false } = {}) {
   const open = state.tab === "today" ? isOpen(item) : item.status === STATUS.INBOX || item.status === STATUS.QUEUED;
   const b = byline(item);
   const tag = item.loved ? `<span class="tag love">${I.heartFill}<span>Loved</span></span>`
-    : item.suggested ? `<span class="tag">Suggested</span>`
+    : item.suggested ? `<span class="tag">Top story</span>`
     : isFaded(item) ? `<span class="tag fade">Faded</span>`
     : state.tab === "all" && item.status !== STATUS.QUEUED ? `<span class="tag">${{ inbox: "New", done: "Done", archived: "Let go" }[item.status] || ""}</span>` : "";
   // The words at the top: your reason, else Shoebox's line about it (marked as a guess), else nothing.
@@ -943,12 +943,22 @@ function postHtml(item, { compact = false } = {}) {
   </article>${replies}`;
 }
 
+/*
+ * A settled post says what you decided, as plain status text so it never
+ * looks like a button, with one real action beside it: Undo for a verdict
+ * given this session, else Bring back.
+ */
 function stampHtml(item, v) {
-  const label = v === VERDICT.DONE || v === VERDICT.READ_NOW ? doneLabel(item) === "Done" ? "Done" : "Read it"
-    : v === VERDICT.LET_GO ? (item.suggested ? "Not for me" : "Let go") : item.status === STATUS.QUEUED && state.recent.get(item.id)?.stage === "inbox" ? "Kept" : "Back tomorrow";
-  const cls = v === VERDICT.DONE || v === VERDICT.READ_NOW ? "done" : v === VERDICT.LET_GO ? "go" : "later";
-  return `<span class="stamp ${cls}">${cls === "done" ? I.done : cls === "go" ? I.letGo : I.later}${esc(label)}</span>
-    ${state.recent.has(item.id) ? `<button class="undo" type="button" data-undo="${esc(item.id)}">Undo</button>` : ""}`;
+  const isDone = v === VERDICT.DONE || v === VERDICT.READ_NOW;
+  const label = isDone ? (doneLabel(item) === "Done" ? "You marked this done" : "You've read it")
+    : v === VERDICT.LET_GO ? (item.suggested ? "You said not for me" : "You let this go")
+    : item.status === STATUS.QUEUED && state.recent.get(item.id)?.stage === "inbox" ? "Kept for a later day" : "Back tomorrow";
+  const cls = isDone ? "done" : v === VERDICT.LET_GO ? "go" : "later";
+  const action = state.recent.has(item.id)
+    ? `<button class="act" type="button" data-undo="${esc(item.id)}">${I.requeue}<span>Undo</span></button>`
+    : item.status === STATUS.DONE || item.status === STATUS.ARCHIVED
+      ? `<button class="act" type="button" data-requeue="${esc(item.id)}">${I.requeue}<span>Bring back</span></button>` : "";
+  return `<div class="settled-row"><p class="stamp ${cls}">${cls === "done" ? I.done : cls === "go" ? I.letGo : I.later}<span>${esc(label)}</span></p>${action}</div>`;
 }
 
 function actionsHtml(item, open) {
@@ -2005,98 +2015,79 @@ function openSettings() {
   const c = counts(state.items);
   const wrap = sheet(`
     <div class="sheet-head"><h2>Settings</h2><button class="x" type="button" data-close aria-label="Close">${I.close}</button></div>
-    <div class="section">
-      <h3>Appearance</h3>
-      <div class="chips" role="group" aria-label="Appearance">
-        ${["system", "light", "dark"].map((t) => `<button class="chip" type="button" data-look="${t}" aria-pressed="${themeChoice() === t}">${{ system: "Match phone", light: "Light", dark: "Dark" }[t]}</button>`).join("")}
-      </div>
-      <p class="note">Match phone follows your iPhone's light and dark setting.</p>
+    <div class="group">
+      <div class="row"><span class="rk">Appearance</span>
+        <div class="seg" role="group" aria-label="Appearance">${["system", "light", "dark"].map((t) => `<button type="button" data-look="${t}" aria-pressed="${themeChoice() === t}">${{ system: "Phone", light: "Light", dark: "Dark" }[t]}</button>`).join("")}</div></div>
+      <div class="row"><span class="rk">Your photo</span>
+        <span class="me-row"><span id="set-me">${avatarHtml("sm")}</span>
+          <button class="btn sm" type="button" id="set-me-choose">${state.avatar ? "Change" : "Choose"}</button>
+          <button class="btn sm ghost" type="button" id="set-me-clear" ${state.avatar ? "" : "disabled"}>Remove</button></span>
+        <input type="file" id="set-me-file" accept="image/*" hidden></div>
+      <div class="row"><span class="rk">Sounds</span>
+        <div class="seg" role="group" aria-label="Sounds">
+          <button type="button" data-sound="1" aria-pressed="${soundOn()}">On</button><button type="button" data-sound="0" aria-pressed="${!soundOn()}">Off</button></div></div>
     </div>
-    <div class="section">
-      <h3>Your photo</h3>
-      <div class="me-row"><span id="set-me">${avatarHtml("lg")}</span>
-        <div class="two">
-          <button class="btn" type="button" id="set-me-choose">${state.avatar ? "Change" : "Choose a photo"}</button>
-          <button class="btn" type="button" id="set-me-clear" ${state.avatar ? "" : "disabled"}>Remove</button>
-        </div></div>
-      <input type="file" id="set-me-file" accept="image/*" hidden>
-      <p class="note">Shown on every post you wrote. It stays on this phone.</p>
-    </div>
-    <div class="section">
-      <h3>AI (Anthropic API)</h3>
-      <div class="field"><label for="set-key">API key</label>
+    <details class="group">
+      <summary><span>AI</span><span class="sv">${ai.settings.enabled() ? "On" : "Off"}</span></summary>
+      <div class="field"><label for="set-key">Anthropic API key</label>
         <input id="set-key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-ant-…" value="${esc(ai.settings.key())}"></div>
       <div class="two">
         <button class="btn primary" type="button" id="set-save">Save and test</button>
-        <button class="btn" type="button" id="set-clear">Remove key</button>
+        <button class="btn" type="button" id="set-clear">Remove</button>
       </div>
       <span class="st" id="set-st" role="status"></span>
-      <p class="note">The key stays on this device and is sent only to Anthropic. With it, Shoebox titles and tags each new save (photos and PDFs too), picks the best picture from a link's page, ranks your queue from what you finish and let go, and can search for new reading. Each is a paid API call on your account.</p>
-    </div>
-    <div class="section">
-      <h3>Relay and discovery</h3>
-      <div class="field"><label for="set-pplx">Perplexity API key <span class="hint">(optional)</span></label>
-        <input id="set-pplx" type="password" autocomplete="off" spellcheck="false" placeholder="pplx-…" value="${esc(ai.settings.pplxKey())}"></div>
+      <p class="note">Stays on this phone. Each AI action is billed to your account.</p>
+    </details>
+    <details class="group">
+      <summary><span>Link pictures</span><span class="sv">${ai.relayBase() ? "On" : "Off"}</span></summary>
       <div class="field"><label for="set-relay">Relay address</label>
         <input id="set-relay" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://edition-relay.you.workers.dev" value="${esc(ai.settings.relay())}"></div>
+      <div class="field"><label for="set-pplx">Perplexity key <span class="hint">(optional, for discovery)</span></label>
+        <input id="set-pplx" type="password" autocomplete="off" spellcheck="false" placeholder="pplx-…" value="${esc(ai.settings.pplxKey())}"></div>
       <div class="two">
         <button class="btn primary" type="button" id="set-pplx-save">Save and test</button>
         <button class="btn" type="button" id="set-pplx-clear">Remove key</button>
       </div>
       <span class="st" id="set-pplx-st" role="status"></span>
-      <p class="note">The relay is your own free Cloudflare Worker (steps in the repo's relay folder). Its address looks like https://edition-relay.yourname.workers.dev. It reads link pages so posts get their own pictures, and it carries Perplexity calls. The Perplexity key is optional: with it, Find something new asks Perplexity; without it, Claude does the searching. The key stays on this phone.</p>
-    </div>
-    <div class="section">
-      <h3>Today</h3>
+      <p class="note">Your Cloudflare relay. Setup steps are in the repo's relay folder.</p>
+    </details>
+    <details class="group">
+      <summary><span>Today</span></summary>
       <div class="two">
         <button class="btn" type="button" id="set-rebuild">Rebuild today</button>
-        <button class="btn" type="button" id="set-discover" ${ai.settings.canDiscover() ? "" : "disabled"}>Find something new</button>
+        <button class="btn" type="button" id="set-discover" ${ai.settings.canDiscover() ? "" : "disabled"}>Get top stories</button>
       </div>
       <span class="st" id="set-ed-st" role="status"></span>
-    </div>
-    <div class="section">
-      <h3>Suggestions</h3>
+    </details>
+    <details class="group">
+      <summary><span>What Shoebox learned</span></summary>
+      <h3 class="sub">Suggestions</h3>
       <div id="sug-profile"></div>
-    </div>
-    <div class="section" id="set-tags">
-      <h3>Tags</h3>
+      <h3 class="sub" id="set-tags">Tags</h3>
       <div id="tag-list"></div>
-    </div>
-    <div class="section">
-      <h3>Sounds</h3>
-      <div class="chips" role="group" aria-label="Sounds">
-        <button class="chip" type="button" data-sound="1" aria-pressed="${soundOn()}">On</button>
-        <button class="chip" type="button" data-sound="0" aria-pressed="${!soundOn()}">Off</button>
+    </details>
+    <details class="group">
+      <summary><span>Data</span></summary>
+      <div class="two">
+        <button class="btn" type="button" id="set-export">Export backup</button>
+        <button class="btn" type="button" id="set-import">Import backup</button>
       </div>
-      <p class="note">A soft click when you give a verdict or save something.</p>
-    </div>
-    <div class="section">
-      <h3>Samples</h3>
+      <input type="file" id="set-import-file" accept="application/json,.json" hidden>
+      <span class="st" id="set-bk-st" role="status"></span>
       <div class="two">
         <button class="btn" type="button" id="set-samples-load">Reload samples</button>
         <button class="btn" type="button" id="set-samples-clear" ${state.items.some((i) => i.sample) ? "" : "disabled"}>Remove samples</button>
       </div>
       <span class="st" id="set-sm-st" role="status"></span>
-    </div>
-    <div class="section">
-      <h3>Backup</h3>
-      <div class="two">
-        <button class="btn" type="button" id="set-export">Export</button>
-        <button class="btn" type="button" id="set-import">Import</button>
-      </div>
-      <input type="file" id="set-import-file" accept="application/json,.json" hidden>
-      <span class="st" id="set-bk-st" role="status"></span>
-      <p class="note">Exports titles, notes, links and history as JSON. Photos and files stay on this device.</p>
-    </div>
-    <div class="section">
-      <h3>Problems</h3>
+    </details>
+    <details class="group">
+      <summary><span>Problems</span><span class="sv">${problems.length || "None"}</span></summary>
       <p class="note" id="set-pr-n"></p>
       <div class="two">
         <button class="btn" type="button" id="set-pr-copy">Copy diagnostics</button>
         <button class="btn" type="button" id="set-pr-clear">Clear</button>
       </div>
-      <p class="note">Errors are kept on this phone (the last 20) and never sent anywhere. Copy them into a message when something isn't working. No titles, notes, links or keys are included.</p>
-    </div>
+    </details>
     <p class="version">${APP} ${VERSION} · ${c.inbox} new · ${c.queued} queued · ${c.done} done · ${c.archived} let go</p>`, { label: "Settings" });
 
   const st = $("#set-st", wrap);
@@ -2157,7 +2148,7 @@ function openSettings() {
     if (ai.settings.pplxEnabled()) {
       try {
         await ai.testPplxKey();
-        notes.push("Perplexity key works. Find something new uses Perplexity.");
+        notes.push("Perplexity key works. Top stories use Perplexity.");
         $("#set-discover", wrap).disabled = false;
       } catch (e) {
         noteError(e, { quiet: true, where: "settings: Perplexity test" });
@@ -2247,9 +2238,9 @@ function renderSuggestProfile(wrap) {
     ${row("Only deeper pieces on", chips(deeper, "deeper"))}
     ${row("Never from", p.blocked.map((h) => `<button class="chip unlearn" type="button" data-unlearn="blocked" data-key="${esc(h)}" aria-label="Unblock ${esc(h)}">${esc(h)} ${I.close}</button>`).join(""))}
     ${row("Length", max ? `<button class="chip unlearn" type="button" data-unlearn="shorter" aria-label="Any length again">Under ${max} min ${I.close}</button>` : "")}
-    <p class="note">Learned from your answers to suggestions, never from your own saves. Tap one to forget it.</p>
+    <p class="note">Tap one to forget it.</p>
     <button class="btn" type="button" id="sug-reset">Forget all of it</button>`
-    : `<p class="note">Suggestions come after your own saves, two a day. When one isn't for you, Let go asks why (optional). What it learns shows here, and you can undo any of it.</p>`;
+    : `<p class="note">Nothing yet. It learns when you say a suggestion isn't for you.</p>`;
   const save = async () => { await db.meta.set("suggest", state.suggest); renderSuggestProfile(wrap); };
   box.querySelectorAll("[data-unlearn]").forEach((b) => b.addEventListener("click", async () => {
     const k = b.dataset.unlearn, key = b.dataset.key;
@@ -2268,8 +2259,8 @@ function renderSuggestProfile(wrap) {
 function bindAvatarSettings(wrap) {
   const file = $("#set-me-file", wrap);
   const paint = () => {
-    $("#set-me", wrap).innerHTML = avatarHtml("lg");
-    $("#set-me-choose", wrap).textContent = state.avatar ? "Change" : "Choose a photo";
+    $("#set-me", wrap).innerHTML = avatarHtml("sm");
+    $("#set-me-choose", wrap).textContent = state.avatar ? "Change" : "Choose";
     $("#set-me-clear", wrap).disabled = !state.avatar;
   };
   $("#set-me-choose", wrap).addEventListener("click", () => { unlock(); file.click(); });
@@ -2323,11 +2314,11 @@ function renderTagList(wrap) {
   const al = Object.entries(state.tagAliases || {}).sort((a, b) => a[0].localeCompare(b[0]));
   box.innerHTML = (stats.length
     ? `<div class="chips tag-chips">${stats.map((s) => `<button class="chip tag-chip" type="button" data-tag="${esc(s.tag)}">${esc(s.tag)} <span class="n">${s.count}</span></button>`).join("")}</div>
-       <p class="note">Tap a tag to rename it, merge it into another, or delete it. The AI is shown these tags and reuses them before making new ones.</p>`
-    : `<p class="note">No tags yet. With an API key, each save is tagged as it arrives; you can also type tags when you edit an item.</p>`)
+       <p class="note">Tap a tag to rename, merge or delete it.</p>`
+    : `<p class="note">No tags yet.</p>`)
     + (al.length ? `<div class="sug-row"><span class="k">Kept from your merges and deletes</span><div class="chips">${al.map(([f, t]) =>
       `<button class="chip unlearn" type="button" data-alias="${esc(f)}" aria-label="Forget ${esc(f)}">${esc(f)} ${t ? `→ ${esc(t)}` : "(deleted)"} ${I.close}</button>`).join("")}</div>
-      <p class="note">New tags follow these. Tap one to forget it, so the old name can be used again.</p></div>` : "");
+      <p class="note">Tap one to forget it.</p></div>` : "");
   box.querySelectorAll("[data-tag]").forEach((b) => b.addEventListener("click", () => openTag(b.dataset.tag)));
   box.querySelectorAll("[data-alias]").forEach((b) => b.addEventListener("click", async () => {
     const next = { ...state.tagAliases };
@@ -2340,7 +2331,8 @@ function renderTagList(wrap) {
 
 function backToTags() {
   openSettings();
-  $("#set-tags")?.scrollIntoView({ block: "start" });
+  const t = $("#set-tags");
+  if (t) { t.closest("details").open = true; t.scrollIntoView({ block: "start" }); }
 }
 
 function openTag(tag) {

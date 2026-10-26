@@ -166,3 +166,33 @@ test("an unreachable API is reported with status 0, so the app stops and retries
   globalThis.fetch = async () => { throw new TypeError("Load failed"); };
   await assert.rejects(() => hook({ kind: "link", title: "x" }), (e) => e.status === 0 && /Couldn't reach the API/.test(e.message));
 });
+
+import { pplxDate, storySearchTool, isRecent, storyBrief, NOT_NEWS } from "../src/ai.js";
+
+test("pplxDate formats MM/DD/YYYY", () => {
+  assert.equal(pplxDate(new Date(2026, 9, 5).getTime()), "10/05/2026");
+});
+
+test("story search is held to recent news and denies chatter and blocked sites", () => {
+  const now = new Date(2026, 9, 26, 12).getTime();
+  const t = storySearchTool({ blocked: ["spam.example"], now });
+  assert.equal(t.type, "web_search");
+  assert.equal(t.filters.search_after_date_filter, "10/23/2026");
+  assert.ok(t.filters.search_domain_filter.length <= 20);
+  assert.ok(t.filters.search_domain_filter.includes("-spam.example"));
+  assert.ok(t.filters.search_domain_filter.every((d) => d.startsWith("-")));
+  assert.ok(NOT_NEWS.includes("reddit.com"));
+});
+
+test("isRecent drops dated results outside the window, keeps undated ones", () => {
+  const now = Date.parse("2026-10-26T12:00:00Z");
+  assert.equal(isRecent({ date: "2026-10-25" }, now), true);
+  assert.equal(isRecent({ date: "2026-09-01" }, now), false);
+  assert.equal(isRecent({}, now), true);
+});
+
+test("storyBrief asks for top stories in their areas", () => {
+  const b = storyBrief({ kept: [{ title: "Scrum at scale", tags: ["agile"] }], dropped: [], tags: { agile: 3 } }, { count: 3 });
+  assert.match(b, /top stories of the last 3 days/);
+  assert.match(b, /Scrum at scale/);
+});
