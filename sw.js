@@ -4,7 +4,7 @@
  * Bump VERSION with each release so phones pick up the new shell.
  */
 
-const VERSION = "3.11.1";
+const VERSION = "4.0.0";
 const CACHE = `edition-${VERSION}`;
 const SHELL = [
   "./",
@@ -24,6 +24,9 @@ const SHELL = [
   "icons/icon-192.png",
   "icons/icon-512.png",
   "icons/apple-touch-icon.png",
+  "icons/favicon.svg",
+  "icons/favicon-32.png",
+  "icons/logo.svg",
 ];
 
 // Install fetches the whole shell fresh from the server (past the browser's

@@ -1,14 +1,14 @@
 /*
- * Edition app shell.
+ * Shoebox app shell (formerly Edition).
  *
- * Two screens:
- *   Front page  today's edition laid out like a front page (lead, two-up,
- *               rows), a time filter, the themes you keep circling and the
- *               queue items that have waited longest. It scrolls.
- *   Reader      full screen, one item at a time, like stories. Swipe for the
- *               next or previous item; the verdict pill sits in the bottom
- *               right corner and dims after a few idle seconds.
- * Everything else (Add, Library, Settings) is a sheet from the corner button.
+ * One screen: a timeline of what you saved, with your own face as the author
+ * of every post. Two tabs:
+ *   Today      new saves first, then today's six from your queue, then at
+ *              most two suggestions, then the finish card. Finite: when it's
+ *              cleared, it's done until tomorrow.
+ *   All saves  everything you kept, with search and a Fading section.
+ * Tapping a post opens it full screen in the reader. Add, Edit, Reply and
+ * Settings are sheets.
  *
  * Rendering is plain template strings; every value from an item goes through
  * esc(). Icons come from icons.js only.
@@ -17,54 +17,56 @@
 import {
   VERDICT, STATUS, KIND, dayKey, applyVerdict, restore, buildEdition, editionView,
   interestProfile, estimateMinutes, counts, migrateLegacy, createItem, EDITION_SIZE,
-  detectText, draftFromFile, describeDraft, fitToTime, circling, fading, isFaded, FADE_DAYS, youtubeId, titleFromUrl,
-  asBook, bookLabel,
+  detectText, draftFromFile, describeDraft, fading, isFaded, FADE_DAYS, youtubeId, titleFromUrl,
+  asBook,
   SUGGESTIONS_PER_DAY, WHY_NOT, WHY_NOT_LABEL, emptySuggestProfile, learnFromSuggestion, suggestionGuide,
   screenSuggestions, suggestMaxMinutes,
   canonTags, tagVocab, tagStats, renameTag, addAlias, releaseTags, renameInSuggestProfile, localTags, normTag, MAX_TAGS,
+  friendlyWhen, usablePicture,
 } from "./model.js";
 import * as db from "./db.js";
 import { captureText, captureFile, captureTransfer, readClipboard, captureShares } from "./capture.js";
 import { sampleItems, SAMPLES_VERSION } from "./samples.js";
 import * as ai from "./ai.js";
 import { tick, unlock, soundOn, setSound } from "./feel.js";
-import { I } from "./icons.js";
-import { topicColor, coverSvg, dominantColor } from "./visuals.js";
+import { I, LOGO } from "./icons.js";
+import { topicColor, dominantColor, tintInks } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "3.11.1";
+export const VERSION = "4.0.0";
+const APP = "Shoebox";
 const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 
 const KIND_LABEL = { link: "Link", note: "Note", quote: "Quote", photo: "Photo", pdf: "PDF", text: "Text", video: "Video", audio: "Audio", file: "File" };
-const TIME = [
-  { label: "All", min: 0 },
-  { label: "I have 10 min", min: 10 },
-  { label: "30 min", min: 30 },
-  { label: "An evening", min: 120 },
-];
-const LIB_FILTERS = [
-  { label: "Queue", id: STATUS.QUEUED },
-  { label: "Inbox", id: STATUS.INBOX },
+const ALL_FILTERS = [
+  { label: "Kept", id: STATUS.QUEUED },
+  { label: "New", id: STATUS.INBOX },
+  { label: "Loved", id: "loved" },
   { label: "Done", id: STATUS.DONE },
   { label: "Let go", id: STATUS.ARCHIVED },
-  { label: "All", id: "all" },
+  { label: "Everything", id: "all" },
 ];
+const PAGE = 30;
 const IDLE_MS = 3000;
 
 const state = {
   items: [],
   edition: null,
-  time: 0,
+  tab: "today",
+  allFilter: 0,
+  allQuery: "",
+  allShown: PAGE,
   capText: "",
   capFiles: [],
-  libFilter: 4,
-  libQuery: "",
+  capWhy: "",
+  capPic: null,      // the picture picker in Add: { url, status, list, choice, ownFile, ownUrl }
   enriching: new Set(),
-  reader: null,      // { mode: "edition" | "inbox" | "single", ids: [], index }
-  feed: null,        // { ids: [], index, total, turned: Set, tally }
+  reader: null,      // { mode: "single", ids: [id], index: 0, total: 1 }
+  recent: new Map(), // verdicts given this session: id -> verdict, so a post keeps its stamp
   suggest: null,     // what your answers to suggestions taught (see model.js)
   tagAliases: {},    // renames, merges and deletes made in Settings > Tags (see model.js)
-  capWhy: "",
+  avatar: "",        // object URL of your photo, or ""
+  wonDay: null,      // the day the finish moment last played
 };
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -101,32 +103,59 @@ async function boot() {
   state.edition = await db.meta.get("edition", null);
   state.suggest = await db.meta.get("suggest", null) || emptySuggestProfile();
   state.tagAliases = await db.meta.get("tagAliases", null) || {};
+  state.wonDay = await db.meta.get("wonDay", null);
+  await loadAvatar();
+  await migratePictures();
   const seeded = await seedSamples();
-  const shared = await importShares();
-  const linked = await importFromUrl();
+  await importShares();
+  await importFromUrl();
   await ensureEdition();
-  renderFront();
+  bindScreen();
+  render();
   if (migrated) toast(`Brought over ${migrated} saved item${migrated === 1 ? "" : "s"} from the old version.`);
   else if (seeded) toast(`Loaded ${seeded} sample items. Remove them in Settings.`);
   wireGlobal();
   picturePending();
-  openFeed(); // new saves (including anything just shared) come first in the feed
-  startCoin();
   enrichPending();
   registerWorker();
 }
 
+/** The update bar: its own element, above the + button, so no toast or sheet can clear it. */
+function updateBar() {
+  if ($("#update-bar")) return;
+  const el = document.createElement("div");
+  el.id = "update-bar";
+  el.className = "update-bar";
+  el.setAttribute("role", "status");
+  el.innerHTML = `<span>${APP} was updated.</span><button type="button">Reload</button>`;
+  $("button", el).addEventListener("click", () => location.reload());
+  document.body.appendChild(el);
+}
+
+/* Your photo: the face on every post you wrote. Kept on this phone only. */
+async function loadAvatar() {
+  const id = await db.meta.get("avatarBlobId", null);
+  state.avatar = id ? await blobUrl(id) : "";
+}
+
+function avatarHtml(cls = "") {
+  return state.avatar
+    ? `<img class="av ${cls}" src="${esc(state.avatar)}" alt="">`
+    : `<span class="av av-none ${cls}" aria-hidden="true">${I.user}</span>`;
+}
+
 /*
- * Updates, as in Tabs. When a new release has been saved in the background,
- * offer to switch to it now ("Update ready · Reload"); otherwise it's used on
- * the next launch. Coming back to the app checks for a release too, since an
- * installed app that's only resumed never reloads the page.
+ * Updates, as in Scales. When a new release has been saved in the background
+ * and takes over, a bar says "Shoebox was updated" with Reload, and it stays
+ * until Reload is tapped: other messages never replace it. Coming back to the
+ * app checks for a release too, since an installed app that's only resumed
+ * never reloads the page.
  */
 function registerWorker() {
   if (!("serviceWorker" in navigator)) return;
   const hadWorker = !!navigator.serviceWorker.controller;
   navigator.serviceWorker.addEventListener("controllerchange", () => {
-    if (hadWorker) toast("Update ready", { action: "Reload", onAction: () => location.reload(), sticky: true });
+    if (hadWorker) updateBar();
   });
   navigator.serviceWorker.register("sw.js").then((reg) => {
     document.addEventListener("visibilitychange", () => {
@@ -194,7 +223,9 @@ function topUpEdition() {
   if (room <= 0) return;
   const inEdition = new Set(ed.ids);
   const hasSuggestion = ed.ids.some((id) => byId(id)?.suggested);
-  const rest = state.items.filter((i) => !inEdition.has(i.id) && !(hasSuggestion && i.suggested));
+  // Saves kept today wait for a later day's six, as Keep promises.
+  const rest = state.items.filter((i) => !inEdition.has(i.id) && !(hasSuggestion && i.suggested)
+    && !(i.queuedAt && dayKey(i.queuedAt) === today && i.created && dayKey(i.created) === today));
   const extra = buildEdition(rest, null, { size: room }).ids;
   if (!extra.length) return;
   state.edition = { date: today, ids: [...ed.ids, ...extra] };
@@ -227,7 +258,6 @@ async function rankQueue() {
   });
   await db.items.putMany(changed);
 }
-
 /* ================= Data helpers ================= */
 
 async function saveItem(item) {
@@ -242,6 +272,7 @@ async function removeItems(list) {
     await db.items.remove(it.id);
     if (it.blobId) await db.blobs.remove(it.blobId);
     if (it.thumbId) await db.blobs.remove(it.thumbId);
+    if (it.cover && it.cover.blobId) await db.blobs.remove(it.cover.blobId);
   }
   const ids = new Set(list.map((i) => i.id));
   state.items = state.items.filter((i) => !ids.has(i.id));
@@ -272,25 +303,19 @@ async function hydrate(root) {
     if (blob) el.textContent = (await blob.text()).slice(0, 200000);
   }
 }
-
 /* ================= Capture plumbing ================= */
 
 async function afterCapture(list) {
   list = list.filter(Boolean);
   if (!list.length) return;
   list.forEach((it) => { state.items = [it, ...state.items.filter((i) => i.id !== it.id)]; });
-  // New saves show up in the feed right where you are.
-  if (state.feed) {
-    const f = state.feed;
-    f.ids.splice(f.index, 0, ...list.map((i) => i.id));
-    f.total += list.length;
-  }
   tick(true);
-  refresh();
+  state.tab = "today";
+  render({ top: true });
   picturePending();
-  toast(`Saved ${list.length === 1 ? "1 item" : list.length + " items"} to your inbox.`, {
+  toast(`Saved ${list.length === 1 ? "1 item" : list.length + " items"} to ${APP}.`, {
     action: "Undo",
-    onAction: async () => { await removeItems(list); refresh(); },
+    onAction: async () => { await removeItems(list); render(); },
   });
   enrichPending();
 }
@@ -315,7 +340,6 @@ async function importFromUrl() {
   if ([...p.keys()].length) history.replaceState(null, "", location.pathname);
   return n;
 }
-
 /* ================= AI work ================= */
 
 /** Your tags, most used first: what every AI tag job is asked to reuse. */
@@ -334,6 +358,7 @@ function contextFor(item) {
 
 /** Tags from the AI, cleaned and run through your renames and merges. */
 const tidyTags = (tags) => canonTags(tags, state.tagAliases, 3);
+
 
 let enrichRunning = false;
 async function enrichPending() {
@@ -355,9 +380,9 @@ async function enrichPending() {
         const tags = tidyTags(out.tags);
         const cur = byId(next.id);
         if (cur && cur.enrichedAt) {
-          // A page read again: add the fuller summary and photo words; leave the rest as you know it.
+          // A page read again: add the fuller summary; leave the rest as you know it.
           await saveItem({ ...cur, extended: out.extended || cur.extended, points: out.points.length ? out.points : cur.points,
-            photoQuery: out.photoQuery || cur.photoQuery, summary: cur.summary || out.summary, extTries: (cur.extTries || 0) + 1 });
+            summary: cur.summary || out.summary, extTries: (cur.extTries || 0) + 1 });
         } else if (cur) {
           const upd = {
             ...cur,
@@ -371,7 +396,7 @@ async function enrichPending() {
             hook: out.hook || cur.hook,
             hookV: out.hook ? ai.HOOK_VERSION : cur.hookV,
             extended: out.extended || cur.extended,
-            photoQuery: out.photoQuery || cur.photoQuery,
+            imageAlt: cur.imageAlt || (cur.kind === KIND.PHOTO ? out.alt : "") || undefined,
             extTries: (cur.extTries || 0) + 1,
             enrichedAt: Date.now(),
           };
@@ -385,38 +410,37 @@ async function enrichPending() {
           }
           await saveItem(upd);
         }
-        // Nothing to show yet: find a photo from the AI's words.
-        const after = byId(next.id);
-        if (after && relay && !pictureOf(after) && !after.coverOff && (after.coverTries || 0) < 2) await findPhoto(after);
       } catch (e) {
         noteError(e, { quiet: true, where: `enrich ${next.kind}` });
         const cur = byId(next.id);
-        if (cur) await saveItem({ ...cur, enrichTries: (cur.enrichTries || 0) + 1 });
+        // Count the try on whichever pass failed, so no item is picked again straight away.
+        if (cur) await saveItem(cur.enrichedAt ? { ...cur, extTries: (cur.extTries || 0) + 1 } : { ...cur, enrichTries: (cur.enrichTries || 0) + 1 });
         if (e.status === 401 || e.message === "No API key set.") { toast(e.message); break; }
+        if (e.status === 429 || e.status === 529) break; // busy or rate-limited: try again on the next pass
       } finally {
         state.enriching.delete(next.id);
-        // Refresh the story only if it is the one on screen, so reading is never interrupted.
         if (state.reader && state.reader.ids[state.reader.index] === next.id) renderStory();
-        if (state.feed && state.feed.ids[state.feed.index] === next.id && !feedDrag) renderFeed();
+        refreshPost(next.id);
       }
+      picturePending(); // a link just read can now have its picture chosen
     }
     await backfillHooks();
   } finally {
     enrichRunning = false;
-    if (!state.reader && !$(".sheet-wrap")) renderFront();
   }
 }
 
 /*
- * Items read before card faces existed get one now: a small call each, cards
- * in the feed first. Your own reason always wins, so those are skipped.
+ * Items read before card faces existed get one now: a small call each. Your
+ * own reason always wins, so those are skipped. The line shows on posts you
+ * didn't write a reason for.
  */
 const needsHook = (i) => i.enrichedAt && (!i.hook || (i.hookV || 1) < ai.HOOK_VERSION) && !i.why && !i.suggested && (i.hookTries || 0) < 2
   && (i.status === STATUS.INBOX || i.status === STATUS.QUEUED);
 async function backfillHooks() {
   for (;;) {
     if (!ai.settings.enabled()) return;
-    const order = [...(state.feed?.ids.slice(state.feed.index) || []), ...state.items.map((i) => i.id)];
+    const order = [...todayIds(), ...state.items.map((i) => i.id)];
     const next = order.map(byId).find((i) => i && needsHook(i));
     if (!next) return;
     try {
@@ -429,13 +453,13 @@ async function backfillHooks() {
       if (cur) await saveItem({ ...cur, hookTries: (cur.hookTries || 0) + 1 });
       if (e.status === 401 || e.status === 429) return;
     }
-    if (state.feed && state.feed.ids[state.feed.index] === next.id && !feedDrag && !state.feed.turned.has(next.id)) renderFeed();
+    refreshPost(next.id);
   }
 }
 
 async function findNew(statusEl) {
   const set = (msg, err) => { if (statusEl) { statusEl.textContent = msg; statusEl.classList.toggle("err", !!err); } };
-  if (!ai.settings.canDiscover()) { set("Add a Perplexity or Anthropic key in Settings first.", true); return; }
+  if (!ai.settings.canDiscover()) { set("Add a Perplexity or Anthropic key in Settings first.", true); return 0; }
   set(ai.settings.pplxEnabled() ? "Searching Perplexity for something worth your time…" : "Searching for something worth your time…");
   try {
     const known = new Set(state.items.map((i) => i.url).filter(Boolean));
@@ -451,10 +475,12 @@ async function findNew(statusEl) {
       await saveItem(item);
     }
     set(fresh.length ? `${fresh.length} suggestion${fresh.length === 1 ? "" : "s"} found. They come after your own saves, two a day.` : "Nothing new turned up. Try again later.");
-    if (fresh.length) { closeSheet(); renderFront(); }
+    if (fresh.length) picturePending();
+    return fresh.length;
   } catch (e) {
     noteError(e, { quiet: true, where: ai.settings.pplxEnabled() ? "discover (Perplexity)" : "discover (Claude)" });
     set(e.message || "Search failed.", true);
+    return 0;
   }
 }
 
@@ -480,145 +506,7 @@ async function tagPicks(picks) {
     return { ...p, tags };
   });
 }
-
-/* ================= Front page ================= */
-
-function refresh() {
-  if (state.reader) renderStory();
-  if (state.feed) renderFeed();
-  renderFront();
-}
-
-function renderFront() {
-  topUpEdition();
-  const scrollTop = $(".front")?.scrollTop || 0;
-  const v = editionView(state.items, state.edition);
-  const c = counts(state.items);
-  const open = v.open;
-  const fit = fitToTime(open, TIME[state.time].min);
-  const left = open.length - fit.length;
-  const minutes = open.reduce((s, p) => s + estimateMinutes(p), 0);
-
-  let paper = "";
-  if (fit.length) {
-    const [lead, ...rest] = fit;
-    paper = leadStory(lead)
-      + (rest.length ? `<div class="pair">${rest.slice(0, 2).map(miniStory).join("")}</div>` : "")
-      + (rest.length > 2 ? `<div class="rows">${rest.slice(2).map(rowStory).join("")}</div>` : "")
-      + (left ? `<p class="more-note">${left} more when you have longer.</p>` : "");
-  } else if (open.length) {
-    paper = `<div class="empty-front"><h2>Nothing that short.</h2><p>Everything left today takes longer than ${TIME[state.time].min} minutes.</p>
-      <button class="pill-btn ghost" type="button" data-time="0">Show all</button></div>`;
-  } else if (v.total) {
-    const done = v.pages.filter((p) => p.status === STATUS.DONE).length;
-    const gone = v.pages.filter((p) => p.status === STATUS.ARCHIVED).length;
-    paper = `<div class="empty-front"><h2>You're done.</h2>
-      <p>${done} read, ${gone} let go, ${v.total - done - gone} moved later. Tomorrow's edition is set in the morning.</p>
-      ${c.queued ? `<button class="pill-btn ghost" type="button" data-act="one-more">Read one more</button>` : ""}
-      ${ai.settings.canDiscover() ? `<button class="pill-btn ghost" type="button" data-act="discover">Find something new</button><span class="st" id="discover-st" role="status"></span>` : ""}</div>`;
-  } else {
-    paper = `<div class="empty-front"><h2>${c.inbox ? "Sort your inbox first." : "Nothing here yet."}</h2>
-      <p>${c.inbox ? "The saves you keep come back here as today's edition." : "Save a link, a thought, a photo or a file. It goes to your inbox first, then comes back here."}</p>
-      ${c.inbox ? `<button class="pill-btn" type="button" data-act="sort">Sort ${c.inbox} new</button>` : `<button class="pill-btn" type="button" data-act="add">Add something</button>`}</div>`;
-  }
-
-  const themes = circling(state.items);
-  const maxCount = Math.max(1, ...themes.map((t) => t.count));
-  const risingTheme = themes.find((t) => t.rising);
-  const waiting = fading(state.items, state.edition);
-
-  app.innerHTML = `<main class="front" id="front">
-    <div class="mast">
-      <span class="label">${esc(dateLabel())}</span>
-      <span class="label accent">${open.length ? `${open.length} item${open.length === 1 ? "" : "s"} · ${minutes} min` : v.total ? "Done for today" : ""}</span>
-    </div>
-    <header class="masthead">
-      <h1>The Edition</h1>
-      <p>Today's front page, built from your saves. Finish it and you're done.</p>
-      <button class="pill-btn feed-btn" type="button" data-act="feed">${I.read}Back to the feed</button>
-    </header>
-    ${c.inbox ? `<button class="banner" type="button" data-act="sort"><span class="dot"></span><span class="t">${c.inbox} new save${c.inbox === 1 ? "" : "s"} to sort</span>${I.next}</button>` : ""}
-    ${open.length > 1 ? `<div class="chips" role="group" aria-label="Time you have">${TIME.map((t, i) => `<button class="chip" type="button" data-time="${i}" aria-pressed="${state.time === i}">${t.label}</button>`).join("")}</div>` : ""}
-    ${paper}
-    ${v.total ? `<div class="progress"><div class="bar"><span style="width:${Math.round((v.settled / v.total) * 100)}%"></span></div><span class="n">${v.settled} of ${v.total} read</span></div>` : ""}
-    ${themes.length >= 2 ? `<section class="sec">
-      <span class="label">Circling</span>
-      <h2>What you've been circling</h2>
-      <div class="bubbles">${themes.map((t, i) => {
-        const d = Math.round(64 + 50 * (t.count / maxCount));
-        return `<button class="bubble t${i}" type="button" data-theme="${esc(t.tag)}" style="width:${d}px;height:${d}px"><b>${esc(cap(t.tag))}</b><span>${t.count}</span></button>`;
-      }).join("")}</div>
-      ${risingTheme ? `<p class="rising"><b>${esc(cap(risingTheme.tag))}</b> keeps coming up in the last two weeks.</p>` : ""}
-    </section>` : ""}
-    ${waiting.length ? `<section class="sec">
-      <span class="label">Tideline</span>
-      <h2>Fading</h2>
-      <p class="rising">Untouched for ${FADE_DAYS / 7} weeks, a save fades out of your editions. It waits here until you decide.</p>
-      ${tideHtml(waiting)}
-    </section>` : ""}
-  </main>
-  <div class="corner" id="corner">
-    <button class="fab" type="button" id="fab" aria-label="Menu: tap, or hold and slide" aria-expanded="${ringEl ? "true" : "false"}">${I.plus}</button>
-  </div>`;
-  const front = $("#front");
-  front.scrollTop = scrollTop;
-  hydrate(front);
-  bindFront();
-}
-
-/** Tideline rows: faded saves wait for Keep or Let go; ones close to fading offer Read today. */
-function tideHtml(waiting) {
-  return `<div class="tide">${waiting.map(({ item, left, faded }) => `<div class="tide-row ${faded ? "faded" : ""}">
-    <span class="bar" style="opacity:${faded ? 0.18 : Math.max(0.3, left / 7).toFixed(2)}"></span>
-    <button class="txt" type="button" data-open="${esc(item.id)}"><span class="t">${esc(headline(item))}</span>
-      <span class="s">${faded ? "Faded. Your call." : `Fades in ${left} day${left === 1 ? "" : "s"}`}</span></button>
-    ${faded
-      ? `<button class="rescue ghost" type="button" data-letgo="${esc(item.id)}">Let go</button><button class="rescue" type="button" data-keep="${esc(item.id)}">Keep</button>`
-      : `<button class="rescue" type="button" data-rescue="${esc(item.id)}">Read today</button>`}</div>`).join("")}</div>`;
-}
-
-function bindTide(root, rerender) {
-  root.querySelectorAll("[data-rescue]").forEach((b) => b.addEventListener("click", async () => {
-    await addToEdition(b.dataset.rescue);
-    tick(true);
-    rerender();
-    toast("Added to today's edition.");
-  }));
-  root.querySelectorAll("[data-keep]").forEach((b) => b.addEventListener("click", async () => {
-    const before = byId(b.dataset.keep);
-    await saveItem(restore(before));
-    tick(true);
-    rerender();
-    toast("Kept. Back in your queue for three more weeks.", { action: "Undo", onAction: async () => { await saveItem(before); rerender(); } });
-  }));
-  root.querySelectorAll("[data-letgo]").forEach((b) => b.addEventListener("click", async () => {
-    const before = byId(b.dataset.letgo);
-    await saveItem(applyVerdict(before, VERDICT.LET_GO, { stage: "edition" }));
-    tick(true);
-    rerender();
-    toast("Let go.", { action: "Undo", onAction: async () => { await saveItem(before); rerender(); } });
-  }));
-}
-
-function leadStory(item) {
-  const pic = picFor(item);
-  return `<button class="lead" type="button" data-read="${esc(item.id)}">
-    ${pic ? `<div class="pic">${pic}</div>` : ""}
-    <span class="kicker">Lead · ${esc(KIND_LABEL[item.kind] || "Item")} · saved ${esc(ago(item.created))}</span>
-    <h2>${esc(headline(item))}</h2>
-    ${item.ai?.why || item.summary ? `<p class="why">${esc(item.ai?.why || item.summary)}</p>` : ""}
-  </button>`;
-}
-
-function miniStory(item) {
-  return `<button class="mini" type="button" data-read="${esc(item.id)}">
-    <span class="kicker">${esc(KIND_LABEL[item.kind] || "Item")} · ${estimateMinutes(item)} min</span>
-    <h3>${esc(headline(item))}</h3></button>`;
-}
-
-function rowStory(item) {
-  return `<button class="rowlink" type="button" data-read="${esc(item.id)}"><span class="t">${esc(headline(item))}</span><span class="m">${estimateMinutes(item)} min</span></button>`;
-}
+/* ================= Pictures ================= */
 
 /** What to show as a headline: a quote or note shows its own words. */
 function headline(item) {
@@ -629,26 +517,6 @@ function headline(item) {
   return item.title;
 }
 
-function picFor(item) {
-  const gone = `onerror="this.closest('.pic')?.remove()"`;
-  if (item.kind === KIND.PHOTO) {
-    if (item.blobId) return `<img alt="" ${gone} data-blob="${esc(item.thumbId || item.blobId)}">`;
-    if (item.imageUrl) return `<img alt="" ${gone} src="${esc(item.imageUrl)}" loading="lazy">`;
-  }
-  if (item.kind === KIND.VIDEO && item.imageUrl) return `<img alt="" ${gone} src="${esc(item.imageUrl)}" loading="lazy"><span class="play">${I.play}</span>`;
-  const pic = pictureOf(item);
-  if (pic && pic.blobId) return `<img alt="" ${gone} data-blob="${esc(pic.blobId)}">`;
-  if (pic && pic.src) return `<img alt="" ${gone} src="${esc(pic.src)}" loading="lazy">`;
-  return "";
-}
-
-/* ================= Pictures: the page's own, or one found for it =================
- * Every card gets a picture, so the feed reads like one. In order of
- * preference: one you chose; the photo itself; the page's own preview picture;
- * an openly licensed photo found from a few words (Openverse, via the relay).
- * You can choose another, find another, or remove it in Edit.
- */
-
 /** The picture a card shows, or null for a drawn cover. */
 function pictureOf(item) {
   if (!item || item.coverOff) return null;
@@ -656,7 +524,8 @@ function pictureOf(item) {
   if (c && c.pinned && (c.blobId || c.src)) return c.blobId ? { blobId: c.blobId, from: "mine" } : { src: c.src, from: c.from, credit: c.credit, license: c.license, link: c.link };
   if (item.kind === KIND.PHOTO && item.blobId) return { blobId: item.thumbId || item.blobId, from: "own" };
   if (item.imageUrl) return { src: item.imageUrl, from: item.kind === KIND.LINK ? "page" : "own" };
-  if (c && (c.blobId || c.src)) return c.blobId ? { blobId: c.blobId, from: "mine" } : { src: c.src, from: c.from, credit: c.credit, license: c.license, link: c.link };
+  // An older version's found stock photo shows only if you chose it yourself.
+  if (c && c.blobId) return { blobId: c.blobId, from: "mine" };
   return null;
 }
 
@@ -666,15 +535,7 @@ function creditLine(pic) {
   return ["Photo", pic.credit, pic.license].filter(Boolean).join(" · ");
 }
 
-const STOP = new Set("the a an and or of to in on for with from by is are was be this that it its at as your you my our how why what when".split(" "));
-/** Search words when the AI hasn't suggested any: topics, then the title's longer words. */
-function photoWords(item) {
-  if (item.photoQuery) return item.photoQuery;
-  const words = String(item.book?.title || item.title || "").toLowerCase().replace(/[^a-z\s]/g, " ").split(/\s+/).filter((w) => w.length > 3 && !STOP.has(w));
-  return [...(item.tags || []).slice(0, 1), ...words.slice(0, 2)].join(" ").trim() || "quiet desk morning light";
-}
-
-/** Read a link's page through the relay: its picture, real title, and text for the summary. */
+/** Read a link's page through the relay: its pictures, real title, and text for the summary. */
 async function fetchPage(item) {
   const base = ai.relayBase();
   if (!base || item.kind !== KIND.LINK || !item.url) return item;
@@ -688,289 +549,616 @@ async function fetchPage(item) {
   const cur = byId(item.id);
   if (!cur) return item;
   const upd = { ...cur, pageTries: (cur.pageTries || 0) + 1 };
-  if (data && data.image && !cur.imageUrl) upd.imageUrl = data.image;
+  const cands = data ? candidatesOf(data) : [];
+  if (cands.length && !cur.imageCands) upd.imageCands = cands;
   if (data && data.title && !cur.editedAt && (cur.title === titleFromUrl(cur.url) || !cur.enrichedAt)) upd.title = data.title.slice(0, 140);
   if (data && data.description && !cur.summary) upd.summary = data.description.slice(0, 200);
+  if (data && data.site && !cur.site) upd.site = String(data.site).slice(0, 60);
   if (data && data.text) upd.pageText = String(data.text).slice(0, 15000);
   if (data && (data.image || data.title || data.text)) upd.pageTries = 2; // got what there is
   await saveItem(upd);
   return upd;
 }
 
+/** The relay's picture list, or (from an older relay) its single preview picture. */
+function candidatesOf(data) {
+  const list = Array.isArray(data.images) && data.images.length ? data.images : data.image ? [{ src: data.image }] : [];
+  return list.filter((c) => c && /^https?:\/\//.test(c.src || "")).slice(0, 8)
+    .map((c) => ({ src: c.src, w: c.w || null, h: c.h || null, alt: c.alt || null }));
+}
+
 /**
- * Find a photo for an item. `skip` walks through the results ("find another");
- * `pin` marks it as your choice, so it wins over the page's own picture.
+ * Load each candidate and keep the ones that are real photos: wide enough,
+ * not too long or thin, and actually loadable. Measured sizes replace the
+ * page's claims. Runs in parallel; a picture that hangs is dropped.
  */
-async function findPhoto(item, { query = null, skip = 0, pin = false } = {}) {
-  const base = ai.relayBase();
-  if (!base) return null;
-  const q = (query || photoWords(item)).trim();
-  let photos = [];
-  try {
-    const res = await withTimeout(fetch(`${base}/photo?q=${encodeURIComponent(q)}`), 12000);
-    if (res.ok) photos = (await res.json()).photos || [];
-  } catch (e) {
-    noteError(e, { quiet: true, where: "photo search" });
+async function usableImages(cands, { timeout = 8000 } = {}) {
+  const one = (c) => new Promise((resolve) => {
+    const img = new Image();
+    const done = (ok) => { clearTimeout(t); img.onload = img.onerror = null; resolve(ok ? { ...c, w: img.naturalWidth, h: img.naturalHeight } : null); };
+    const t = setTimeout(() => done(false), timeout);
+    img.onload = () => done(true);
+    img.onerror = () => done(false);
+    img.referrerPolicy = "no-referrer";
+    img.src = c.src;
+  });
+  const out = await Promise.all((cands || []).map(one));
+  return out.filter((c) => c && usablePicture(c));
+}
+
+/**
+ * Settle a link's picture once its page has been read: keep only usable
+ * candidates, then let the AI pick the one that best represents it (and
+ * describe it), else take the first. Your own choice is never overridden.
+ */
+async function settlePicture(item) {
+  const cur0 = byId(item.id);
+  if (!cur0) return;
+  const usable = await usableImages(cur0.imageCands || []);
+  let pick = usable.length ? 0 : -1, alt = "";
+  if (usable.length && ai.settings.enabled() && (cur0.enrichedAt || (cur0.enrichTries || 0) >= 2)) {
+    try {
+      const r = await withTimeout(ai.pickPicture(cur0, usable), 20000);
+      pick = r.index; alt = r.alt;
+    } catch (e) { noteError(e, { quiet: true, where: "pick picture" }); }
   }
   const cur = byId(item.id);
-  if (!cur) return null;
-  if (!photos.length) {
-    await saveItem({ ...cur, coverTries: (cur.coverTries || 0) + 1 });
-    return null;
+  if (!cur) return;
+  const upd = { ...cur, imageCands: usable, picSettled: Date.now() };
+  if (!cur.picPicked && !cur.coverOff) {
+    upd.imageUrl = pick >= 0 ? usable[pick].src : undefined;
+    upd.imageAlt = pick >= 0 ? alt || usable[pick].alt || cur.imageAlt || undefined : cur.imageAlt;
+    upd.tint = undefined;
   }
-  const p = photos[skip % photos.length];
-  const upd = { ...cur, coverOff: false, coverTries: 2, tint: undefined,
-    cover: { src: p.src, thumb: p.thumb, credit: p.credit, license: p.license, link: p.link, from: "search", q, i: skip, pinned: pin } };
-  if (cur.cover && cur.cover.blobId) db.blobs.remove(cur.cover.blobId);
   await saveItem(upd);
-  return upd;
+  refreshPost(item.id);
 }
 
 let pictureRunning = false;
 async function picturePending() {
-  if (pictureRunning || !ai.relayBase()) return;
+  if (pictureRunning) return;
   pictureRunning = true;
   try {
     for (;;) {
-      // Items waiting for the AI get their picture right after it reads them.
-      const next = state.items.find((i) => (i.status === STATUS.INBOX || i.status === STATUS.QUEUED) && !pictureOf(i) && !i.coverOff
-        && (i.coverTries || 0) < 2 && !(ai.settings.enabled() && !i.enrichedAt && (i.enrichTries || 0) < 2));
-      // Links that fell back to a found photo look once more at their own page, which can now offer the article's first image.
-      const recheck = !next && state.items.find((i) => i.kind === KIND.LINK && i.url && !i.imageUrl && !i.coverOff
-        && i.cover && i.cover.from === "search" && !i.cover.pinned && (i.articleImgV || 0) < 1);
-      if (recheck) {
-        await saveItem({ ...recheck, articleImgV: 1, pageTries: 0 });
-        const upd = await fetchPage(byId(recheck.id));
-        if (upd && state.feed && state.feed.ids[state.feed.index] === upd.id && !feedDrag) renderFeed();
-        continue;
-      }
-      if (!next) break;
-      let upd = next;
-      if (next.kind === KIND.LINK && (next.pageTries || 0) < 2) upd = await fetchPage(next);
-      else upd = (await findPhoto(next)) || byId(next.id);
-      if (upd && state.feed && state.feed.ids[state.feed.index] === upd.id && !feedDrag) renderFeed();
+      const relay = Boolean(ai.relayBase());
+      const open = (i) => i.status === STATUS.INBOX || i.status === STATUS.QUEUED;
+      // A link whose page hasn't been read yet.
+      const unread = relay && state.items.find((i) => open(i) && i.kind === KIND.LINK && i.url && !i.imageCands && (i.pageTries || 0) < 2);
+      if (unread) { await fetchPage(unread); refreshPost(unread.id); continue; }
+      // A link with candidates still to settle: wait for its summary first when the AI is on, so the pick has context.
+      const aiOn = ai.settings.enabled();
+      const unsettled = state.items.find((i) => open(i) && i.imageCands && !i.picSettled
+        && (!aiOn || i.enrichedAt || (i.enrichTries || 0) >= 2));
+      if (unsettled) { await settlePicture(unsettled); continue; }
+      break;
     }
   } finally {
     pictureRunning = false;
-    if (!state.reader && !$(".sheet-wrap")) renderFront();
   }
 }
 
-function bindFront() {
-  const front = $("#front");
-  front.querySelectorAll("[data-read]").forEach((b) => b.addEventListener("click", () => openStories("edition", b.dataset.read)));
-  front.querySelectorAll("[data-open]").forEach((b) => b.addEventListener("click", () => openStories("single", b.dataset.open)));
-  front.querySelectorAll("[data-time]").forEach((b) => b.addEventListener("click", () => { state.time = +b.dataset.time; renderFront(); }));
-  front.querySelectorAll("[data-theme]").forEach((b) => b.addEventListener("click", () => { state.libQuery = b.dataset.theme; state.libFilter = 4; openLibrary(); }));
-  bindTide(front, renderFront);
-  const more = $('[data-act="one-more"]', front);
-  if (more) more.addEventListener("click", oneMore);
-  const disc = $('[data-act="discover"]', front);
-  if (disc) disc.addEventListener("click", () => { disc.disabled = true; findNew($("#discover-st")).finally(() => { disc.disabled = false; }); });
-  app.querySelectorAll('[data-act="sort"]').forEach((b) => b.addEventListener("click", () => { closeMenu(); openStories("inbox"); }));
-  app.querySelectorAll('[data-act="add"]').forEach((b) => b.addEventListener("click", () => { closeMenu(); openAdd(); }));
-  app.querySelectorAll('[data-act="library"]').forEach((b) => b.addEventListener("click", () => { closeMenu(); state.libQuery = ""; openLibrary(); }));
-  app.querySelectorAll('[data-act="settings"]').forEach((b) => b.addEventListener("click", () => { closeMenu(); openSettings(); }));
-  app.querySelectorAll('[data-act="front"]').forEach((b) => b.addEventListener("click", () => { closeMenu(); closeFeed(); }));
-  app.querySelectorAll('[data-act="feed"]').forEach((b) => b.addEventListener("click", () => { closeMenu(); openFeed(); }));
-
-  // The corner button: tap for the ring, or hold and slide; it dims while you scroll and after a few idle seconds.
-  bindFab($("#fab"));
-  front.addEventListener("scroll", () => { if (!ringEl) sleepCorner(); }, { passive: true });
-  wakeCorner();
+/** Read a picture's main colour once, keep it on the item, and tint its post. */
+async function tintFrom(item, src) {
+  if (!src || item.tint) return;
+  const color = await dominantColor(src);
+  if (!color) return;
+  const cur = byId(item.id);
+  if (!cur) return;
+  await saveItem({ ...cur, tint: color });
+  const el = document.getElementById("p-" + item.id);
+  if (el) applyTint(el, color);
 }
 
-/*
- * The + button catches the light now and then, like a coin spinning to a stop
- * on a counter: once on launch, then every six seconds while the front page is
- * open. It brightens for the spin without resetting the corner's sleep, so the
- * menu still dims between spins. Skipped with reduced motion or a hidden page.
+function applyTint(el, color) {
+  const t = tintInks(color);
+  if (!t) return;
+  el.classList.add("tinted");
+  el.style.setProperty("--t", t.t);
+}
+
+/* ================= Timeline =================
+ * Today: your new saves, then today's six, then at most two suggestions,
+ * then the finish card. All saves: search and filters over everything.
+ * Posts are written by you (your face, your reasons) or, for suggestions,
+ * by Shoebox. Verdicts sit on every post: Later (Keep, for a new save),
+ * Done, Let go. Love and Reply are kept on the item.
  */
-const COIN_EVERY_MS = 6000;
-let coinTimer = 0;
-function spinCoin() {
-  const fab = $("#fab"), corner = $("#corner");
-  if (!fab || state.reader || $(".sheet-wrap") || ringEl) return;
-  if (document.hidden || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-  fab.classList.remove("spin");
-  void fab.offsetWidth; // restart the animation
-  fab.classList.add("spin");
-  corner.classList.add("glinting");
-  fab.addEventListener("animationend", () => { fab.classList.remove("spin"); corner.classList.remove("glinting"); }, { once: true });
-}
-function startCoin() {
-  clearInterval(coinTimer);
-  setTimeout(spinCoin, 900);
-  coinTimer = setInterval(spinCoin, COIN_EVERY_MS);
+
+/** What's on Today, in order. */
+function todaySections() {
+  topUpEdition();
+  const isNew = (i) => i.status === STATUS.INBOX || state.recent.get(i.id)?.stage === "inbox";
+  const fresh = state.items.filter((i) => !i.suggested && isNew(i)).sort((a, b) => b.created - a.created);
+  const freshIds = new Set(fresh.map((i) => i.id));
+  const v = editionView(state.items, state.edition);
+  const six = v.pages.filter((p) => !freshIds.has(p.id));
+  const sixIds = new Set(six.map((p) => p.id));
+  const sugg = state.items.filter((i) => i.suggested && !sixIds.has(i.id) && isNew(i))
+    .sort((a, b) => a.created - b.created).slice(0, SUGGESTIONS_PER_DAY);
+  return { fresh, six, sugg, edition: v };
 }
 
-let cornerTimer = 0;
-function wakeCorner() {
-  const corner = $("#corner");
-  if (!corner) return;
-  corner.classList.remove("asleep");
-  clearTimeout(cornerTimer);
-  cornerTimer = setTimeout(sleepCorner, IDLE_MS);
+function todayIds() {
+  const s = todaySections();
+  return [...s.fresh, ...s.six, ...s.sugg].map((i) => i.id);
 }
-function sleepCorner() {
-  const corner = $("#corner");
-  if (corner && !ringEl) corner.classList.add("asleep");
-}
-/*
- * The + ring, as on Tabs' Play button. Tap + and a ring of controls opens
- * around it: tap one. Or hold + and slide your thumb to one and let go.
- * Inner arc: what you can do with the card on screen (Read, Done, Keep or
- * Later, Let go). Outer arc: Add, Search, Front page or Feed, Settings.
- * Both arcs run from straight left of + to straight up, where a right thumb reaches.
- */
-const RING_HOLD_MS = 400;
-const RING_R = [140, 226];
-const RING_FROM = 196; // degrees: just above straight left, so the lowest controls clear the bottom edge
-let ringEl = null;
 
-function ringItems() {
-  const f = state.feed;
-  const id = f && !state.reader ? f.ids[f.index] : null;
-  const item = id && byId(id);
-  const inner = [];
-  if (item) {
-    const keep = item.status === STATUS.INBOX || isFaded(item);
-    // Listed left to up: Read sits straight up, nearest the thumb's natural sweep.
-    inner.push(
-      { id: "letgo", label: item.suggested ? "Not for me" : "Let go", icon: I.letGo, run: () => feedVerdict(id, VERDICT.LET_GO) },
-      { id: "later", label: keep ? "Keep" : "Later", icon: keep ? I.keep : I.later, run: () => feedVerdict(id, VERDICT.LATER) },
-      { id: "done", label: doneLabel(item), icon: I.done, run: () => feedVerdict(id, VERDICT.DONE) },
-      { id: "read", label: "Read", icon: I.read, primary: true, run: () => openStories("single", id) },
-    );
+/** Is a post on Today still waiting for a verdict? */
+function isOpen(item) {
+  if (state.recent.has(item.id)) return false;
+  if (item.status === STATUS.INBOX) return true;
+  if (item.status !== STATUS.QUEUED) return false;
+  return !(item.deferredAt && dayKey(item.deferredAt) === dayKey());
+}
+
+/** How a settled post is marked: from this session's verdicts, else from its state. */
+function settledAs(item) {
+  const r = state.recent.get(item.id);
+  if (r) return r.verdict;
+  if (item.status === STATUS.DONE) return VERDICT.DONE;
+  if (item.status === STATUS.ARCHIVED) return VERDICT.LET_GO;
+  if (item.status === STATUS.QUEUED && item.deferredAt && dayKey(item.deferredAt) === dayKey()) return VERDICT.LATER;
+  return null;
+}
+
+function leftToday() {
+  const s = todaySections();
+  return [...s.fresh, ...s.six].filter(isOpen).length;
+}
+
+/** Render the whole screen. Keeps your place unless `top` asks to go back up. */
+function render({ top = false } = {}) {
+  const prev = $("#tl");
+  const scroll = prev && !top ? prev.scrollTop : 0;
+  const left = leftToday();
+  app.innerHTML = `<div class="tl" id="tl">
+    <header class="top">
+      <div class="bar">
+        <h1 class="mark"><span class="logo" aria-hidden="true">${LOGO}</span><span class="word">${APP}</span></h1>
+        <span class="count" id="count" aria-live="polite">${left ? `${left} left today` : "Done for today"}</span>
+        <button class="icon-btn" type="button" data-act="settings" aria-label="Settings">${I.settings}</button>
+      </div>
+      <div class="tabs" role="tablist" aria-label="Show">
+        <button class="tab" role="tab" id="tab-today" type="button" data-tab="today" aria-selected="${state.tab === "today"}" aria-controls="panel" tabindex="${state.tab === "today" ? 0 : -1}">Today</button>
+        <button class="tab" role="tab" id="tab-all" type="button" data-tab="all" aria-selected="${state.tab === "all"}" aria-controls="panel" tabindex="${state.tab === "all" ? 0 : -1}">All saves</button>
+      </div>
+    </header>
+    <main id="panel" role="tabpanel" aria-labelledby="tab-${state.tab}">
+      <button class="composer" type="button" data-act="add">${avatarHtml()}<span class="ph">Save a link, photo or thought</span><span class="pill">Add</span></button>
+      ${state.tab === "today" ? todayHtml() : allHtml()}
+    </main>
+  </div>
+  <button class="fab" type="button" data-act="add" aria-label="Save something">${I.plus}</button>`;
+  const tl = $("#tl");
+  tl.scrollTop = scroll;
+  hydrate(tl);
+  bindTimeline(tl);
+  tintVisible(tl);
+}
+
+/** Replace one post in place (a summary or picture arrived), without disturbing the page. */
+function refreshPost(id) {
+  const el = document.getElementById("p-" + id);
+  const item = byId(id);
+  if (!el || !item || $(".sheet-wrap")) return;
+  const compact = el.classList.contains("compact");
+  const tmp = document.createElement("div");
+  tmp.innerHTML = postHtml(item, { compact });
+  const next = tmp.firstElementChild;
+  if (!next) return;
+  el.replaceWith(next);
+  hydrate(next);
+  tintVisible(next.parentElement || next);
+}
+
+function sectionHead(title, note = "") {
+  return `<h2 class="sep"><span>${esc(title)}</span>${note ? `<span class="sep-note">${esc(note)}</span>` : ""}</h2>`;
+}
+
+function todayHtml() {
+  const s = todaySections();
+  let h = "";
+  if (s.fresh.length) h += sectionHead("New", `${s.fresh.filter(isOpen).length || "All"} to sort`) + s.fresh.map((i) => postHtml(i)).join("");
+  if (s.six.length) h += sectionHead("Today's six", `${s.six.filter(isOpen).length} of ${s.six.length} left`) + s.six.map((i) => postHtml(i)).join("");
+  if (s.sugg.length) h += sectionHead("From outside your saves") + s.sugg.map((i) => postHtml(i)).join("");
+  return h + endHtml(s);
+}
+
+/** The end of Today: what's left, or the finish moment once it's all cleared. */
+function endHtml(s) {
+  const all = [...s.fresh, ...s.six];
+  const open = all.filter(isOpen).length;
+  const c = counts(state.items);
+  const more = `${c.queued ? `<button class="btn" type="button" data-act="one-more">Read one more</button>` : ""}
+    ${ai.settings.canDiscover() ? `<button class="btn" type="button" data-act="discover">Find something new</button>` : ""}`;
+  if (!state.items.length) {
+    return `<section class="end"><h2>Your shoebox is empty.</h2>
+      <p>Save a link, a photo, a thought or a file, and say why if you like. It comes back here.</p>
+      <button class="btn primary" type="button" data-act="add">Save something</button></section>`;
   }
-  const outer = [
-    { id: "settings", label: "Settings", icon: I.settings, run: openSettings },
-    { id: "library", label: "Search", icon: I.search, run: () => { state.libQuery = ""; openLibrary(); } },
-    f ? { id: "front", label: "Front page", icon: I.edition, run: closeFeed } : { id: "feed", label: "Feed", icon: I.read, run: openFeed },
-    { id: "add", label: "Add", icon: I.plus, primary: !item, run: openAdd },
-  ];
-  if (item) outer.splice(1, 0, { id: "edit", label: "Edit", icon: I.edit, run: () => openEdit(id) });
-  return inner.length ? [inner, outer] : [outer];
+  if (!all.length) {
+    return `<section class="end"><h2>Nothing for today.</h2>
+      <p>Nothing new came in and your queue is empty. Save something, or find something new.</p>
+      <div class="end-acts">${more}</div><p class="st" id="end-st" role="status"></p></section>`;
+  }
+  if (open) {
+    return `<section class="end quiet"><h2>${open} to go.</h2><p>Clear them and today is done.</p></section>`;
+  }
+  const tally = { done: 0, later: 0, go: 0 };
+  for (const i of all) {
+    const v = settledAs(i);
+    if (v === VERDICT.DONE || v === VERDICT.READ_NOW) tally.done++;
+    else if (v === VERDICT.LET_GO) tally.go++;
+    else tally.later++;
+  }
+  const first = state.wonDay !== dayKey();
+  if (first) { state.wonDay = dayKey(); db.meta.set("wonDay", state.wonDay); }
+  return `<section class="end win ${first ? "first" : ""}" aria-label="Today is done">
+    <h2>You cleared today.</h2>
+    <p>Nothing more until tomorrow morning.</p>
+    <div class="collage" aria-hidden="true">${all.slice(0, 6).map((i, k) => `<div class="tile" style="--k:${k}">${tileHtml(i)}</div>`).join("")}</div>
+    <div class="tally"><div><b>${tally.done}</b>done</div><div><b>${tally.later}</b>later</div><div><b>${tally.go}</b>let go</div></div>
+    <div class="end-acts">${more}</div><p class="st" id="end-st" role="status"></p>
+  </section>`;
 }
 
-function openRing(live) {
-  closeRing(true);
-  const fab = $("#fab");
-  if (!fab) return;
-  $(".toast")?.remove(); // nothing sits over the ring
-  wakeCorner();
-  const r = fab.getBoundingClientRect(), cx = r.left + r.width / 2, cy = r.top + r.height / 2;
-  const arcs = ringItems();
-  const all = arcs.flat();
-  let buttons = "";
-  arcs.forEach((list, ai) => list.forEach((it, k) => {
-    const deg = RING_FROM + (list.length === 1 ? 270 - RING_FROM : ((270 - RING_FROM) * k) / (list.length - 1));
-    const a = (deg * Math.PI) / 180, rad = RING_R[ai];
-    // Inner arc: labels sit inside the arc, toward +, where there's room. Outer arc: under each control.
-    const lab = ai === 0
-      ? `<span class="in" style="left:calc(50% + ${(-Math.cos(a) * 46).toFixed(1)}px);top:calc(50% + ${(-Math.sin(a) * 46).toFixed(1)}px)">${esc(it.label)}</span>`
-      : `<span>${esc(it.label)}</span>`;
-    buttons += `<button class="ri${it.primary ? " primary" : ""}" type="button" data-r="${it.id}" aria-label="${esc(it.label)}" style="left:${(cx + rad * Math.cos(a)).toFixed(1)}px;top:${(cy + rad * Math.sin(a)).toFixed(1)}px">${it.icon}${lab}</button>`;
-  }));
-  const el = document.createElement("div");
-  el.className = "ringx";
-  el.dataset.live = live ? "1" : "0";
-  el.setAttribute("role", "menu");
-  el.innerHTML = `<div class="ring-bg ${arcs.length > 1 ? "wide" : ""}" style="left:${cx}px;top:${cy}px"></div>${buttons}`;
-  document.body.appendChild(el);
-  ringEl = el;
-  fab.setAttribute("aria-expanded", "true");
-  $("#corner")?.classList.add("open");
-  requestAnimationFrame(() => el.classList.add("on"));
-  el.querySelectorAll(".ri").forEach((b) => b.addEventListener("click", (ev) => {
-    ev.stopPropagation();
-    const it = all.find((x) => x.id === b.dataset.r);
-    closeRing();
-    it?.run();
-  }));
-  el.addEventListener("click", (e) => { if (e.target === el || e.target.classList.contains("ring-bg")) closeRing(); });
-  el._items = all;
-  el._cardId = state.feed && !state.reader ? state.feed.ids[state.feed.index] : null;
-  tick();
+function tileHtml(item) {
+  const pic = pictureOf(item);
+  if (pic && pic.blobId) return `<img alt="" data-blob="${esc(pic.blobId)}">`;
+  if (pic && pic.src) return `<img alt="" referrerpolicy="no-referrer" src="${esc(pic.src)}" onerror="this.remove()">`;
+  const words = item.kind === KIND.QUOTE ? `“${firstWords(item.text || item.title, 5)}”` : firstWords(headline(item), 6);
+  return `<span class="tw" style="--c:${topicColor(item)}">${esc(words)}</span>`;
 }
 
-function closeRing(now = false) {
-  if (!ringEl) return;
-  const el = ringEl;
-  ringEl = null;
-  el.classList.remove("on");
-  if (now) el.remove(); else setTimeout(() => el.remove(), 150);
-  $("#fab")?.setAttribute("aria-expanded", "false");
-  $("#corner")?.classList.remove("open");
-  wakeCorner();
-}
-const closeMenu = () => closeRing();
-
-/** While the thumb is down after a hold: light the control nearest it. */
-function pickRing(x, y) {
-  if (!ringEl) return null;
-  let best = null, gap = 44;
-  ringEl.querySelectorAll(".ri").forEach((b) => {
-    const r = b.getBoundingClientRect();
-    const d = Math.hypot(x - (r.left + r.width / 2), y - (r.top + r.height / 2));
-    if (d < gap) { gap = d; best = b; }
-  });
-  ringEl.querySelectorAll(".ri").forEach((b) => b.classList.toggle("on", b === best));
-  if (best && ringEl.dataset.lit !== best.dataset.r) tick();
-  ringEl.dataset.lit = best ? best.dataset.r : "";
-  return best;
+function firstWords(s, n) {
+  const w = String(s || "").replace(/^[“"]|[”"]$/g, "").split(/\s+/).filter(Boolean);
+  return w.slice(0, n).join(" ") + (w.length > n ? "…" : "");
 }
 
-let fabHold = { timer: 0, x: 0, y: 0, opened: false };
-function bindFab(fab) {
-  fab.addEventListener("pointerdown", (e) => {
-    fabHold.opened = false; fabHold.x = e.clientX; fabHold.y = e.clientY;
-    clearTimeout(fabHold.timer);
-    fabHold.timer = setTimeout(() => { fabHold.opened = true; openRing(true); }, RING_HOLD_MS);
-  });
-  // After a hold, the click that follows isn't a toggle.
-  fab.addEventListener("click", (e) => {
-    clearTimeout(fabHold.timer);
-    if (fabHold.opened) { e.preventDefault(); fabHold.opened = false; return; }
-    if (ringEl) closeRing(); else openRing(false);
-  });
-  fab.addEventListener("contextmenu", (e) => e.preventDefault());
+function allHtml() {
+  const f = ALL_FILTERS[state.allFilter];
+  const q = state.allQuery.trim().toLowerCase();
+  const match = (i) => !q || [i.title, i.text, i.url, i.summary, i.fileName, i.author, i.transcript, i.why, i.site,
+    ...(i.points || []), ...(i.tags || []), ...(i.replies || []).map((r) => r.text)].some((s) => s && String(s).toLowerCase().includes(q));
+  const rows = state.items
+    .filter((i) => f.id === "all" || (f.id === "loved" ? i.loved : i.status === f.id))
+    .filter(match)
+    .sort((a, b) => (b.loved && f.id === "loved" ? b.loved - (a.loved || 0) : 0) || (b.doneAt || b.archivedAt || b.created) - (a.doneAt || a.archivedAt || a.created));
+  const waiting = !q && (f.id === STATUS.QUEUED || f.id === "all") ? fading(state.items, state.edition, { limit: 8 }) : [];
+  const shown = rows.slice(0, state.allShown);
+  return `<div class="find-wrap">${I.search}<label class="sr-only" for="all-q">Search everything you saved</label>
+      <input class="find" id="all-q" type="search" placeholder="Search everything you saved" value="${esc(state.allQuery)}" enterkeyhint="search" autocomplete="off"></div>
+    <div class="chips" role="group" aria-label="Show">
+      ${ALL_FILTERS.map((x, i) => `<button class="chip" type="button" data-filter="${i}" aria-pressed="${state.allFilter === i}">${x.label}</button>`).join("")}
+    </div>
+    ${waiting.length ? `${sectionHead("Fading", `Untouched ${FADE_DAYS / 7} weeks fades`)}<div class="tide">${tideHtml(waiting)}</div>` : ""}
+    ${sectionHead(f.id === "all" ? "Everything" : f.label, `${rows.length} item${rows.length === 1 ? "" : "s"}`)}
+    ${shown.length ? shown.map((i) => postHtml(i, { compact: true })).join("") : `<p class="empty">${q ? "Nothing matches." : "Nothing here yet."}</p>`}
+    ${rows.length > shown.length ? `<button class="btn more" type="button" data-act="show-more">Show ${Math.min(PAGE, rows.length - shown.length)} more</button>` : ""}`;
 }
 
-function bindRingGlobal() {
-  window.addEventListener("pointermove", (e) => {
-    if (!ringEl) {
-      if (fabHold.timer && Math.hypot(e.clientX - fabHold.x, e.clientY - fabHold.y) > 12) { clearTimeout(fabHold.timer); fabHold.timer = 0; }
-      return;
+/** Fading rows: faded saves wait for Keep or Let go; ones close to fading offer Read today. */
+function tideHtml(waiting) {
+  return waiting.map(({ item, left, faded }) => `<div class="tide-row ${faded ? "faded" : ""}">
+    <button class="txt" type="button" data-open="${esc(item.id)}"><span class="t">${esc(headline(item))}</span>
+      <span class="s">${faded ? "Faded. Your call." : `Fades in ${left} day${left === 1 ? "" : "s"}`}</span></button>
+    ${faded
+      ? `<button class="btn sm" type="button" data-letgo="${esc(item.id)}">Let go</button><button class="btn sm primary" type="button" data-keep="${esc(item.id)}">Keep</button>`
+      : `<button class="btn sm" type="button" data-rescue="${esc(item.id)}">Read today</button>`}</div>`).join("");
+}
+
+/* ---- A post ---- */
+
+/** Who wrote it and when, in plain words. */
+function byline(item) {
+  if (item.suggested) return { who: APP, when: friendlyWhen(item.created) };
+  return { who: "You", when: friendlyWhen(item.created) };
+}
+
+function postHtml(item, { compact = false } = {}) {
+  const words = item.kind === KIND.QUOTE || item.kind === KIND.NOTE;
+  const settled = state.tab === "today" ? settledAs(item) : null;
+  const open = state.tab === "today" ? isOpen(item) : item.status === STATUS.INBOX || item.status === STATUS.QUEUED;
+  const b = byline(item);
+  const tag = item.loved ? `<span class="tag love">${I.heartFill}<span>Loved</span></span>`
+    : item.suggested ? `<span class="tag">Suggested</span>`
+    : isFaded(item) ? `<span class="tag fade">Faded</span>`
+    : state.tab === "all" && item.status !== STATUS.QUEUED ? `<span class="tag">${{ inbox: "New", done: "Done", archived: "Let go" }[item.status] || ""}</span>` : "";
+  // The words at the top: your reason, else Shoebox's line about it (marked as a guess), else nothing.
+  let say = "";
+  if (item.suggested) say = `<p class="body">${esc(item.suggestReason || item.summary || "Picked from what you finish.")}</p>`;
+  else if (item.kind === KIND.NOTE) say = `<p class="say">${esc(item.text || item.title)}</p>`;
+  else if (item.why) say = `<p class="say">${esc(item.why)}</p>`;
+  else if (item.hook && !words) say = `<p class="guess"><span class="sr-only">${APP}'s guess: </span>${esc(item.hook)}</p>`;
+  const why = item.why && item.kind === KIND.NOTE ? `<p class="why-line"><span>Why you kept it</span>${esc(item.why)}</p>` : "";
+  const quote = item.kind === KIND.QUOTE ? `<figure class="quote ${String(item.text || "").length > 160 ? "long" : ""}"><blockquote>“${esc(item.text || item.title)}”</blockquote>${item.author ? `<figcaption>${esc(item.author)}</figcaption>` : ""}</figure>${item.why ? `<p class="why-line"><span>Why you kept it</span>${esc(item.why)}</p>` : ""}` : "";
+  const points = !compact && item.points && item.points.length && [KIND.LINK, KIND.PDF, KIND.TEXT].includes(item.kind)
+    ? `<div class="quick"><h3>Quick read</h3><ul>${item.points.slice(0, 3).map((p) => `<li>${esc(p)}</li>`).join("")}</ul></div>` : "";
+  const busy = state.enriching.has(item.id) ? `<p class="busy" role="status">Reading it…</p>` : "";
+  const replies = repliesHtml(item, compact);
+  const tintStyle = item.tint && tintInks(item.tint) ? ` style="--t:${esc(tintInks(item.tint).t)}"` : "";
+  return `<article class="post${compact ? " compact" : ""}${settled ? " settled" : ""}${item.tint ? " tinted" : ""}" id="p-${esc(item.id)}" data-id="${esc(item.id)}"${tintStyle}
+      aria-label="${esc(b.who)}, ${esc(b.when)}${item.title && !words ? ": " + esc(item.title) : ""}">
+    <div class="rail">${item.suggested ? `<span class="av av-sb" aria-hidden="true">${LOGO}</span>` : avatarHtml()}${replies ? '<span class="line" aria-hidden="true"></span>' : ""}</div>
+    <div class="main">
+      <div class="meta"><span class="who">${esc(b.who)},</span> <span class="when">${esc(b.when)}</span>${tag}<button class="act icon more" type="button" data-edit="${esc(item.id)}" aria-label="Edit">${I.menu}</button></div>
+      ${say}${quote}${why}
+      ${mediaHtml(item, compact)}
+      ${busy}${points}
+    </div>
+    <div class="acts-row">${settled ? stampHtml(item, settled) : actionsHtml(item, open)}</div>
+  </article>${replies}`;
+}
+
+function stampHtml(item, v) {
+  const label = v === VERDICT.DONE || v === VERDICT.READ_NOW ? doneLabel(item) === "Done" ? "Done" : "Read it"
+    : v === VERDICT.LET_GO ? (item.suggested ? "Not for me" : "Let go") : item.status === STATUS.QUEUED && state.recent.get(item.id)?.stage === "inbox" ? "Kept" : "Back tomorrow";
+  const cls = v === VERDICT.DONE || v === VERDICT.READ_NOW ? "done" : v === VERDICT.LET_GO ? "go" : "later";
+  return `<span class="stamp ${cls}">${cls === "done" ? I.done : cls === "go" ? I.letGo : I.later}${esc(label)}</span>
+    ${state.recent.has(item.id) ? `<button class="undo" type="button" data-undo="${esc(item.id)}">Undo</button>` : ""}`;
+}
+
+function actionsHtml(item, open) {
+  const love = `<button class="act icon" type="button" data-love="${esc(item.id)}" aria-pressed="${!!item.loved}" aria-label="Love">${item.loved ? I.heartFill : I.heart}</button>`;
+  const reply = item.suggested ? "" : `<button class="act icon" type="button" data-reply="${esc(item.id)}" aria-label="Reply to yourself${item.replies?.length ? `, ${item.replies.length} so far` : ""}">${I.reply}${item.replies?.length ? `<span class="n" aria-hidden="true">${item.replies.length}</span>` : ""}</button>`;
+  if (!open) {
+    const requeue = item.status === STATUS.DONE || item.status === STATUS.ARCHIVED
+      ? `<button class="act" type="button" data-requeue="${esc(item.id)}">${I.requeue}<span>Bring back</span></button>` : "";
+    return `<div class="acts">${love}${reply}<span class="grow"></span>${requeue}</div>`;
+  }
+  const keep = item.status === STATUS.INBOX || isFaded(item);
+  return `<div class="acts">${love}${reply}<span class="grow"></span>
+    <button class="act" type="button" data-v="${VERDICT.LATER}" data-id="${esc(item.id)}">${keep ? I.keep : I.later}<span>${keep ? "Keep" : "Later"}</span></button>
+    <button class="act" type="button" data-v="${VERDICT.LET_GO}" data-id="${esc(item.id)}">${I.letGo}<span>${item.suggested ? "Not for me" : "Let go"}</span></button>
+    <button class="act done" type="button" data-v="${VERDICT.DONE}" data-id="${esc(item.id)}">${I.done}<span>${esc(doneLabel(item))}</span></button>
+  </div>`;
+}
+
+function repliesHtml(item, compact) {
+  const list = item.replies || [];
+  if (!list.length) return "";
+  const shown = compact ? list.slice(-1) : list.slice(-3);
+  return `<div class="replies" data-for="${esc(item.id)}">${list.length > shown.length ? `<button class="more-replies" type="button" data-open="${esc(item.id)}">${list.length - shown.length} earlier repl${list.length - shown.length === 1 ? "y" : "ies"}</button>` : ""}
+    ${shown.map((r) => `<div class="reply"><div class="rail">${avatarHtml("sm")}</div><div class="main">
+      <div class="meta"><span class="who">You,</span> <span class="when">${esc(friendlyWhen(r.at))}</span></div>
+      <p class="say">${esc(r.text)}</p></div></div>`).join("")}</div>`;
+}
+
+/** The picture or file part of a post. Photos run edge to edge; links get a card. */
+function mediaHtml(item, compact) {
+  const pic = pictureOf(item);
+  const alt = esc(item.imageAlt || (item.kind === KIND.PHOTO ? item.title : ""));
+  const imgTag = (cls = "") => pic.blobId
+    ? `<img class="${cls}" alt="${alt}" data-blob="${esc(pic.blobId)}">`
+    : `<img class="${cls}" alt="${alt}" src="${esc(pic.src)}" referrerpolicy="no-referrer" loading="lazy" onerror="this.closest('.pic')?.remove()">`;
+  const openBtn = (inner, label) => `<button class="open" type="button" data-open="${esc(item.id)}" aria-label="${esc(label)}">${inner}</button>`;
+  switch (item.kind) {
+    case KIND.PHOTO:
+      if (!pic) return "";
+      return `<div class="pic bleed${compact ? " small" : ""}" data-dbl="${esc(item.id)}">${openBtn(imgTag(), `Open ${item.book ? "book" : "photo"}`)}<span class="burst" aria-hidden="true">${I.heartFill}</span>
+        ${item.book ? `<span class="badge-on">${esc(bookLine(item))}</span>` : ""}</div>`;
+    case KIND.VIDEO:
+      return `<div class="card">${pic ? `<div class="pic wide">${openBtn(imgTag() + `<span class="play" aria-hidden="true">${I.play}</span>`, `Open video: ${item.title}`)}</div>` : ""}
+        ${openBtn(`<span class="lk"><span class="site">${esc(siteLine(item))}</span><span class="ttl">${esc(item.title)}</span></span>`, `Open ${item.title}`)}</div>`;
+    case KIND.LINK:
+      return `<div class="card">${pic ? `<div class="pic wide">${openBtn(imgTag(), `Open ${item.title}`)}</div>` : ""}
+        ${openBtn(`${pic ? "" : `<span class="fav" style="--c:${topicColor(item)}" aria-hidden="true">${esc((item.site || host(item.url) || "?").charAt(0).toUpperCase())}</span>`}<span class="lk"><span class="site">${esc(siteLine(item))}</span><span class="ttl">${esc(item.title)}</span></span>`, `Open ${item.title}`)}</div>`;
+    case KIND.QUOTE:
+    case KIND.NOTE:
+      return "";
+    default: {
+      const name = item.fileName || item.title;
+      return `<div class="card file">${openBtn(`<span class="ext" style="--c:${topicColor(item)}">${esc(ext(item.fileName))}</span><span class="lk"><span class="ttl">${esc(item.title)}</span><span class="site">${esc([KIND_LABEL[item.kind], item.size ? size(item.size) : "", `${estimateMinutes(item)} min`].filter(Boolean).join(" · "))}</span></span>`, `Open ${name}`)}</div>`;
     }
-    if (ringEl.dataset.live === "1") pickRing(e.clientX, e.clientY);
+  }
+}
+
+function siteLine(item) {
+  return [item.site || host(item.url) || (item.kind === KIND.VIDEO ? "Video" : ""), `${estimateMinutes(item)} min`].filter(Boolean).join(" · ");
+}
+function bookLine(item) { return item.book ? `A book to read${item.book.author ? ` · ${item.book.author}` : ""}` : ""; }
+
+/** Tint posts whose picture has a colour, once each picture has loaded. */
+function tintVisible(root) {
+  root.querySelectorAll(".post").forEach((el) => {
+    const item = byId(el.dataset.id);
+    if (!item || item.tint) return;
+    const img = el.querySelector(".pic img");
+    if (!img) return;
+    const go = () => tintFrom(item, img.currentSrc || img.src);
+    if (img.complete && img.naturalWidth) go(); else img.addEventListener("load", go, { once: true });
   });
-  const up = () => {
-    clearTimeout(fabHold.timer); fabHold.timer = 0;
-    if (!ringEl || ringEl.dataset.live !== "1") return;
-    ringEl.dataset.live = "0";
-    const sel = ringEl.querySelector(".ri.on");
-    if (!sel) return; // let go without choosing: the ring stays open to tap
-    const it = ringEl._items.find((x) => x.id === sel.dataset.r);
-    closeRing();
-    it?.run();
-  };
-  window.addEventListener("pointerup", up);
-  window.addEventListener("pointercancel", up);
+}
+
+/* ---- What a tap does ---- */
+
+/* Taps anywhere on the screen go through one listener, set once at start. */
+function bindScreen() {
+  app.addEventListener("click", onTimelineClick);
+  // Double-tap a photo to love it.
+  let lastTap = { id: "", at: 0 };
+  app.addEventListener("pointerup", (e) => {
+    const box = e.target.closest("[data-dbl]");
+    if (!box) return;
+    const now = Date.now();
+    if (lastTap.id === box.dataset.dbl && now - lastTap.at < 320) {
+      lastTap = { id: "", at: 0 };
+      dblLoved = now;
+      setLove(box.dataset.dbl, true);
+    } else lastTap = { id: box.dataset.dbl, at: now };
+  });
+}
+
+/* What each render needs wired: the search box and arrow keys on the tabs. */
+function bindTimeline(tl) {
+  const q = $("#all-q", tl);
+  if (q) q.addEventListener("input", () => {
+    state.allQuery = q.value; state.allShown = PAGE;
+    clearTimeout(q._t);
+    q._t = setTimeout(() => { render(); const n = $("#all-q"); if (n) { n.focus(); n.setSelectionRange(n.value.length, n.value.length); } }, 250);
+  });
+  $(".tabs", tl).addEventListener("keydown", (e) => {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    e.preventDefault();
+    selectTab(state.tab === "today" ? "all" : "today");
+  });
+}
+
+let dblLoved = 0;
+async function onTimelineClick(e) {
+  const t = e.target;
+  const hit = (sel) => t.closest(sel);
+  let b;
+  if ((b = hit("[data-tab]"))) { selectTab(b.dataset.tab); return; }
+  if ((b = hit("[data-act]"))) { runAct(b.dataset.act, b); return; }
+  if ((b = hit("[data-filter]"))) { state.allFilter = +b.dataset.filter; state.allShown = PAGE; render({ top: false }); return; }
+  if ((b = hit("[data-v]"))) { timelineVerdict(b.dataset.id, b.dataset.v); return; }
+  if ((b = hit("[data-undo]"))) { undoRecent(b.dataset.undo); return; }
+  if ((b = hit("[data-love]"))) { const it = byId(b.dataset.love); if (it) setLove(it.id, !it.loved); return; }
+  if ((b = hit("[data-reply]"))) { openReply(b.dataset.reply); return; }
+  if ((b = hit("[data-edit]"))) { openEdit(b.dataset.edit); return; }
+  if ((b = hit("[data-requeue]"))) { const it = byId(b.dataset.requeue); if (it) { await saveItem(restore(it)); render(); toast("Back in your queue."); } return; }
+  if ((b = hit("[data-rescue]"))) { await addToEdition(b.dataset.rescue); tick(true); state.tab = "today"; render({ top: true }); toast("Added to today."); return; }
+  if ((b = hit("[data-keep]"))) {
+    const before = byId(b.dataset.keep);
+    await saveItem(restore(before)); tick(true); render();
+    toast("Kept. Back in your queue for three more weeks.", { action: "Undo", onAction: async () => { await saveItem(before); render(); } });
+    return;
+  }
+  if ((b = hit("[data-letgo]"))) {
+    const before = byId(b.dataset.letgo);
+    await saveItem(applyVerdict(before, VERDICT.LET_GO, { stage: "edition" })); tick(true); render();
+    toast("Let go.", { action: "Undo", onAction: async () => { await saveItem(before); render(); } });
+    return;
+  }
+  if ((b = hit("[data-open]"))) {
+    if (Date.now() - dblLoved < 400) return; // the second tap of a double-tap loves; it doesn't open
+    const id = b.dataset.open;
+    // Wait a beat on photos, so a double-tap can claim the tap first.
+    if (b.closest("[data-dbl]")) { setTimeout(() => { if (Date.now() - dblLoved > 400) openStories("single", id); }, 330); return; }
+    openStories("single", id);
+  }
+}
+
+function selectTab(tab) {
+  if (state.tab === tab) return;
+  state.tab = tab;
+  render({ top: true });
+  $(`#tab-${tab}`)?.focus();
+}
+
+function runAct(act, btn) {
+  if (act === "add") openAdd();
+  else if (act === "settings") openSettings();
+  else if (act === "show-more") { state.allShown += PAGE; render(); }
+  else if (act === "one-more") oneMore();
+  else if (act === "discover") {
+    btn.disabled = true;
+    findNew($("#end-st")).then((n) => { btn.disabled = false; if (n) render(); });
+  }
 }
 
 async function oneMore() {
-  const ids = new Set(state.edition.ids);
+  const ids = new Set(state.edition?.ids || []);
   const extra = buildEdition(state.items.filter((i) => !ids.has(i.id)), null, { size: 1 });
-  if (!extra.ids.length) { toast("The queue is empty."); return; }
+  if (!extra.ids.length) { toast("Your queue is empty."); return; }
   await addToEdition(extra.ids[0]);
-  renderFront();
-  openStories("edition", extra.ids[0]);
+  render();
+  document.getElementById("p-" + extra.ids[0])?.scrollIntoView({ behavior: reduced() ? "auto" : "smooth", block: "center" });
+}
+
+/** A verdict from the timeline. The post stays, stamped, with Undo; Today's count and end card follow. */
+async function timelineVerdict(id, verdict) {
+  const before = byId(id);
+  if (!before) return;
+  const wasLeft = leftToday();
+  const rec = await recordVerdict(before, verdict);
+  if (!rec) return;
+  state.recent.set(id, { verdict, stage: rec.stage, undo: rec.undo });
+  render();
+  const nowLeft = leftToday();
+  const words = {
+    [VERDICT.LET_GO]: rec.whyNot ? `Let go. ${{ topic: "Fewer like it.", known: "Deeper ones next time.", long: "Shorter ones next time.", site: "That site is blocked." }[rec.whyNot]}` : "Let go.",
+    [VERDICT.LATER]: rec.stage === "inbox" ? "Kept. It'll come back in a later day's six." : rec.after.fadedAt ? "Moved later eight times. It's waiting under Fading." : "Back tomorrow.",
+    [VERDICT.DONE]: doneToast(before),
+  };
+  if (wasLeft > 0 && nowLeft === 0 && state.tab === "today") {
+    buzz([12, 60, 18]);
+    $(".end.win")?.scrollIntoView({ behavior: reduced() ? "auto" : "smooth", block: "center" });
+    toast("You cleared today.", { action: "Undo", onAction: () => undoRecent(id) });
+  } else {
+    buzz(8);
+    toast(words[verdict], { action: "Undo", onAction: () => undoRecent(id) });
+  }
+}
+
+async function undoRecent(id) {
+  const r = state.recent.get(id);
+  if (!r) return;
+  await r.undo();
+  state.recent.delete(id);
+  render();
+  document.querySelector(`#p-${CSS.escape(id)} [data-v="${r.verdict}"]`)?.focus();
+  live("Undone");
+}
+
+async function setLove(id, on) {
+  const cur = byId(id);
+  if (!cur) return;
+  await saveItem({ ...cur, loved: on ? Date.now() : undefined });
+  refreshPost(id);
+  if (on) {
+    const burst = document.querySelector(`#p-${CSS.escape(id)} .burst`);
+    if (burst && !reduced()) { burst.classList.remove("go"); void burst.offsetWidth; burst.classList.add("go"); }
+    buzz(10);
+    tick();
+  }
+  live(on ? "Loved" : "Love removed");
+}
+
+/* Replies: notes to yourself under a post, kept on the item and searchable. */
+function openReply(id) {
+  const item = byId(id);
+  if (!item) return;
+  const wrap = sheet(`
+    <div class="sheet-head"><h2>Reply to yourself</h2><button class="x" type="button" data-close aria-label="Close">${I.close}</button></div>
+    <p class="note">${esc(headline(item))}</p>
+    <div class="field"><label for="reply-in">What did this make you think?</label>
+      <textarea id="reply-in" rows="3" maxlength="600"></textarea></div>
+    <span class="st" id="reply-st" role="status"></span>
+    <button class="btn primary" type="button" id="reply-go">Post reply</button>`, { label: "Reply to yourself" });
+  const input = $("#reply-in", wrap);
+  const post = async () => {
+    const text = input.value.trim();
+    if (!text) { const st = $("#reply-st", wrap); st.textContent = "Write something first."; st.classList.add("err"); input.focus(); return; }
+    const cur = byId(id);
+    if (!cur) { closeSheet(); toast("That item was deleted."); return; }
+    await saveItem({ ...cur, replies: [...(cur.replies || []), { id: db.newId(), text: text.slice(0, 600), at: Date.now() }] });
+    closeSheet();
+    render();
+    tick(true);
+    toast("Reply added.");
+  };
+  $("#reply-go", wrap).addEventListener("click", post);
+  input.addEventListener("input", () => { const st = $("#reply-st", wrap); st.textContent = ""; st.classList.remove("err"); });
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) post(); });
+  input.focus();
+}
+
+function buzz(pattern) { try { navigator.vibrate && navigator.vibrate(pattern); } catch { /* not supported */ } }
+function reduced() { return matchMedia("(prefers-reduced-motion: reduce)").matches; }
+function live(msg) {
+  let el = $("#live");
+  if (!el) { el = document.createElement("div"); el.id = "live"; el.className = "sr-only"; el.setAttribute("aria-live", "polite"); document.body.appendChild(el); }
+  el.textContent = "";
+  setTimeout(() => { el.textContent = msg; }, 30);
 }
 
 /* ================= Reader (stories) ================= */
 
+let lastOpener = null;
 function openStories(mode, startId) {
+  lastOpener = document.activeElement;
   let ids;
   if (mode === "inbox") ids = state.items.filter((i) => i.status === STATUS.INBOX).sort((a, b) => a.created - b.created).map((i) => i.id);
   else if (mode === "edition") ids = editionView(state.items, state.edition).open.map((i) => i.id);
@@ -983,6 +1171,7 @@ function openStories(mode, startId) {
   el.className = "reader";
   el.setAttribute("role", "dialog");
   el.setAttribute("aria-modal", "true");
+  el.setAttribute("aria-label", "Reading");
   el.innerHTML = `<div class="reader-inner">
     <div class="segs" id="segs" aria-hidden="true"></div>
     <div class="reader-top" id="reader-top">
@@ -998,18 +1187,21 @@ function openStories(mode, startId) {
   el.querySelector("[data-close]").addEventListener("click", closeReader);
   $("#reader-edit", el).addEventListener("click", () => { const r = state.reader; const id = r && r.ids[r.index]; if (id) openEdit(id); });
   bindStoryGestures(el);
-  bindPull({ scroller: $("#story", el), target: $("#story", el), host: $(".reader-inner", el), label: state.feed ? "Release to go back" : "Release for the front page", onBack: closeReader });
+  bindPull({ scroller: $("#story", el), target: $("#story", el), host: $(".reader-inner", el), label: "Release to go back", onBack: closeReader });
   el.addEventListener("pointerdown", wakeReader, true);
   renderStory();
   wakeReader();
+  $("#app")?.setAttribute("inert", "");
+  el.querySelector("[data-close]")?.focus();
 }
 
 function closeReader() {
   $(".reader")?.remove();
+  $("#app")?.removeAttribute("inert");
   state.reader = null;
   clearTimeout(readerTimer);
-  renderFront();
-  if (state.feed) renderFeed();
+  render();
+  if (lastOpener && document.contains(lastOpener)) lastOpener.focus();
 }
 
 let readerTimer = 0;
@@ -1036,7 +1228,7 @@ function renderStory() {
     story.innerHTML = `<div class="end">
       <h1>${r.mode === "inbox" ? "All sorted." : "You're done."}</h1>
       <p class="summary">${r.mode === "inbox" ? "Everything new has a verdict. What you kept will come back in an edition." : "That's today's edition. The next one is set tomorrow morning."}</p>
-      <button class="pill-btn" type="button" data-end>Back to the front page</button></div>`;
+      <button class="btn primary" type="button" data-end>Back</button></div>`;
     verdicts.innerHTML = "";
     $("#reader-edit", el).hidden = true;
     $("[data-end]", story).addEventListener("click", closeReader);
@@ -1095,6 +1287,7 @@ function storyBody(item) {
     ${item.points && item.points.length ? `<ul class="points">${item.points.map((p) => `<li>${esc(p)}</li>`).join("")}</ul>` : ""}
     ${item.transcript ? `<span class="label">Text in the image</span><div class="prose">${esc(item.transcript)}</div>` : ""}
     ${item.note ? `<div class="prose mine-note">${esc(item.note)}</div>` : ""}
+    ${item.replies && item.replies.length ? `<div class="story-replies"><span class="label">Your replies</span>${item.replies.map((r) => `<p><span class="when">${esc(friendlyWhen(r.at))}</span>${esc(r.text)}</p>`).join("")}</div>` : ""}
     ${source}
     ${item.ai && item.ai.why ? `<p class="why-line"><b>Why today</b>${esc(item.ai.why)}</p>` : ""}`;
 }
@@ -1104,7 +1297,8 @@ function imgFull(item) {
   const pic = item.kind === KIND.PHOTO && item.blobId && !item.cover?.pinned ? { blobId: item.blobId } : pictureOf(item);
   if (!pic) return "";
   const credit = creditLine(pic);
-  const img = pic.blobId ? `<img alt="${esc(item.title)}" ${gone} data-blob="${esc(pic.blobId)}">` : `<img alt="${esc(item.title)}" ${gone} src="${esc(pic.src)}">`;
+  const alt = esc(item.imageAlt || item.title);
+  const img = pic.blobId ? `<img alt="${alt}" ${gone} data-blob="${esc(pic.blobId)}">` : `<img alt="${alt}" ${gone} referrerpolicy="no-referrer" src="${esc(pic.src)}">`;
   return `<div class="media">${img}</div>${credit ? `<p class="credit">${pic.link ? `<a href="${esc(pic.link)}" target="_blank" rel="noopener">${esc(credit)}</a>` : esc(credit)}</p>` : ""}`;
 }
 
@@ -1124,6 +1318,9 @@ function updateTimeLeft(item) {
  * profile. Returns null if you backed out, else { after, undo } where undo
  * puts back the item and what was learned.
  */
+/** What a verdict changes on an item, and so all that Undo puts back. */
+const VERDICT_FIELDS = ["status", "queuedAt", "doneAt", "archivedAt", "deferredAt", "skips", "fadedAt", "washedOut", "readNow", "history", "whyNot"];
+
 async function recordVerdict(before, verdict) {
   let whyNot = null;
   if (verdict === VERDICT.LET_GO && before.suggested) {
@@ -1136,16 +1333,23 @@ async function recordVerdict(before, verdict) {
   if (whyNot) after.whyNot = whyNot;
   await saveItem(after);
   const prevSuggest = state.suggest;
+  let learned = null;
   if (before.suggested) {
-    state.suggest = learnFromSuggestion(state.suggest, before, verdict, whyNot);
+    learned = state.suggest = learnFromSuggestion(state.suggest, before, verdict, whyNot);
     await db.meta.set("suggest", state.suggest);
   }
   tick(true);
   return {
     after, stage, whyNot,
+    // Undo puts back only what the verdict changed, onto the item as it is now, so a reply,
+    // love, edit or summary added since is kept. What a suggestion taught is taken back only
+    // if nothing has changed the suggestion profile since.
     undo: async () => {
-      await saveItem(before);
-      if (before.suggested) { state.suggest = prevSuggest; await db.meta.set("suggest", prevSuggest); }
+      const cur = byId(before.id) || after;
+      const back = { ...cur };
+      for (const f of VERDICT_FIELDS) { if (f in before) back[f] = before[f]; else delete back[f]; }
+      await saveItem(back);
+      if (learned && state.suggest === learned) { state.suggest = prevSuggest; await db.meta.set("suggest", prevSuggest); }
     },
   };
 }
@@ -1175,42 +1379,12 @@ function askWhyNot(item) {
 }
 
 async function storyVerdict(id, verdict) {
-  const r = state.reader;
-  const before = byId(id);
-  if (!r || !before) return;
-  // Opened from the feed: the verdict closes the reader and the feed moves on.
-  if (r.mode === "single" && state.feed && state.feed.ids.includes(id)) {
-    $(".reader")?.remove();
-    state.reader = null;
-    clearTimeout(readerTimer);
-    renderFront();
-    feedVerdict(id, verdict);
-    return;
-  }
-  const rec = await recordVerdict(before, verdict);
-  if (!rec) return;
-  const { after, stage } = rec;
-  const at = r.ids.indexOf(id);
-  r.ids.splice(at, 1);
-  if (r.index >= r.ids.length) r.index = Math.max(0, r.ids.length - (r.ids.length ? 1 : 0));
-  if (!r.ids.length) r.index = 0;
-  const story = $("#story");
-  if (story) { story.style.opacity = "0"; story.style.transform = verdict === VERDICT.LET_GO ? "translateX(-40px)" : "translateY(-24px)"; }
-  setTimeout(renderStory, 140);
-  const words = {
-    [VERDICT.LET_GO]: "Let go.",
-    [VERDICT.LATER]: stage === "inbox" ? "Kept for a future edition." : after.fadedAt ? "Moved later eight times. It's waiting in the Tideline." : "Moved to a later edition.",
-    [VERDICT.DONE]: doneToast(before),
-  };
-  toast(words[verdict], {
-    high: true,
-    action: "Undo",
-    onAction: async () => {
-      await rec.undo();
-      if (state.reader === r) { r.ids.splice(at, 0, id); r.index = at; renderStory(); }
-      else renderFront();
-    },
-  });
+  $(".reader")?.remove();
+  $("#app")?.removeAttribute("inert");
+  state.reader = null;
+  clearTimeout(readerTimer);
+  await timelineVerdict(id, verdict);
+  document.querySelector(`#p-${CSS.escape(id)} .undo, #p-${CSS.escape(id)} .act`)?.focus();
 }
 
 /** Swipe left or right for the next or previous item, without a verdict. */
@@ -1260,84 +1434,6 @@ function bindStoryGestures(el) {
     if (e.key === "ArrowLeft" && r.index > 0) { r.index--; renderStory(); }
   });
 }
-
-/* ================= Feed (the opening screen) =================
- * The app opens on a feed: one card at a time, new saves first, then today's
- * edition, then a finish card. Each card starts face down on why you saved it
- * (your words when you gave them) and turns over with a tap. Swipe up for the
- * next card and down for the one before; on the first card, pull down for the
- * front page. The verdicts are in the + ring (hold + and slide, or tap +).
- */
-
-const FEED_STEP = 70;
-let feedDrag = false, dragEndedAt = 0;
-
-/** Your own new saves, then today's edition, then at most two suggestions: AI picks never cut in line. */
-function feedIds() {
-  const inboxAll = state.items.filter((i) => i.status === STATUS.INBOX).sort((a, b) => a.created - b.created);
-  const mine = inboxAll.filter((i) => !i.suggested).map((i) => i.id);
-  const today = editionView(state.items, state.edition).open.map((i) => i.id).filter((id) => !mine.includes(id));
-  const suggested = inboxAll.filter((i) => i.suggested && !today.includes(i.id)).slice(0, SUGGESTIONS_PER_DAY).map((i) => i.id);
-  return [...mine, ...today, ...suggested];
-}
-
-function openFeed() {
-  topUpEdition();
-  const ids = feedIds();
-  state.feed = { ids, index: 0, total: ids.length, turned: new Set(), tally: { done: 0, later: 0, letGo: 0 } };
-  $(".feed")?.remove();
-  const el = document.createElement("div");
-  el.className = "feed";
-  el.innerHTML = `<div class="feed-inner">
-    <div class="feed-bg" id="feed-bg" aria-hidden="true"></div>
-    <div class="segs" id="feed-segs" aria-hidden="true"></div>
-    <div class="feed-top"><span class="where" id="feed-where"></span><span class="left" id="feed-left"></span></div>
-    <div class="feed-card" id="feed-card"></div>
-    <div class="pull-tip" id="feed-tip" aria-hidden="true">${I.down}<span>Release for the front page</span></div>
-  </div>`;
-  document.body.appendChild(el);
-  bindFeedGestures(el);
-  renderFeed();
-  renderFront(); // the menu now offers the front page
-}
-
-function closeFeed() {
-  $(".feed")?.remove();
-  state.feed = null;
-  renderFront();
-}
-
-/** What you'd be doing with it, for the line above an AI-written card face. */
-function doingFor(item) {
-  const byIntent = { read: "something to read", watch: "something to watch", listen: "something to listen to",
-    reference: "kept for reference", idea: "an idea to come back to", task: "something to act on" };
-  const byKind = { video: byIntent.watch, audio: byIntent.listen, quote: "words to keep", note: "a thought to come back to",
-    photo: "a picture you kept", link: byIntent.read, pdf: byIntent.read, text: byIntent.read, file: "a file you saved" };
-  return byIntent[item.intent] || byKind[item.kind] || "something you saved";
-}
-
-/** What a face-down card says: your reason first, then Edition's guess, else what you saved it for. */
-function hookFor(item) {
-  const what = {
-    read: "Something you meant to read.", watch: "Something you meant to watch.", listen: "Something you meant to listen to.",
-    reference: "Something you kept for reference.", idea: "An idea you wanted to come back to.", task: "Something you meant to act on.",
-  };
-  const byKind = {
-    quote: "Words you wanted to keep.", note: "A thought you wrote down.", photo: "A picture you kept.", video: what.watch,
-    audio: what.listen, pdf: "A document you saved.", text: "A document you saved.", file: "A file you saved.", link: what.read,
-  };
-  if (item.suggested) {
-    const because = item.suggestReason || item.summary || "";
-    return { kicker: "Suggested for you", lead: because ? "" : "Something Edition found for you.", big: because || "A new find, picked from what you finish.", mine: false, sub: "", suggestion: true };
-  }
-  const since = item.status === STATUS.INBOX ? (ago(item.created) === "today" ? "Saved today" : `Saved ${ago(item.created)}`) : `From ${ago(item.created)}`;
-  const sub = item.ai?.why || item.summary || "";
-  if (item.why) return { kicker: since, lead: "You wrote when you saved it:", big: `“${item.why}”`, mine: true, sub };
-  if (item.book) return { kicker: since, lead: "", big: "A book you want to read", mine: false, sub: "" };
-  if (item.hook) return { kicker: since, lead: `Edition's guess · ${doingFor(item)}`, big: item.hook, mine: false, guess: true, sub: "" };
-  return { kicker: since, lead: "", big: what[item.intent] || byKind[item.kind] || "Something you saved.", mine: false, sub };
-}
-
 function feedMeta(item) {
   if (item.book) return ["Book", item.book.author ? `by ${item.book.author}` : ""].filter(Boolean).join(" · ");
   return [KIND_LABEL[item.kind] || "Item", `${estimateMinutes(item)} min`, item.url ? host(item.url) : item.author || ""].filter(Boolean).join(" · ");
@@ -1346,341 +1442,9 @@ function feedMeta(item) {
 /** What Done is called for this item: for a book, it means you've read it (whenever that was). */
 const doneLabel = (item) => (item && item.book ? "I've read it" : "Done");
 const doneToast = (item) => (item && item.book ? "Marked as read. It counts toward what you like, not as a recent read." : "Marked done.");
-
-function renderFeed() {
-  const f = state.feed;
-  // A background refresh of the same card (a picture or summary arriving) leaves an open ring alone;
-  // only a different card closes it, since its actions belong to the card it was opened on.
-  if (ringEl && (!f || ringEl._cardId !== f.ids[f.index])) closeRing(true);
-  const el = $(".feed");
-  if (!f || !el) return;
-  const card = $("#feed-card", el);
-  const settled = f.total - f.ids.length;
-  $("#feed-segs", el).innerHTML = f.total > 1 ? Array.from({ length: f.total }, (_, i) => `<span class="${i < settled + f.index + 1 ? "on" : ""}"></span>`).join("") : "";
-  const id = f.ids[f.index];
-  const item = id && byId(id);
-  card.style.transition = "none";
-  card.style.transform = "";
-  card.style.opacity = "";
-
-  paintFeedBg(el, item, f.turned.has(id));
-  if (!item) {
-    $("#feed-where", el).textContent = dateLabel();
-    $("#feed-left", el).textContent = "";
-    card.className = "feed-card end-card";
-    card.innerHTML = feedEnd();
-    bindFeedEnd(card);
-    return;
-  }
-
-  const inbox = item.status === STATUS.INBOX;
-  const left = f.ids.slice(f.index).reduce((s, x) => s + estimateMinutes(byId(x) || {}), 0);
-  $("#feed-where", el).textContent = item.suggested ? "Suggested" : inbox ? "New save" : "Today's edition";
-  $("#feed-left", el).textContent = `${settled + f.index + 1} of ${f.total} · ${left} min left`;
-
-  const turned = f.turned.has(id);
-  const h = hookFor(item);
-  const words = item.kind === KIND.QUOTE || item.kind === KIND.NOTE;
-  card.className = "feed-card" + (turned ? " turned" : "") + (item.suggested ? " suggested" : "");
-  card.innerHTML = `<div class="flip">
-    <div class="face hook-face" data-turn role="button" tabindex="${turned ? -1 : 0}" aria-label="Turn the card over">
-      <span class="kicker">${esc(h.kicker)}</span>
-      ${h.lead ? `<span class="lead-in">${esc(h.lead)}</span>` : ""}
-      <span class="big ${h.mine ? "mine" : ""}${h.guess ? " guess" : ""}">${esc(h.big)}</span>
-      ${h.sub ? `<span class="sub">${esc(h.sub)}</span>` : ""}
-      <span class="meta">${esc(feedMeta(item))}</span>
-      <span class="turn">Tap to turn ${I.requeue}</span>
-    </div>
-    <div class="face card-face" data-open-card role="button" tabindex="${turned ? 0 : -1}" aria-label="Open ${esc(headline(item))}">
-      <span class="kicker">${esc(feedMeta(item))}</span>
-      ${words
-        ? `<span class="said ${String(item.text || "").length > 160 ? "long" : ""}">${esc(headline(item))}</span>${item.author ? `<span class="who">${esc(item.author)}</span>` : ""}`
-        : `<span class="ttl">${esc(item.title)}</span>`}
-      ${item.summary && !words ? `<span class="sub">${esc(item.summary)}</span>` : ""}
-      ${item.suggested
-        ? `<span class="mine-line sug"><span class="k">Suggested because</span><span class="w">${esc(item.suggestReason || "it fits what you finish")}</span></span>`
-        : item.why
-          ? `<span class="mine-line"><span class="k">Why you saved it</span><span class="w">“${esc(item.why)}”</span></span>`
-          : `<button class="add-why" type="button" data-add-why>${I.plus}${item.hook ? "Correct Edition's guess" : "Add why you saved it"}</button>`}
-      <span class="open-hint">Tap to open ${I.next}</span>
-      ${creditLine(pictureOf(item)) ? `<span class="credit">${esc(creditLine(pictureOf(item)))}</span>` : ""}
-    </div>
-  </div>`;
-  hydrate(card);
-  requestAnimationFrame(() => { card.style.transition = ""; });
-
-}
-
-/** Add or change your reason for a save; it becomes the face of its card. */
-function askWhy(id) {
-  const item = byId(id);
-  if (!item) return;
-  const wrap = sheet(`
-    <div class="sheet-head"><h2>Why you saved it</h2><button class="x" type="button" data-close aria-label="Close">${I.close}</button></div>
-    <p class="note">${esc(headline(item))}</p>
-    <div class="field"><label for="why-in">In your words${!item.why && item.hook ? ` <span class="hint">Edition's guess, ready to correct</span>` : ""}</label>
-      <input id="why-in" type="text" autocomplete="off" maxlength="140" placeholder="Read this before the roadmap review" value="${esc(item.why || item.hook || "")}"></div>
-    <button class="btn primary" type="button" id="why-save">Save</button>`, { label: "Why you saved it" });
-  const input = $("#why-in", wrap);
-  const save = async () => {
-    const why = input.value.trim().slice(0, 140);
-    await saveItem({ ...byId(id), why });
-    closeSheet();
-    renderFeed();
-    if (why) toast("Saved. You'll see it first next time.");
-  };
-  $("#why-save", wrap).addEventListener("click", save);
-  input.addEventListener("keydown", (e) => { if (e.key === "Enter") save(); });
-  input.focus();
-  input.select();
-}
-
-/*
- * Behind each card: its picture (a link's preview, a photo, a video still) or
- * a drawn cover in its topic's colour, shown once the card is turned. The whole
- * card is tinted, faintly, by the picture's main colour or the topic colour.
- */
-function paintFeedBg(el, item, turned) {
-  const bg = $("#feed-bg", el);
-  if (!bg) return;
-  const both = picBoth();
-  el.classList.toggle("pic-both", both);
-  // A new card: hide the old picture at once, with no fade, so the next card's
-  // picture never shows through before its face does.
-  if (bg.dataset.id !== (item?.id || "")) {
-    bg.style.transition = "none";
-    bg.classList.remove("show");
-    void bg.offsetWidth;
-    requestAnimationFrame(() => { bg.style.transition = ""; });
-  }
-  bg.dataset.id = item?.id || "";
-  if (!item) { bg.innerHTML = ""; bg.className = "feed-bg"; el.style.removeProperty("--tint"); return; }
-  const pic = pictureOf(item);
-  const src = pic && pic.src ? pic.src : null;
-  const blobId = pic && pic.blobId ? pic.blobId : null;
-  bg.className = "feed-bg" + (turned || both ? " show" : "") + (src || blobId ? " pic" : " drawn");
-  bg.innerHTML = src || blobId
-    ? `<img alt="" ${blobId ? `data-blob="${esc(blobId)}"` : `src="${esc(src)}"`} onerror="this.parentElement.classList.replace('pic','drawn');this.outerHTML=this.parentElement.dataset.cover">`
-    : coverSvg(item);
-  bg.dataset.cover = coverSvg(item);
-  el.style.setProperty("--tint", item.tint || topicColor(item));
-  if (blobId) hydrate(bg).then(() => tintFrom(item, bg.querySelector("img")?.src));
-  else if (src && !item.tint) tintFrom(item, src);
-}
-
-/** Read a picture's main colour once, keep it on the item, and tint the card if it's still on screen. */
-async function tintFrom(item, src) {
-  if (!src || item.tint) return;
-  const color = await dominantColor(src);
-  if (!color) return;
-  const cur = byId(item.id);
-  if (!cur) return;
-  await saveItem({ ...cur, tint: color });
-  const f = state.feed;
-  if (f && f.ids[f.index] === item.id) $(".feed")?.style.setProperty("--tint", color);
-}
-
-function turnCard() {
-  const f = state.feed;
-  const id = f && f.ids[f.index];
-  if (!id) return;
-  f.turned.add(id);
-  const card = $("#feed-card");
-  card.classList.add("turned");
-  $("#feed-bg")?.classList.add("show");
-  card.querySelector("[data-turn]")?.setAttribute("tabindex", "-1");
-  card.querySelector("[data-open-card]")?.removeAttribute("tabindex");
-  tick();
-}
-
-function feedEnd() {
-  const f = state.feed;
-  const c = counts(state.items);
-  const t = f.tally;
-  const waiting = fading(state.items, state.edition);
-  if (!state.items.length) {
-    return `<div class="end-inner"><h1>Nothing here yet.</h1>
-      <p class="summary">Save a link, a thought, a photo or a file, and say why if you like. It comes back here as a card.</p>
-      <button class="pill-btn" type="button" data-end="add">Add something</button></div>`;
-  }
-  const said = [t.done && `${t.done} done`, t.later && `${t.later} kept for later`, t.letGo && `${t.letGo} let go`].filter(Boolean).join(", ");
-  return `<div class="end-inner">
-    <span class="label">${esc(dateLabel())}</span>
-    <h1>${f.total ? "You're done." : "Nothing new today."}</h1>
-    <p class="summary">${said ? `${cap(said)}. ` : ""}${f.total ? "That's today's feed. Tomorrow's is set in the morning." : "Your edition is clear and nothing new is waiting."}</p>
-    ${waiting.length ? `<section class="end-sec"><span class="label">Fading</span>
-      <p class="note">Untouched for ${FADE_DAYS / 7} weeks, a save fades out of your editions. It waits here until you decide.</p>
-      ${tideHtml(waiting)}</section>` : ""}
-    <div class="end-acts">
-      ${c.queued ? `<button class="pill-btn" type="button" data-end="more">Read one more</button>` : ""}
-      ${ai.settings.canDiscover() ? `<button class="pill-btn ghost" type="button" data-end="discover">Find something new</button>` : ""}
-      <button class="pill-btn ghost" type="button" data-end="front">Front page</button>
-    </div>
-    <span class="st" id="feed-st" role="status"></span>
-  </div>`;
-}
-
-function bindFeedEnd(card) {
-  bindTide(card, renderFeed);
-  card.querySelectorAll("[data-open]").forEach((b) => b.addEventListener("click", () => openStories("single", b.dataset.open)));
-  card.querySelector('[data-end="add"]')?.addEventListener("click", openAdd);
-  card.querySelector('[data-end="front"]')?.addEventListener("click", closeFeed);
-  card.querySelector('[data-end="more"]')?.addEventListener("click", async () => {
-    const ids = new Set(state.edition.ids);
-    const extra = buildEdition(state.items.filter((i) => !ids.has(i.id)), null, { size: 1 });
-    if (!extra.ids.length) { toast("The queue is empty."); return; }
-    await addToEdition(extra.ids[0]);
-    const f = state.feed;
-    f.ids.push(extra.ids[0]);
-    f.total += 1;
-    renderFeed();
-  });
-  const disc = card.querySelector('[data-end="discover"]');
-  if (disc) disc.addEventListener("click", async () => {
-    disc.disabled = true;
-    const before = new Set(state.items.map((i) => i.id));
-    await findNew($("#feed-st"));
-    disc.disabled = false;
-    const f = state.feed;
-    const shown = f ? f.ids.filter((x) => byId(x)?.suggested).length : 0;
-    const fresh = state.items.filter((i) => !before.has(i.id)).map((i) => i.id).slice(0, Math.max(0, SUGGESTIONS_PER_DAY - shown));
-    if (fresh.length && f) { f.ids.push(...fresh); f.total += fresh.length; renderFeed(); }
-  });
-}
-
-async function feedVerdict(id, verdict) {
-  const f = state.feed;
-  const before = byId(id);
-  if (!f || !before) return;
-  const rec = await recordVerdict(before, verdict);
-  if (!rec || state.feed !== f) return;
-  const { after, stage } = rec;
-  const key = verdict === VERDICT.DONE ? "done" : verdict === VERDICT.LET_GO ? "letGo" : "later";
-  f.tally[key]++;
-  const at = f.ids.indexOf(id);
-  if (at >= 0) f.ids.splice(at, 1);
-  if (f.index > f.ids.length) f.index = f.ids.length;
-  slideFeed(verdict === VERDICT.LET_GO ? "left" : "up");
-  const words = {
-    [VERDICT.LET_GO]: rec.whyNot ? `Let go. ${{ topic: "Fewer like it.", known: "Deeper ones next time.", long: "Shorter ones next time.", site: "That site is blocked." }[rec.whyNot]}` : "Let go.",
-    [VERDICT.LATER]: stage === "inbox" ? "Kept for a future edition." : after.fadedAt ? "Moved later eight times. It's waiting under Fading." : "Moved to a later edition.",
-    [VERDICT.DONE]: doneToast(before),
-  };
-  toast(words[verdict], {
-    action: "Undo",
-    onAction: async () => {
-      await rec.undo();
-      f.tally[key]--;
-      if (state.feed === f) { f.ids.splice(at, 0, id); f.index = at; renderFeed(); }
-      renderFront();
-    },
-  });
-  renderFront();
-}
-
-/** Animate the current card away, then show whatever card is now current. */
-function slideFeed(dir) {
-  const card = $("#feed-card");
-  if (!card) { renderFeed(); return; }
-  card.style.transition = "transform 0.16s ease, opacity 0.16s ease";
-  card.style.opacity = "0";
-  card.style.transform = dir === "left" ? "translateX(-60px)" : dir === "down" ? "translateY(80px)" : "translateY(-80px)";
-  setTimeout(() => {
-    renderFeed();
-    const next = $("#feed-card");
-    if (!next) return;
-    next.style.transition = "none";
-    next.style.opacity = "0";
-    next.style.transform = dir === "down" ? "translateY(-50px)" : "translateY(50px)";
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      next.style.transition = "transform 0.2s ease, opacity 0.2s ease";
-      next.style.opacity = "";
-      next.style.transform = "";
-    }));
-  }, 150);
-}
-
-function stepFeed(step) {
-  const f = state.feed;
-  if (!f) return false;
-  const to = f.index + step;
-  if (to < 0 || to > f.ids.length) return false;
-  f.index = to;
-  slideFeed(step > 0 ? "up" : "down");
-  return true;
-}
-
-/*
- * Vertical swipes, TikTok style: up for next, down for the one before. On the
- * first card a pull down lights "Release for the front page" past 90px. Taps
- * on a card turn it (face down) or open it (face up), unless the finger moved.
- */
-function bindFeedGestures(el) {
-  const card = $("#feed-card", el), tip = $("#feed-tip", el);
-  let y0 = null, x0 = 0, t0 = 0, dy = 0, lit = false, moved = false;
-  const reset = () => {
-    y0 = null; feedDrag = false; lit = false;
-    tip.style.opacity = ""; tip.classList.remove("go");
-  };
-  // The whole screen listens, so a swipe can start anywhere, right down to the bottom edge.
-  el.addEventListener("pointerdown", (e) => {
-    if (!state.feed || e.button > 0) return;
-    if (card.classList.contains("end-card") && card.scrollTop > 0) return;
-    if (e.target.closest(".rescue, .pill-btn, .tide-row button, .add-why, iframe, video, audio")) return;
-    y0 = e.clientY; x0 = e.clientX; t0 = Date.now(); dy = 0; moved = false;
-  });
-  el.addEventListener("pointermove", (e) => {
-    if (y0 == null) return;
-    dy = e.clientY - y0;
-    const dx = e.clientX - x0;
-    if (!moved && Math.abs(dy) < 8) return;
-    if (!moved && Math.abs(dx) > Math.abs(dy)) { reset(); return; }
-    if (!moved) { moved = true; feedDrag = true; try { el.setPointerCapture(e.pointerId); } catch { /* capture can fail mid-gesture */ } }
-    const f = state.feed;
-    const atStart = f.index === 0, atEnd = f.index >= f.ids.length;
-    const resist = (dy > 0 && atStart) || (dy < 0 && atEnd) ? 0.45 : 1;
-    card.style.transition = "none";
-    card.style.transform = `translateY(${dy * resist}px)`;
-    if (atStart && dy > 0) {
-      tip.style.opacity = String(Math.min(1, dy / PULL));
-      const go = dy >= PULL;
-      if (go && !lit) tick();
-      lit = go;
-      tip.classList.toggle("go", go);
-    }
-  });
-  const end = () => {
-    if (y0 == null) return;
-    const f = state.feed;
-    const fast = Math.abs(dy) > 30 && Math.abs(dy) / Math.max(1, Date.now() - t0) > 0.5;
-    const wasMoved = moved, d = dy, go = lit;
-    reset();
-    if (!wasMoved) return;
-    card.style.transition = "transform 0.2s ease";
-    card.style.transform = "";
-    dragEndedAt = Date.now(); // the click that follows a drag must not turn or open the card
-    if (f.index === 0 && go) { closeFeed(); return; }
-    if (d < -FEED_STEP || (fast && d < 0)) stepFeed(1);
-    else if (d > FEED_STEP || (fast && d > 0)) stepFeed(-1);
-  };
-  card.addEventListener("keydown", (e) => {
-    if (e.key !== "Enter" || e.target.closest("button")) return;
-    if (e.target.closest("[data-turn]")) turnCard();
-    else if (e.target.closest("[data-open-card]")) { const id = state.feed?.ids[state.feed.index]; if (id) openStories("single", id); }
-  });
-  el.addEventListener("pointerup", end);
-  el.addEventListener("pointercancel", () => { reset(); card.style.transform = ""; });
-  card.addEventListener("click", (e) => {
-    if (Date.now() - dragEndedAt < 350) return;
-    if (e.target.closest("[data-add-why]")) { const id = state.feed?.ids[state.feed.index]; if (id) askWhy(id); return; }
-    if (e.target.closest("[data-turn]")) turnCard();
-    else if (e.target.closest("[data-open-card]")) { const id = state.feed?.ids[state.feed.index]; if (id) openStories("single", id); }
-  });
-}
-
 /* ================= Edit and delete =================
  * Edit: one sheet with only the fields that kind of item has. Delete is for
- * good (Let go keeps the item in your history so Edition learns from it), so
+ * good (Let go keeps the item in your history so Shoebox learns from it), so
  * it says so, and gives a few seconds to undo instead of asking first.
  */
 
@@ -1699,18 +1463,9 @@ function openEdit(id) {
     <div class="sheet-head"><h2>Edit</h2><button class="x" type="button" data-close aria-label="Close">${I.close}</button></div>
     <p class="note">${esc(KIND_LABEL[item.kind] || "Item")} · saved ${esc(ago(item.created))}${item.fileName ? ` · ${esc(item.fileName)}` : ""}</p>
     ${item.kind !== KIND.PHOTO ? `<div class="pic-edit">
-      <div class="pic-prev" id="ed-pic"></div>
-      <div class="pic-side">
-        <span class="k">Picture</span>
-        <span class="note" id="ed-pic-credit"></span>
-        <div class="pic-acts">
-          <button class="btn" type="button" id="ed-pic-choose">${I.attach}Choose</button>
-          <button class="btn" type="button" id="ed-pic-find" ${ai.relayBase() ? "" : "disabled"}>${I.requeue}Find another</button>
-          <button class="btn ghost-danger" type="button" id="ed-pic-remove">${I.trash}Remove</button>
-        </div>
-      </div>
-      <div class="field pic-q"><label for="ed-pic-q">Find a photo of <span class="hint">${ai.relayBase() ? "a few words, then Find another" : "needs the relay (Settings)"}</span></label>
-        <input id="ed-pic-q" type="text" autocomplete="off" value="${esc(item.cover?.q || photoWords(item))}"></div>
+      <div class="lbl"><span id="ed-pic-l">Picture</span></div>
+      <div class="picks" id="ed-picks" role="group" aria-labelledby="ed-pic-l"></div>
+      <span class="note" id="ed-pic-note" role="status"></span>
       <input type="file" id="ed-pic-file" accept="image/*" hidden>
     </div>` : ""}
     ${words ? f("text", item.kind === KIND.QUOTE ? "Quote" : "Note", item.text, { area: true }) : f("title", "Title", item.title)}
@@ -1718,8 +1473,8 @@ function openEdit(id) {
     ${item.kind === KIND.PHOTO ? `<label class="check"><input type="checkbox" id="ed-book" ${item.book ? "checked" : ""}><span>This is a book I want to read<small>Done becomes "I've read it", and counts toward what you like rather than as a recent read.</small></span></label>
       ${f("author", "Author", item.book?.author || item.author)}` : ""}
     ${hasUrl ? f("url", "Link", item.url, { type: "url", ph: "https://" }) : ""}
-    ${f("why", "Why you saved it", item.why, { hint: "the face of its card", ph: item.hook || "Read this before the roadmap review" })}
-    ${!item.why && item.hook ? `<button class="chip use-guess" type="button" id="ed-guess">Edit Edition's guess</button>` : ""}
+    ${f("why", "Why you saved it", item.why, { hint: "(shown at the top of the post)", ph: item.hook || "Read this before the roadmap review" })}
+    ${!item.why && item.hook ? `<button class="chip use-guess" type="button" id="ed-guess">Start from ${APP}'s guess</button>` : ""}
     ${!words ? f("note", "Your note", item.kind === KIND.LINK ? item.text : item.note, { area: true, ph: "Anything you want to remember about it" }) : ""}
     <div class="two">
       ${f("tags", "Tags", (item.tags || []).join(", "), { ph: "scrum, ai" })}
@@ -1730,7 +1485,7 @@ function openEdit(id) {
     <button class="btn primary" type="button" id="ed-save">Save</button>
     <div class="danger">
       <button class="btn ghost-danger" type="button" id="ed-delete">${I.trash}Delete for good</button>
-      <p class="note">Removes it${item.blobId ? " and its file" : ""} from this phone. To keep it in your history so Edition learns from it, use Let go instead.</p>
+      <p class="note">Removes it${item.blobId ? " and its file" : ""} from this phone. To keep it in your history so ${APP} learns from it, use Let go instead.</p>
     </div>`, { tall: true, label: "Edit" });
 
   const val = (k) => $(`#ed-${k}`, wrap)?.value;
@@ -1777,7 +1532,7 @@ function openEdit(id) {
     await saveItem(next);
     tick(true);
     closeSheet();
-    refresh();
+    render();
     toast("Saved.");
   };
   $("#ed-save", wrap).addEventListener("click", save);
@@ -1810,22 +1565,57 @@ function openEdit(id) {
   $("#ed-delete", wrap).addEventListener("click", () => { closeSheet(); deleteItem(id); });
 }
 
-/* The Picture section of Edit: changes apply at once, and show on the card behind the sheet. */
+/* The Picture section of Edit: changes apply at once and show on the post behind the sheet. */
 function bindPictureEdit(wrap, id) {
-  const prev = $("#ed-pic", wrap), credit = $("#ed-pic-credit", wrap);
-  const show = () => {
-    const it = byId(id);
-    const pic = pictureOf(it);
-    prev.innerHTML = pic ? (pic.blobId ? `<img alt="" data-blob="${esc(pic.blobId)}">` : `<img alt="" src="${esc(pic.src)}">`) : coverSvg(it);
-    hydrate(prev);
-    credit.textContent = !pic ? (it.coverOff ? "Removed. The card shows a drawn cover." : "None yet. The card shows a drawn cover.")
-      : pic.from === "mine" ? "Your photo." : pic.from === "page" ? "The page's own picture." : pic.from === "search" ? creditLine(pic) : "";
-    $("#ed-pic-remove", wrap).disabled = !pic;
+  const box = $("#ed-picks", wrap), note = $("#ed-pic-note", wrap), file = $("#ed-pic-file", wrap);
+  const current = (it) => {
+    if (it.coverOff) return "none";
+    if (it.cover && it.cover.blobId && it.cover.pinned) return "own";
+    const i = (box._cands || []).findIndex((c) => c.src === it.imageUrl);
+    return i >= 0 ? i : null;
   };
-  const after = () => { show(); if (state.feed) renderFeed(); renderFront(); };
-  show();
-  const file = $("#ed-pic-file", wrap);
-  $("#ed-pic-choose", wrap).addEventListener("click", () => { unlock(); file.click(); });
+  const show = async () => {
+    const it = byId(id);
+    if (!it) return;
+    const own = it.cover && it.cover.blobId ? await blobUrl(it.cover.blobId) : "";
+    // The picture it has now is always offered, even when it didn't come from the page's list (a video's still).
+    const cands = [...(it.imageCands || [])];
+    if (it.imageUrl && !cands.some((c) => c.src === it.imageUrl)) cands.unshift({ src: it.imageUrl, alt: it.imageAlt || null });
+    box._cands = cands;
+    box.innerHTML = pickTilesHtml(cands, current(it), { ownUrl: own, suggest: false })
+      + (it.kind === KIND.LINK && it.url && ai.relayBase() ? `<button class="pk txt" type="button" data-pk="again">${I.requeue}<span>Look again</span></button>` : "");
+    const pic = pictureOf(it);
+    note.textContent = it.coverOff ? "No picture. The post shows the link on its own."
+      : !pic ? (cands.length ? "Pick one, or add your own." : it.kind === KIND.LINK && !ai.relayBase() ? "Pictures from the page need the relay (Settings)." : "No pictures found. Add your own.")
+      : pic.from === "mine" ? "Your photo." : pic.from === "page" ? "From the page." : "";
+  };
+  const after = async () => { await show(); refreshPost(id); render(); };
+  box.addEventListener("click", async (e) => {
+    const b = e.target.closest("[data-pk]");
+    if (!b) return;
+    const k = b.dataset.pk;
+    const cur = byId(id);
+    if (k === "own") { unlock(); file.click(); return; }
+    if (k === "again") {
+      note.textContent = "Looking at the page again…";
+      await saveItem({ ...cur, imageCands: undefined, picSettled: undefined, pageTries: 0 });
+      await fetchPage(byId(id));
+      const fresh = byId(id);
+      const usable = await usableImages(fresh.imageCands || []);
+      await saveItem({ ...fresh, imageCands: usable, picSettled: Date.now() });
+      await after();
+      return;
+    }
+    const c = k === "none" ? null : (box._cands || [])[+k];
+    if (k !== "none" && !c) return;
+    if (cur.cover && cur.cover.blobId) await db.blobs.remove(cur.cover.blobId);
+    if (k === "none") await saveItem({ ...cur, cover: null, coverOff: true, picPicked: true, tint: undefined });
+    else {
+      await saveItem({ ...cur, cover: null, coverOff: false, imageUrl: c.src, imageAlt: c.alt || cur.imageAlt, picPicked: true, tint: undefined });
+    }
+    tick(true);
+    await after();
+  });
   file.addEventListener("change", async () => {
     const f = file.files && file.files[0];
     file.value = "";
@@ -1835,30 +1625,11 @@ function bindPictureEdit(wrap, id) {
     const blobId = db.newId();
     await db.blobs.put(blobId, blob);
     if (cur.cover && cur.cover.blobId) await db.blobs.remove(cur.cover.blobId);
-    await saveItem({ ...cur, cover: { blobId, from: "mine", pinned: true }, coverOff: false, tint: undefined });
+    await saveItem({ ...cur, cover: { blobId, from: "mine", pinned: true }, coverOff: false, picPicked: true, tint: undefined });
     tick(true);
-    after();
+    await after();
   });
-  $("#ed-pic-find", wrap).addEventListener("click", async () => {
-    const btn = $("#ed-pic-find", wrap);
-    const cur = byId(id);
-    const q = ($("#ed-pic-q", wrap).value || "").trim() || photoWords(cur);
-    const skip = cur.cover && cur.cover.from === "search" && cur.cover.q === q ? (cur.cover.i || 0) + 1 : 0;
-    btn.disabled = true;
-    credit.textContent = "Looking…";
-    const upd = await findPhoto(cur, { query: q, skip, pin: true });
-    btn.disabled = false;
-    if (!upd) { credit.textContent = `No photos found for "${q}". Try other words.`; return; }
-    tick(true);
-    after();
-  });
-  $("#ed-pic-remove", wrap).addEventListener("click", async () => {
-    const cur = byId(id);
-    if (cur.cover && cur.cover.blobId) await db.blobs.remove(cur.cover.blobId);
-    await saveItem({ ...cur, cover: null, coverOff: true, tint: undefined });
-    tick(true);
-    after();
-  });
+  show();
 }
 
 /** A chosen photo, scaled down to a phone screen's worth so it stays small on the device. */
@@ -1887,8 +1658,6 @@ async function deleteItem(id) {
   const edAt = state.edition ? state.edition.ids.indexOf(id) : -1;
   if (edAt >= 0) { state.edition = { ...state.edition, ids: state.edition.ids.filter((x) => x !== id) }; await db.meta.set("edition", state.edition); }
   // Take it out of whatever is on screen.
-  const f = state.feed, fAt = f ? f.ids.indexOf(id) : -1;
-  if (fAt >= 0) { f.ids.splice(fAt, 1); f.total -= 1; if (f.index > f.ids.length) f.index = f.ids.length; }
   const r = state.reader, rAt = r ? r.ids.indexOf(id) : -1;
   if (rAt >= 0) {
     r.ids.splice(rAt, 1); r.total -= 1;
@@ -1896,32 +1665,29 @@ async function deleteItem(id) {
     else { if (r.index >= r.ids.length) r.index = r.ids.length - 1; renderStory(); }
   }
   tick(true);
-  if (f && fAt >= 0 && !state.reader) slideFeed("left"); else if (state.feed) renderFeed();
-  renderFront();
+  render();
   let undone = false;
-  const purge = setTimeout(async () => {
+  // The files go only once the Undo message has closed without Undo, however long it stayed up.
+  const purge = async () => {
     if (undone) return;
     if (item.blobId) await db.blobs.remove(item.blobId);
     if (item.thumbId) await db.blobs.remove(item.thumbId);
     if (item.cover && item.cover.blobId) await db.blobs.remove(item.cover.blobId);
-  }, 7000);
+  };
   toast("Deleted.", {
+    onExpire: purge,
     action: "Undo",
     onAction: async () => {
       undone = true;
-      clearTimeout(purge);
       await saveItem(item);
       if (edAt >= 0 && state.edition) { const ids = [...state.edition.ids]; ids.splice(edAt, 0, id); state.edition = { ...state.edition, ids }; await db.meta.set("edition", state.edition); }
-      if (state.feed === f && fAt >= 0) { f.ids.splice(fAt, 0, id); f.total += 1; f.index = fAt; }
-      refresh();
+      render();
     },
   });
 }
-
 /* ================= Add (sheet) ================= */
 
 function openAdd() {
-  const c = counts(state.items);
   const wrap = sheet(`
     <div class="sheet-head"><h2>Add</h2><button class="x" type="button" data-close aria-label="Close">${I.close}</button></div>
     <div class="cap">
@@ -1931,11 +1697,13 @@ function openAdd() {
     <div class="field why-field"><label for="cap-why">Why are you saving this? <span>Optional. It's the first thing you'll see when it comes back.</span></label>
       <input id="cap-why" type="text" autocomplete="off" maxlength="140" placeholder="Read this before the roadmap review" value="${esc(state.capWhy)}"></div>
     <div class="tray" id="cap-tray"></div>
+    <div class="cap-pics" id="cap-pics" hidden></div>
+    <input type="file" id="cap-own" accept="image/*" hidden>
     <ul class="detect" id="cap-detect" aria-live="polite"></ul>
-    <span class="st" id="cap-st" role="status">${c.inbox ? `${c.inbox} waiting in your inbox.` : ""}</span>
+    <span class="st" id="cap-st" role="status"></span>
     <div class="cap-bar">
       <button class="round" type="button" id="cap-paste" aria-label="Paste from clipboard">${I.paste}</button>
-      <button class="save" type="button" id="cap-save">Save to inbox</button>
+      <button class="save" type="button" id="cap-save">Save</button>
       <button class="round" type="button" id="cap-attach" aria-label="Attach photos or files">${I.attach}</button>
     </div>
     <input type="file" id="in-any" multiple hidden>`, { label: "Add" });
@@ -1954,10 +1722,20 @@ function openAdd() {
   $("#cap-save", wrap).addEventListener("click", saveCapture);
   $("#cap-attach", wrap).addEventListener("click", () => { unlock(); $("#in-any", wrap).click(); });
   $("#cap-paste", wrap).addEventListener("click", pasteIntoBox);
+  const own = $("#cap-own", wrap);
+  own.addEventListener("change", () => {
+    const f = own.files && own.files[0];
+    own.value = "";
+    if (!f || !state.capPic) return;
+    if (state.capPic.ownUrl) URL.revokeObjectURL(state.capPic.ownUrl);
+    Object.assign(state.capPic, { ownFile: f, ownUrl: URL.createObjectURL(f), choice: "own", picked: true });
+    renderCapPics();
+  });
   const input = $("#in-any", wrap);
   input.addEventListener("change", () => { stageFiles(Array.from(input.files || [])); input.value = ""; });
   renderTray();
   updateDetect();
+  $("#cap-text", wrap).focus();
 }
 
 /** What will be saved, line by line, so there are no surprises. */
@@ -1977,7 +1755,8 @@ function updateDetect() {
   }).join("");
   const save = $("#cap-save");
   save.classList.toggle("ready", drafts.length > 0);
-  save.textContent = drafts.length > 1 ? `Save ${drafts.length} items` : "Save to inbox";
+  save.textContent = drafts.length > 1 ? `Save ${drafts.length} items` : "Save";
+  schedulePreview();
 }
 
 function stageFiles(files) {
@@ -2057,50 +1836,109 @@ async function saveCapture() {
   }
   const why = (state.capWhy || "").trim().slice(0, 140);
   if (why) for (const it of out) if (it) { it.why = why; await db.items.put(it); }
+  for (let k = 0; k < out.length; k++) out[k] = await applyCapPicture(out[k]);
+  if (state.capPic?.ownUrl) URL.revokeObjectURL(state.capPic.ownUrl);
   state.capText = "";
   state.capFiles = [];
   state.capWhy = "";
+  state.capPic = null;
   closeSheet();
   afterCapture(out);
 }
+/* ================= Choosing a picture =================
+ * The same picker in Add and in Edit: the page's own pictures (only ones
+ * that loaded and are big enough), your own photo, or no picture.
+ */
 
-/* ================= Library (sheet) ================= */
-
-function openLibrary() {
-  const wrap = sheet(`
-    <div class="sheet-head"><h2>Search</h2><button class="x" type="button" data-close aria-label="Close">${I.close}</button></div>
-    <div class="find-wrap">${I.search}<label class="sr-only" for="lib-q">Search</label>
-      <input class="find" id="lib-q" type="search" placeholder="Everything you've saved" value="${esc(state.libQuery)}" enterkeyhint="search"></div>
-    <div class="chips" role="group" aria-label="Show" style="margin:0;padding:0">
-      ${LIB_FILTERS.map((f, i) => `<button class="chip" type="button" data-filter="${i}" aria-pressed="${state.libFilter === i}">${f.label}</button>`).join("")}
-    </div>
-    <div class="lib-list" id="lib-list"></div>`, { tall: true, label: "Search" });
-  const q = $("#lib-q", wrap);
-  q.addEventListener("input", () => { state.libQuery = q.value; renderList(); });
-  wrap.querySelectorAll("[data-filter]").forEach((b) => b.addEventListener("click", () => {
-    state.libFilter = +b.dataset.filter;
-    wrap.querySelectorAll("[data-filter]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
-    renderList();
-  }));
-  renderList();
+function pickTilesHtml(cands, chosen, { ownUrl = "", busy = false, suggest = true } = {}) {
+  const tiles = cands.map((c, i) => `<button class="pk" type="button" data-pk="${i}" aria-pressed="${chosen === i}"
+      aria-label="${esc(c.alt || `Picture ${i + 1}`)}${c.w ? `, ${c.w} by ${c.h}` : ""}${suggest && i === 0 ? ", suggested" : ""}">
+      <img alt="" src="${esc(c.src)}" referrerpolicy="no-referrer" loading="lazy">${suggest && i === 0 ? '<span class="badge" aria-hidden="true">Suggested</span>' : ""}</button>`).join("");
+  return `${tiles}${busy ? `<span class="pk wait" role="status">Looking at the page…</span>` : ""}
+    <button class="pk txt" type="button" data-pk="own" aria-pressed="${chosen === "own"}">${ownUrl ? `<img alt="" src="${esc(ownUrl)}">` : `${I.attach}<span>Your photo</span>`}</button>
+    <button class="pk txt" type="button" data-pk="none" aria-pressed="${chosen === "none"}">${I.letGo}<span>No picture</span></button>`;
 }
 
-function renderList() {
-  const list = $("#lib-list");
-  if (!list) return;
-  const status = LIB_FILTERS[state.libFilter].id;
-  const q = state.libQuery.trim().toLowerCase();
-  const rows = state.items
-    .filter((i) => status === "all" || i.status === status)
-    .filter((i) => !q || [i.title, i.text, i.url, i.summary, i.fileName, i.author, i.transcript, ...(i.points || []), ...(i.tags || [])].some((s) => s && s.toLowerCase().includes(q)))
-    .sort((a, b) => (b.doneAt || b.archivedAt || b.created) - (a.doneAt || a.archivedAt || a.created));
-  const statusWord = { inbox: "Inbox", queued: "Queue", done: "Done", archived: "Let go" };
-  list.innerHTML = rows.length
-    ? rows.map((i) => `<button class="lib-row" type="button" data-open="${esc(i.id)}">
-        <span class="t">${esc(headline(i))}</span><span class="a">${esc(ago(i.created, true))}</span>
-        <span class="k">${esc(KIND_LABEL[i.kind] || "")} · ${isFaded(i) ? "Faded" : statusWord[i.status] || ""}</span></button>`).join("")
-    : '<p class="empty">Nothing matches.</p>';
-  list.querySelectorAll("[data-open]").forEach((b) => b.addEventListener("click", () => { closeSheet(); openStories("single", b.dataset.open); }));
+/* ---- In Add: once the box holds a single link, read its page for pictures ---- */
+
+let previewTimer = 0;
+function schedulePreview() {
+  clearTimeout(previewTimer);
+  const drafts = stagedDrafts();
+  const link = drafts.length === 1 && drafts[0].kind === KIND.LINK && drafts[0].url ? drafts[0].url : "";
+  const p = state.capPic;
+  if (!link || !ai.relayBase()) {
+    if (p && !p.ownFile) state.capPic = null;
+    renderCapPics();
+    return;
+  }
+  if (p && p.url === link) return;
+  state.capPic = { url: link, status: "loading", list: [], choice: 0, ownFile: p?.ownFile || null, ownUrl: p?.ownUrl || "" };
+  if (p?.ownFile) state.capPic.choice = "own";
+  renderCapPics();
+  previewTimer = setTimeout(() => loadPreview(link), 500);
+}
+
+async function loadPreview(url) {
+  let list = [];
+  try {
+    const res = await withTimeout(fetch(`${ai.relayBase()}/preview?url=${encodeURIComponent(url)}`), 15000);
+    if (res.ok) {
+      const data = await res.json();
+      list = await usableImages(candidatesOf(data), { timeout: 6000 });
+      if (state.capPic && state.capPic.url === url) state.capPic.page = { title: data.title, description: data.description, site: data.site };
+    }
+  } catch (e) { noteError(e, { quiet: true, where: "add: page pictures" }); }
+  const p = state.capPic;
+  if (!p || p.url !== url) return;
+  p.status = "done";
+  p.list = list.slice(0, 6);
+  if (p.choice !== "own" && p.choice !== "none" && !p.list.length) p.choice = "none";
+  renderCapPics();
+}
+
+function renderCapPics() {
+  const box = $("#cap-pics");
+  if (!box) return;
+  const p = state.capPic;
+  if (!p) { box.hidden = true; box.innerHTML = ""; return; }
+  box.hidden = false;
+  const found = p.status === "loading" ? "Looking…" : p.list.length ? `${p.list.length} found on the page` : "None found on the page";
+  box.innerHTML = `<div class="lbl"><span id="cap-pics-l">Picture</span><span>${found}</span></div>
+    <div class="picks" role="group" aria-labelledby="cap-pics-l">${pickTilesHtml(p.list, p.choice, { ownUrl: p.ownUrl, busy: p.status === "loading" })}</div>`;
+  box.querySelectorAll("[data-pk]").forEach((b) => b.addEventListener("click", () => {
+    const k = b.dataset.pk;
+    if (k === "own") { $("#cap-own").click(); return; }
+    p.choice = k === "none" ? "none" : +k;
+    p.picked = true;
+    renderCapPics();
+  }));
+}
+
+/** Put the picture choice from Add onto the link it was made for. */
+async function applyCapPicture(item) {
+  const p = state.capPic;
+  if (!p || !item || item.kind !== KIND.LINK || item.url !== p.url) return item;
+  const upd = { ...item };
+  if (p.page) {
+    if (p.page.title && upd.title === titleFromUrl(upd.url)) upd.title = String(p.page.title).slice(0, 140);
+    if (p.page.description && !upd.summary) upd.summary = String(p.page.description).slice(0, 200);
+    if (p.page.site) upd.site = String(p.page.site).slice(0, 60);
+  }
+  if (p.status === "done" && p.list.length) { upd.imageCands = p.list; upd.picSettled = p.picked ? Date.now() : undefined; }
+  if (p.choice === "own" && p.ownFile) {
+    const blob = (await shrinkImage(p.ownFile)) || p.ownFile;
+    const blobId = db.newId();
+    await db.blobs.put(blobId, blob);
+    Object.assign(upd, { cover: { blobId, from: "mine", pinned: true }, picPicked: true });
+  } else if (p.choice === "none" && p.picked) {
+    Object.assign(upd, { coverOff: true, picPicked: true, picSettled: Date.now() });
+  } else if (typeof p.choice === "number" && p.list[p.choice]) {
+    const c = p.list[p.choice];
+    Object.assign(upd, { imageUrl: c.src, imageAlt: c.alt || undefined, picPicked: !!p.picked });
+  }
+  await db.items.put(upd);
+  return upd;
 }
 
 /* ================= Settings (sheet) ================= */
@@ -2110,6 +1948,16 @@ function openSettings() {
   const wrap = sheet(`
     <div class="sheet-head"><h2>Settings</h2><button class="x" type="button" data-close aria-label="Close">${I.close}</button></div>
     <div class="section">
+      <h3>Your photo</h3>
+      <div class="me-row"><span id="set-me">${avatarHtml("lg")}</span>
+        <div class="two">
+          <button class="btn" type="button" id="set-me-choose">${state.avatar ? "Change" : "Choose a photo"}</button>
+          <button class="btn" type="button" id="set-me-clear" ${state.avatar ? "" : "disabled"}>Remove</button>
+        </div></div>
+      <input type="file" id="set-me-file" accept="image/*" hidden>
+      <p class="note">Shown on every post you wrote. It stays on this phone.</p>
+    </div>
+    <div class="section">
       <h3>AI (Anthropic API)</h3>
       <div class="field"><label for="set-key">API key</label>
         <input id="set-key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-ant-…" value="${esc(ai.settings.key())}"></div>
@@ -2118,7 +1966,7 @@ function openSettings() {
         <button class="btn" type="button" id="set-clear">Remove key</button>
       </div>
       <span class="st" id="set-st" role="status"></span>
-      <p class="note">The key stays on this device and is sent only to Anthropic. With it, Edition titles and tags each new save (photos and PDFs too), ranks your queue from what you finish and let go, and can search for new reading. Each is a paid API call on your account.</p>
+      <p class="note">The key stays on this device and is sent only to Anthropic. With it, Shoebox titles and tags each new save (photos and PDFs too), picks the best picture from a link's page, ranks your queue from what you finish and let go, and can search for new reading. Each is a paid API call on your account.</p>
     </div>
     <div class="section">
       <h3>Discovery (Perplexity API)</h3>
@@ -2134,7 +1982,7 @@ function openSettings() {
       <p class="note">With this key, Find something new asks Perplexity to search for popular recent articles on what you keep finishing. Perplexity blocks calls made straight from a web app, so they go through your own relay (a free Cloudflare Worker; steps in the repo's relay folder). The key stays on this phone and passes through the relay to Perplexity. Without a Perplexity key, Claude does the searching.</p>
     </div>
     <div class="section">
-      <h3>Edition</h3>
+      <h3>Today</h3>
       <div class="two">
         <button class="btn" type="button" id="set-rebuild">Rebuild today</button>
         <button class="btn" type="button" id="set-discover" ${ai.settings.canDiscover() ? "" : "disabled"}>Find something new</button>
@@ -2150,16 +1998,8 @@ function openSettings() {
       <div id="tag-list"></div>
     </div>
     <div class="section">
-      <h3>Card picture</h3>
-      <div class="chips" role="group" aria-label="Card picture" style="margin:0;padding:0">
-        <button class="chip" type="button" data-pic="0" aria-pressed="${!picBoth()}">Back only</button>
-        <button class="chip" type="button" data-pic="1" aria-pressed="${picBoth()}">Both sides</button>
-      </div>
-      <p class="note">Where a card's picture shows in the feed: behind the side you turn to, or behind both sides.</p>
-    </div>
-    <div class="section">
       <h3>Sounds</h3>
-      <div class="chips" role="group" aria-label="Sounds" style="margin:0;padding:0">
+      <div class="chips" role="group" aria-label="Sounds">
         <button class="chip" type="button" data-sound="1" aria-pressed="${soundOn()}">On</button>
         <button class="chip" type="button" data-sound="0" aria-pressed="${!soundOn()}">Off</button>
       </div>
@@ -2180,6 +2020,7 @@ function openSettings() {
         <button class="btn" type="button" id="set-import">Import</button>
       </div>
       <input type="file" id="set-import-file" accept="application/json,.json" hidden>
+      <span class="st" id="set-bk-st" role="status"></span>
       <p class="note">Exports titles, notes, links and history as JSON. Photos and files stay on this device.</p>
     </div>
     <div class="section">
@@ -2191,7 +2032,7 @@ function openSettings() {
       </div>
       <p class="note">Errors are kept on this phone (the last 20) and never sent anywhere. Copy them into a message when something isn't working. No titles, notes, links or keys are included.</p>
     </div>
-    <p class="version">Edition ${VERSION} · ${c.inbox} inbox · ${c.queued} queued · ${c.done} done · ${c.archived} let go</p>`, { label: "Settings" });
+    <p class="version">${APP} ${VERSION} · ${c.inbox} new · ${c.queued} queued · ${c.done} done · ${c.archived} let go</p>`, { label: "Settings" });
 
   const st = $("#set-st", wrap);
   const say = (el, msg, err) => { el.textContent = msg; el.classList.toggle("err", !!err); };
@@ -2215,7 +2056,7 @@ function openSettings() {
   $("#set-clear", wrap).addEventListener("click", () => {
     ai.settings.setKey("");
     $("#set-key", wrap).value = "";
-    say(st, "Key removed. Edition works without AI.");
+    say(st, `Key removed. ${APP} works without AI.`);
   });
   renderSuggestProfile(wrap);
   renderTagList(wrap);
@@ -2233,7 +2074,7 @@ function openSettings() {
     try {
       await ai.testPplxKey();
       say(pSt, "Key and relay work. Find something new now uses Perplexity, and links get their pictures.");
-      state.items = state.items.map((i) => ({ ...i, pageTries: 0, coverTries: 0 }));
+      state.items = state.items.map((i) => (i.imageCands ? i : { ...i, pageTries: 0 }));
       picturePending();
       $("#set-discover", wrap).disabled = false;
     } catch (e) {
@@ -2253,29 +2094,27 @@ function openSettings() {
     say(edSt, ai.settings.enabled() ? "Ranking your queue…" : "Rebuilding…");
     try {
       await ensureEdition({ force: true });
-      closeSheet(); renderFront(); toast("Today's edition is rebuilt.");
+      closeSheet(); render(); toast("Today is rebuilt.");
     } catch (e) { say(edSt, e.message || "Could not rebuild.", true); }
   });
-  $("#set-discover", wrap).addEventListener("click", () => findNew(edSt).finally(() => refreshProblems(wrap)));
+  $("#set-discover", wrap).addEventListener("click", () => findNew(edSt).then((n) => { refreshProblems(wrap); if (n) render(); }));
   const smSt = $("#set-sm-st", wrap);
   $("#set-samples-load", wrap).addEventListener("click", async () => {
     const n = await seedSamples({ force: true });
     await ensureEdition();
     closeSheet();
-    openFeed();
-    toast(`Loaded ${n} fresh samples. They're in your feed.`);
+    state.tab = "today";
+    render({ top: true });
+    picturePending();
+    toast(`Loaded ${n} fresh samples. They're on Today.`);
   });
   $("#set-samples-clear", wrap).addEventListener("click", async () => {
     const n = await removeSamples();
     $("#set-samples-clear", wrap).disabled = true;
     say(smSt, `Removed ${n} sample items.`);
-    renderFront();
+    render();
   });
-  wrap.querySelectorAll("[data-pic]").forEach((b) => b.addEventListener("click", () => {
-    setPicBoth(b.dataset.pic === "1");
-    wrap.querySelectorAll("[data-pic]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
-    if (state.feed) renderFeed();
-  }));
+  bindAvatarSettings(wrap);
   wrap.querySelectorAll("[data-sound]").forEach((b) => b.addEventListener("click", () => {
     setSound(b.dataset.sound === "1");
     wrap.querySelectorAll("[data-sound]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
@@ -2285,7 +2124,7 @@ function openSettings() {
     const blob = new Blob([await db.exportJson()], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = `edition-backup-${dayKey()}.json`;
+    a.download = `shoebox-backup-${dayKey()}.json`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 5000);
   });
@@ -2297,8 +2136,8 @@ function openSettings() {
     try {
       const n = await db.importJson(await f.text());
       state.items = await db.items.all();
-      closeSheet(); renderFront(); toast(`Imported ${n} items.`);
-    } catch (e) { say(st, e.message, true); }
+      closeSheet(); render(); toast(`Imported ${n} items.`);
+    } catch (e) { say($("#set-bk-st", wrap), e.message || "That file couldn't be read.", true); }
   });
 }
 
@@ -2336,11 +2175,54 @@ function renderSuggestProfile(wrap) {
   $("#sug-reset", box)?.addEventListener("click", async () => { state.suggest = emptySuggestProfile(); await save(); toast("Forgotten. Suggestions start fresh."); });
 }
 
-/* ================= Card pictures ================= */
+/* Settings > Your photo: cropped square, scaled down, stored on this phone. */
+function bindAvatarSettings(wrap) {
+  const file = $("#set-me-file", wrap);
+  const paint = () => {
+    $("#set-me", wrap).innerHTML = avatarHtml("lg");
+    $("#set-me-choose", wrap).textContent = state.avatar ? "Change" : "Choose a photo";
+    $("#set-me-clear", wrap).disabled = !state.avatar;
+  };
+  $("#set-me-choose", wrap).addEventListener("click", () => { unlock(); file.click(); });
+  file.addEventListener("change", async () => {
+    const f = file.files && file.files[0];
+    file.value = "";
+    if (!f) return;
+    const blob = await squareImage(f, 320);
+    if (!blob) { toast("That photo couldn't be read. Try another."); return; }
+    const old = await db.meta.get("avatarBlobId", null);
+    const id = db.newId();
+    await db.blobs.put(id, blob);
+    await db.meta.set("avatarBlobId", id);
+    if (old) { await db.blobs.remove(old); urls.delete(old); }
+    await loadAvatar();
+    paint();
+    render();
+    toast("Your photo is set.");
+  });
+  $("#set-me-clear", wrap).addEventListener("click", async () => {
+    const old = await db.meta.get("avatarBlobId", null);
+    await db.meta.set("avatarBlobId", null);
+    if (old) { await db.blobs.remove(old); urls.delete(old); }
+    state.avatar = "";
+    paint();
+    render();
+  });
+}
 
-const PIC_BOTH = "edition.picBoth";
-function picBoth() { try { return localStorage.getItem(PIC_BOTH) === "1"; } catch { return false; } }
-function setPicBoth(on) { try { localStorage.setItem(PIC_BOTH, on ? "1" : "0"); } catch { /* storage blocked */ } }
+/** The middle square of a photo, `edge` pixels across, as JPEG. */
+async function squareImage(file, edge) {
+  try {
+    const bmp = await createImageBitmap(file);
+    const s = Math.min(bmp.width, bmp.height);
+    const c = document.createElement("canvas");
+    c.width = c.height = edge;
+    c.getContext("2d").drawImage(bmp, (bmp.width - s) / 2, (bmp.height - s) / 2, s, s, 0, 0, edge, edge);
+    return await new Promise((r) => c.toBlob(r, "image/jpeg", 0.88));
+  } catch {
+    return null;
+  }
+}
 
 /* ================= Tags ================= */
 
@@ -2446,7 +2328,6 @@ async function undoTagChange() {
   refresh();
   if ($("#tag-list")) renderTagList($(".sheet-wrap"));
 }
-
 /* ================= Problems and diagnostics ================= */
 
 function refreshProblems(wrap) {
@@ -2466,7 +2347,7 @@ async function diagnostics() {
   const c = counts(state.items);
   const relay = ai.relayBase();
   return [
-    `Edition ${VERSION}, ${new Date().toISOString()}`,
+    `${APP} ${VERSION}, ${new Date().toISOString()}`,
     navigator.userAgent,
     `Home Screen app: ${matchMedia("(display-mode: standalone)").matches || navigator.standalone ? "yes" : "no"}; window ${innerWidth}x${innerHeight}; screen height ${fit.screen}; app height ${fit.used}${fit.short ? " (page was short, sized to screen)" : ""}; bottom inset ${getComputedStyle(document.documentElement).getPropertyValue("--safe-b").trim() || "env"}; offline copy: ${navigator.serviceWorker?.controller ? "yes" : "no"}`,
     `Items: ${c.inbox} inbox, ${c.queued} queued, ${c.done} done, ${c.archived} let go; storage ${est ? `${mb(est.usage)} of ${mb(est.quota)}` : "unknown"}`,
@@ -2491,13 +2372,12 @@ function showToCopy(text) {
   const ta = $(".diag", wrap);
   ta.focus(); ta.select();
 }
-
 /* ================= Sheets, toasts, global input ================= */
 
 let lastFocus = null;
 function sheet(html, { tall = false, label = "" } = {}) {
   closeSheet();
-  $(".toast")?.remove(); // a leftover message shouldn't sit over the sheet
+  expireToast(); // a leftover message shouldn't sit over the sheet
   lastFocus = document.activeElement;
   const wrap = document.createElement("div");
   wrap.className = "sheet-wrap";
@@ -2507,12 +2387,17 @@ function sheet(html, { tall = false, label = "" } = {}) {
   document.body.appendChild(wrap);
   const panel = $(".sheet", wrap);
   bindPull({ scroller: panel, target: panel, host: wrap, onBack: closeSheet });
+  $("#app")?.setAttribute("inert", "");
+  $(".reader")?.setAttribute("inert", "");
+  requestAnimationFrame(() => { if (!wrap.contains(document.activeElement)) (panel.querySelector("[data-close]") || panel).focus(); });
   return wrap;
 }
 
 function closeSheet() {
   const s = $(".sheet-wrap");
   if (s) { const cb = s._onClose; s._onClose = null; s.remove(); if (cb) cb(); }
+  if (!$(".reader")) $("#app")?.removeAttribute("inert");
+  $(".reader")?.removeAttribute("inert");
   if (lastFocus && lastFocus.focus && document.contains(lastFocus)) lastFocus.focus();
   lastFocus = null;
 }
@@ -2583,26 +2468,41 @@ function bindPull({ scroller, target, host, label, onBack }) {
 }
 
 let toastTimer;
-function toast(msg, { action, onAction, high = false, sticky = false } = {}) {
-  $(".toast")?.remove();
+/** Close the message on screen; whatever it was waiting on (a delete's file purge) goes ahead. */
+function expireToast(el = $(".toast")) {
+  if (!el) return;
+  el.remove();
+  const f = el._onExpire;
+  el._onExpire = null;
+  if (f) f();
+}
+
+function toast(msg, { action, onAction, onExpire, high = false, sticky = false } = {}) {
+  expireToast();
   clearTimeout(toastTimer);
   const el = document.createElement("div");
   el.className = "toast" + (high || state.reader ? " high" : "");
   el.setAttribute("role", "status");
   el.innerHTML = `<span>${esc(msg)}</span>${action ? `<button type="button">${esc(action)}</button>` : ""}`;
-  if (action) $("button", el).addEventListener("click", () => { el.remove(); onAction && onAction(); });
+  el._onExpire = onExpire || null;
+  if (action) $("button", el).addEventListener("click", () => { el._onExpire = null; el.remove(); onAction && onAction(); });
   document.body.appendChild(el);
-  if (!sticky) toastTimer = setTimeout(() => el.remove(), action ? 5000 : 2500);
+  // Long enough to read and reach Undo; held while a finger or the keyboard is on it.
+  const arm = () => { clearTimeout(toastTimer); if (!sticky) toastTimer = setTimeout(() => expireToast(el), action ? 7000 : 3500); };
+  el.addEventListener("pointerenter", () => clearTimeout(toastTimer));
+  el.addEventListener("pointerleave", arm);
+  el.addEventListener("focusin", () => clearTimeout(toastTimer));
+  el.addEventListener("focusout", arm);
+  arm();
 }
 
+const refresh = () => render();
+
 function wireGlobal() {
-  bindRingGlobal();
   window.addEventListener("error", (e) => noteError(e, { where: "page" }));
   window.addEventListener("unhandledrejection", (e) => noteError(e, { where: "promise" }));
   onFirstProblem(() => toast("Something went wrong. Your saves are safe.", { action: "Copy details", onAction: copyDiagnostics }));
   window.addEventListener("pointerdown", unlock, { once: true });
-  // Any touch wakes the corner button on the front page.
-  window.addEventListener("pointerdown", () => { if (!state.reader) wakeCorner(); }, true);
   // iOS ignores the viewport's zoom limits; block pinch gestures on the page itself.
   document.addEventListener("gesturestart", (e) => e.preventDefault());
   document.addEventListener("paste", async (e) => {
@@ -2628,28 +2528,57 @@ function wireGlobal() {
     afterCapture(await captureTransfer(e.dataTransfer, "drop"));
   });
   document.addEventListener("keydown", (e) => {
-    // Feed keys on a keyboard: arrows or j/k to move, space to turn the card.
-    if (state.feed && !state.reader && !$(".sheet-wrap") && !e.target.closest?.("input, textarea")) {
-      if (e.key === "ArrowDown" || e.key === "j") { e.preventDefault(); stepFeed(1); return; }
-      if (e.key === "ArrowUp" || e.key === "k") { e.preventDefault(); stepFeed(-1); return; }
-      if (e.key === " " && !e.target.closest?.("button")) { e.preventDefault(); turnCard(); return; }
+    const s = $(".sheet-wrap");
+    // Keep the keyboard inside an open sheet.
+    if (s && e.key === "Tab") {
+      const f = [...s.querySelectorAll("button, input, textarea, select, a[href], [tabindex]:not([tabindex='-1'])")].filter((x) => !x.disabled && !x.hidden && x.offsetParent !== null);
+      if (f.length) {
+        const first = f[0], last = f[f.length - 1];
+        if (e.shiftKey && document.activeElement === first) { last.focus(); e.preventDefault(); }
+        else if (!e.shiftKey && document.activeElement === last) { first.focus(); e.preventDefault(); }
+        else if (!s.contains(document.activeElement)) { first.focus(); e.preventDefault(); }
+      }
+      return;
     }
     if (e.key !== "Escape") return;
-    if ($(".sheet-wrap")) closeSheet();
+    if (s) closeSheet();
     else if (state.reader) closeReader();
-    else closeMenu();
   });
   document.addEventListener("visibilitychange", async () => {
+    if (document.visibilityState === "hidden") { const t = $(".toast"); if (t && t._onExpire) expireToast(t); return; }
     if (document.visibilityState !== "visible") return;
     const before = state.items.length;
     const day = state.edition && state.edition.date;
     await importShares();
     await ensureEdition();
     if (state.items.length !== before || (state.edition && state.edition.date !== day)) {
-      if (!state.reader && !$(".sheet-wrap")) renderFront();
+      if (state.edition && state.edition.date !== day) state.recent.clear();
+      if (!state.reader && !$(".sheet-wrap")) render();
+      picturePending();
       enrichPending();
     }
   });
+}
+
+/*
+ * Once, after updating from Edition: links that had a stock photo found for
+ * them (not one you chose) lose it and have their page read again, so the
+ * picture comes from the page itself.
+ */
+async function migratePictures() {
+  if (await db.meta.get("picturesV", 0) >= 2) return;
+  const changed = [];
+  state.items = state.items.map((i) => {
+    if (i.cover && i.cover.from === "search" && !i.cover.pinned) {
+      const next = { ...i, cover: null, coverTries: undefined, tint: undefined };
+      if (i.kind === KIND.LINK && !i.imageUrl) next.pageTries = 0;
+      changed.push(next);
+      return next;
+    }
+    return i;
+  });
+  if (changed.length) await db.items.putMany(changed);
+  await db.meta.set("picturesV", 2);
 }
 
 /* ================= Small formatters ================= */
@@ -2657,8 +2586,6 @@ function wireGlobal() {
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
-function cap(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
-function dateLabel() { return new Date().toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }); }
 function ago(ts, short = false) {
   const d = Math.floor((Date.now() - ts) / 86400000);
   if (short) return d <= 0 ? "today" : `${d}d`;
@@ -2669,7 +2596,8 @@ function ext(name) { const e = String(name || "").split(".").pop(); return e && 
 function size(b) { return b > 1048576 ? (b / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(b / 1024)) + " KB"; }
 function withTimeout(p, ms) { return Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error("Timed out")), ms))]); }
 
+
 boot().catch((e) => {
   noteError(e, { quiet: true, where: "start" });
-  app.innerHTML = `<main class="front"><div class="empty-front"><h2>Something broke.</h2><p>${esc(e && e.message)}</p></div></main>`;
+  app.innerHTML = `<main class="tl"><section class="end"><h2>Something broke.</h2><p>${esc(e && e.message)}</p></section></main>`;
 });

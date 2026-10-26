@@ -213,3 +213,38 @@ test("tideline lists faded items first, then those about to fade", () => {
   assert.equal(t[0].faded, true);
   assert.equal(t[2].left, 3);
 });
+
+/* ---- Timeline helpers (Shoebox) ---- */
+import { friendlyWhen, usablePicture, interestProfile as profileOf } from "../src/model.js";
+
+test("friendlyWhen says when, the way a person would", () => {
+  const now = new Date(2026, 9, 26, 14, 0).getTime(); // Monday 26 Oct 2026, 2pm
+  const at = (d, h, m = 0) => new Date(2026, 9, d, h, m).getTime();
+  assert.equal(friendlyWhen(now - 30000, now), "just now");
+  assert.equal(friendlyWhen(now - 20 * 60000, now), "20 minutes ago");
+  assert.equal(friendlyWhen(at(26, 8), now), "this morning");
+  assert.equal(friendlyWhen(at(26, 3), now), "early this morning");
+  assert.equal(friendlyWhen(at(25, 9), now), "yesterday morning");
+  assert.equal(friendlyWhen(at(25, 21), now), "last night");
+  assert.equal(friendlyWhen(at(22, 15), now), "Thursday afternoon");
+  assert.equal(friendlyWhen(at(16, 10), now), "last Friday");
+  assert.equal(friendlyWhen(at(5, 10), now), "3 weeks ago");
+  assert.equal(friendlyWhen(new Date(2026, 2, 3).getTime(), now), "in March");
+  assert.equal(friendlyWhen(new Date(2025, 6, 3).getTime(), now), "last July");
+  assert.equal(friendlyWhen(new Date(2023, 6, 3).getTime(), now), "in July 2023");
+});
+
+test("usablePicture keeps real photos and drops small, strip or skyscraper images", () => {
+  assert.equal(usablePicture({ w: 1200, h: 800 }), true);
+  assert.equal(usablePicture({ w: 1080, h: 1350 }), true);
+  assert.equal(usablePicture({ w: 400, h: 300 }), false);
+  assert.equal(usablePicture({ w: 1600, h: 200 }), false);
+  assert.equal(usablePicture({ w: 600, h: 1600 }), false);
+  assert.equal(usablePicture({}), false);
+});
+
+test("loving something counts toward what you like, even before a verdict", () => {
+  const p = profileOf([{ kind: "photo", status: "queued", tags: ["coast"], loved: 1 }, { kind: "link", status: "queued", tags: ["tax"] }]);
+  assert.equal(p.tags.coast, 0.5);
+  assert.equal(p.tags.tax, undefined);
+});

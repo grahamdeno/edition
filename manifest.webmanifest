@@ -1,12 +1,12 @@
 {
-  "name": "Edition",
-  "short_name": "Edition",
-  "description": "A finite daily edition of the things you saved for yourself.",
+  "name": "Shoebox",
+  "short_name": "Shoebox",
+  "description": "The things you saved for yourself, back as a short daily timeline.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
-  "background_color": "#0E0F11",
-  "theme_color": "#0E0F11",
+  "background_color": "#FFFFFF",
+  "theme_color": "#C2362B",
   "icons": [
     {
       "src": "icons/icon-192.png",
@@ -23,6 +23,11 @@
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"
+    },
+    {
+      "src": "icons/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
     }
   ],
   "share_target": {
