@@ -179,19 +179,29 @@ a { color: inherit; text-decoration: none; }
 .bar { display: flex; align-items: center; gap: 10px; min-height: 56px; }
 .mark { margin: 0; display: flex; align-items: center; gap: 8px; font: 400 1.85rem/1 var(--serif); color: var(--sig-ink); letter-spacing: -0.005em; }
 .logo, .logo-svg { width: 32px; height: 32px; display: block; flex: none; }
-.count { margin-left: auto; font-size: 0.875rem; color: var(--muted); font-variant-numeric: tabular-nums; }
-.icon-btn { width: 44px; height: 44px; margin-right: -10px; display: grid; place-items: center; border-radius: 22px; color: var(--fg); }
+.icon-btn { width: 44px; height: 44px; margin: 0 -10px 0 auto; display: grid; place-items: center; border-radius: 22px; color: var(--fg); }
 .icon-btn:active { background: var(--soft); }
 .tabs { display: flex; }
 .tab { flex: 1; min-height: 44px; font-weight: 500; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; }
 .tab[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--sig); font-weight: 600; }
 
-.composer {
-  display: flex; align-items: center; gap: var(--gap); width: 100%; min-height: 68px; text-align: left;
-  padding: 12px var(--gutter-r) 12px var(--gutter-l); border-bottom: 1px solid var(--line);
-}
-.composer .ph { flex: 1; color: var(--faint); }
-.pill { padding: 9px 16px; border-radius: 999px; background: var(--sig); color: var(--on-sig); font-weight: 600; font-size: 0.875rem; }
+/* The Today strip: greeting, what's left, and a circle per item in today's six. */
+.strip { display: flex; align-items: center; gap: 12px; padding: 14px var(--gutter-r) 12px var(--gutter-l); border-bottom: 1px solid var(--line); }
+.hello { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
+.hi { margin: 0; font: 400 1.3rem/1.1 var(--serif); }
+.strip .left { margin: 2px 0 0; font-size: 0.8125rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.dots { display: flex; gap: 0; flex: none; }
+.dot { position: relative; width: 34px; height: 34px; margin-left: -6px; border-radius: 50%; overflow: hidden; background: var(--soft); box-shadow: 0 0 0 2px var(--bg), 0 0 0 3.5px var(--sig); }
+.dot:first-child { margin-left: 0; }
+.dot::before { content: ""; position: absolute; inset: -5px; } /* a 44px target around the 34px circle */
+.dot img, .dot-l { width: 100%; height: 100%; object-fit: cover; display: grid; place-items: center; }
+.dot-l { background: var(--c, var(--sig)); color: #fff; font: 600 0.8125rem var(--sans); }
+.dot.done { box-shadow: 0 0 0 2px var(--bg), 0 0 0 3.5px var(--gold); }
+.dot.done img, .dot.done .dot-l { opacity: 0.35; }
+.dot .tick { position: absolute; inset: 0; display: grid; place-items: center; color: var(--fg); }
+.dot .tick .i { width: 18px; height: 18px; stroke-width: 2.6; }
+.cleared { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 999px; background: var(--gold); color: var(--on-gold); font-weight: 600; font-size: 0.875rem; }
+.cleared .i { width: 16px; height: 16px; stroke-width: 2.4; }
 
 .av { width: var(--rail); height: var(--rail); border-radius: 50%; flex: none; display: block; object-fit: cover; background: var(--soft); box-shadow: 0 0 0 2px var(--bg), 0 0 0 3.5px var(--sig); }
 .av.sm { width: 32px; height: 32px; }
@@ -520,11 +530,13 @@ a { color: inherit; text-decoration: none; }
 
 /* ================= Toast and drop ================= */
 .toast {
-  position: fixed; z-index: 40; left: var(--gutter-l); right: calc(var(--gutter-r) + 76px); top: calc(var(--app-h, 100vh) - var(--safe-b) - 24px); transform: translateY(-100%);
-  max-width: 440px; min-height: 52px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-left: 16px;
+  position: fixed; z-index: 40; left: 50%; transform: translateX(-50%);
+  bottom: calc(var(--safe-b) + 96px); /* above the + button, centred, measured from the real bottom edge */
+  width: calc(100% - var(--gutter-l) - var(--gutter-r)); max-width: 440px;
+  min-height: 52px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-left: 16px;
   background: var(--toast-bg); color: var(--toast-fg); border-radius: 16px; font-size: 0.9375rem; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
 }
-.reader ~ .toast, .toast.high { top: calc(var(--app-h, 100vh) - var(--safe-b) - 92px); right: var(--gutter-r); }
+.reader ~ .toast, .toast.high { bottom: calc(var(--safe-b) + 92px); }
 .toast button { min-height: 52px; padding: 0 16px; font-weight: 600; color: var(--toast-act); }
 /* The update bar stays until Reload is tapped. It sits above the + button and any toast. */
 .update-bar {
