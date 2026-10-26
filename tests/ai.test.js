@@ -150,3 +150,19 @@ test("enrich returns alt text without an 'image of' lead-in", async () => {
   const out = await enrich({ kind: "note", text: "x" }, null);
   assert.equal(out.alt, "A whiteboard with sticky notes");
 });
+
+test("a card face that comes back as plain text, not JSON, is still used", async () => {
+  const { hook } = await import("../src/ai.js");
+  const store = { "edition.apiKey": "sk-test" };
+  globalThis.localStorage = { getItem: (k) => store[k] ?? null, setItem: (k, v) => { store[k] = v; }, removeItem: (k) => { delete store[k]; } };
+  globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => ({ content: [{ type: "text", text: "A short read on coastal trails" }] }) });
+  assert.equal(await hook({ kind: "link", title: "Trails" }), "A short read on coastal trails");
+  globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => ({ content: [{ type: "text", text: "Sorry, I can't tell what this item is about from what you've given me here." }] }) });
+  await assert.rejects(() => hook({ kind: "link", title: "x" }), /no JSON/);
+});
+
+test("an unreachable API is reported with status 0, so the app stops and retries later", async () => {
+  const { hook } = await import("../src/ai.js");
+  globalThis.fetch = async () => { throw new TypeError("Load failed"); };
+  await assert.rejects(() => hook({ kind: "link", title: "x" }), (e) => e.status === 0 && /Couldn't reach the API/.test(e.message));
+});

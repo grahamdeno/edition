@@ -33,7 +33,7 @@ import { I, LOGO } from "./icons.js";
 import { topicColor, dominantColor, tintInks } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "4.1.1";
+export const VERSION = "4.1.2";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 
@@ -426,7 +426,8 @@ async function enrichPending() {
         // Count the try on whichever pass failed, so no item is picked again straight away.
         if (cur) await saveItem(cur.enrichedAt ? { ...cur, extTries: (cur.extTries || 0) + 1 } : { ...cur, enrichTries: (cur.enrichTries || 0) + 1 });
         if (e.status === 401 || e.message === "No API key set.") { toast(e.message); break; }
-        if (e.status === 429 || e.status === 529) break; // busy or rate-limited: try again on the next pass
+        // Busy, rate-limited or unreachable: stop here and try again on the next pass, rather than failing item after item.
+        if (e.status === 429 || e.status === 529 || e.status === 0) break;
       } finally {
         state.enriching.delete(next.id);
         if (state.reader && state.reader.ids[state.reader.index] === next.id) renderStory();
@@ -461,7 +462,7 @@ async function backfillHooks() {
       noteError(e, { quiet: true, where: "card face" });
       const cur = byId(next.id);
       if (cur) await saveItem({ ...cur, hookTries: (cur.hookTries || 0) + 1 });
-      if (e.status === 401 || e.status === 429) return;
+      if (e.status === 401 || e.status === 429 || e.status === 529 || e.status === 0) return;
     }
     refreshPost(next.id);
   }
