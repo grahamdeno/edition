@@ -32,4 +32,17 @@ export const I = {
   edit: svg('<path d="M4.5 19.5l1-4.2L15.8 5a2 2 0 0 1 2.9 0l.3.3a2 2 0 0 1 0 2.9L8.7 18.5z"/><path d="M13.5 7.3l3.2 3.2"/>'),
   trash: svg('<path d="M4.5 7h15M9.5 7V4.8h5V7"/><path d="M6.5 7l.9 12.2a1.5 1.5 0 0 0 1.5 1.3h6.2a1.5 1.5 0 0 0 1.5-1.3L17.5 7"/><path d="M10 11v6M14 11v6"/>'),
   keep: svg('<path d="M7 4.5h10v15l-5-3.5-5 3.5z"/>'),
+  heart: svg('<path d="M12 19.5s-7.5-4.6-7.5-10.2A4.3 4.3 0 0 1 12 6.6a4.3 4.3 0 0 1 7.5 2.7c0 5.6-7.5 10.2-7.5 10.2z"/>'),
+  heartFill: '<svg class="i fill" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 19.5s-7.5-4.6-7.5-10.2A4.3 4.3 0 0 1 12 6.6a4.3 4.3 0 0 1 7.5 2.7c0 5.6-7.5 10.2-7.5 10.2z"/></svg>',
+  reply: svg('<path d="M20 11.5a7.5 7.5 0 0 1-11 6.6L4.5 19.5l1.3-4.2A7.5 7.5 0 1 1 20 11.5z"/>'),
+  user: svg('<circle cx="12" cy="9" r="3.6"/><path d="M5.5 19.5a6.5 6.5 0 0 1 13 0"/>'),
 };
+
+/*
+ * The Shoebox mark: a photo tucked into an open box. Colours come from the
+ * page's tokens (--logo-box, --logo-rim, --logo-card), so it follows the theme.
+ */
+export const LOGO = '<svg class="logo-svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false">'
+  + '<g transform="rotate(-11 32 24)"><rect x="18" y="4" width="28" height="30" rx="3.5" style="fill:var(--logo-card);stroke:var(--logo-rim)" stroke-width="2.6"/>'
+  + '<circle cx="37.5" cy="13" r="3.4" style="fill:var(--logo-box)"/><path d="M21 31l8-9.5 5.5 5.5 4-4 6.5 8z" style="fill:var(--logo-box)"/></g>'
+  + '<path d="M8 28h48v22a6 6 0 0 1-6 6H14a6 6 0 0 1-6-6z" style="fill:var(--logo-box)"/><path d="M8 28h48v6H8z" style="fill:var(--logo-rim)"/></svg>';

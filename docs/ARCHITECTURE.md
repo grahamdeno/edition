@@ -1,10 +1,14 @@
 # Architecture
 
+Shoebox (formerly Edition). The IndexedDB database keeps the name `edition`, and `localStorage` keys keep their `edition.` prefix, so saves and settings carry over.
+
 ## Principles
 
 - **The model is pure.** Everything that decides what an item is, what a verdict does and what goes into an edition is in `src/model.js`, with no DOM, storage or network, and is covered by `tests/model.test.js`.
 - **Files are stored as files.** Photos, PDFs and documents go into IndexedDB as Blobs, not strings in localStorage. Photos also get a downscaled thumbnail for fast pages.
-- **The edition is stable.** It is chosen once per local calendar day and never reordered. Items queued during the day fill any empty slots (up to six), so the first day isn't blank.
+- **Today's six is stable.** It is chosen once per local calendar day and never reordered. Items queued during the day fill any empty slots (up to six), so the first day isn't blank.
+- **The timeline is finite.** Today shows new saves, today's six and at most two suggestions, then an end card. Settled posts stay in place with a stamp and Undo for the session.
+- **Pictures come from the page.** The relay returns every photo on a link's page; the app keeps only ones that load and are big enough (`usablePicture`), and the AI picks one. Your own choice (`picPicked`) is never overridden. No stock photo search.
 - **AI is additive.** With no key the app is complete: local scoring orders the queue. With a key, the AI enriches, ranks and suggests, and every failure is reported, not swallowed.
 
 ## Item
@@ -21,6 +25,16 @@
   fileName, mime, size,
   blobId, thumbId,          // keys into the blobs store
   summary,                  // one line on why it might matter (AI or none)
+  why,                      // your own reason, in your words: the top of the post
+  hook,                     // AI line for posts without a reason
+  site,                     // the page's site name
+  imageCands,               // [{ src, w, h, alt }] usable pictures from the page
+  imageAlt,                 // alt text for the picture shown
+  picPicked, picSettled,    // you chose the picture; candidates were checked and picked
+  cover, coverOff,          // your own photo for it ({ blobId, pinned }); or no picture
+  tint,                     // the picture's main colour, for the post's wash
+  loved,                    // when you loved it
+  replies: [{ id, text, at }], // notes to yourself under the post
   tags, minutes,
   source,                   // drop | paste | share | link | ai | legacy
   suggested,                // true for AI discoveries

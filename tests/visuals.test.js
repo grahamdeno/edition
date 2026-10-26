@@ -22,7 +22,8 @@ test("preview reads Open Graph tags and makes the image address absolute", () =>
     <meta content="Real title" property="og:title">
     <meta name="description" content="What it&#39;s about"></head>`;
   assert.deepEqual(parseMeta(html, "https://site.test/a/b"), {
-    image: "https://site.test/img/cover.jpg", title: "Real title", description: "What it's about", site: null,
+    image: "https://site.test/img/cover.jpg", imageW: null, imageH: null, imageAlt: null, twitterImage: null,
+    title: "Real title", description: "What it's about", site: null,
   });
   assert.equal(parseMeta("<title>Only &amp; this</title>", "https://x.test").title, "Only & this");
   assert.equal(parseMeta("<meta property='og:image' content='javascript:alert(1)'>", "https://x.test").image, null);
@@ -33,7 +34,8 @@ test("relay preview: fetches public pages for Edition only", async () => {
   const origin = "https://grahamdeno.github.io";
   const ok = await relay.fetch(new Request("https://w.test/preview?url=" + encodeURIComponent("https://news.test/story"), { headers: { origin } }));
   assert.equal(ok.status, 200);
-  assert.deepEqual(await ok.json(), { image: "https://cdn.test/p.png", title: "T", description: null, site: null });
+  assert.deepEqual(await ok.json(), { image: "https://cdn.test/p.png", title: "T", description: null, site: null,
+    images: [{ src: "https://cdn.test/p.png", w: null, h: null, alt: null, from: "preview" }] });
   const local = await relay.fetch(new Request("https://w.test/preview?url=" + encodeURIComponent("http://192.168.1.2/"), { headers: { origin } }));
   assert.equal(local.status, 400);
   const other = await relay.fetch(new Request("https://w.test/preview?url=https://a.test", { headers: { origin: "https://evil.test" } }));
@@ -91,4 +93,26 @@ test("relay preview falls back to the article's image when there's no preview pi
   globalThis.fetch = async () => new Response(`<html><head><title>T</title></head><body><article><p>Text.</p><img src="/photos/lead.jpg" width="1200" height="800"></article></body></html>`, { status: 200, headers: { "content-type": "text/html" } });
   const res = await relay.fetch(new Request("https://w.test/preview?url=" + encodeURIComponent("https://news.test/a"), { headers: { origin: "https://grahamdeno.github.io" } }));
   assert.equal((await res.json()).image, "https://news.test/photos/lead.jpg");
+});
+
+import { pageImages, parseMeta as meta2 } from "../relay/perplexity-relay.js";
+
+test("page images: preview picture first, then the article's photos, no logos or repeats", () => {
+  const html = `<head><meta property="og:image" content="/a.jpg"><meta property="og:image:width" content="1200">
+    <meta name="twitter:image" content="/a.jpg"></head><body><article>
+    <img src="/site-logo.png" width="600"><img src="/c.jpg" width="800" alt="Trail at dawn">
+    <img srcset="/d-400.jpg 400w, /d-1600.jpg 1600w"><img src="/tiny.jpg" width="120"><img src="/c.jpg"></article></body>`;
+  const base = "https://ex.test/p";
+  const out = pageImages(html, base, meta2(html, base));
+  assert.deepEqual(out.map((o) => o.src), ["https://ex.test/a.jpg", "https://ex.test/c.jpg", "https://ex.test/d-1600.jpg"]);
+  assert.equal(out[0].w, 1200);
+  assert.equal(out[0].from, "preview");
+  assert.equal(out[1].alt, "Trail at dawn");
+});
+
+import { tintInks } from "../src/visuals.js";
+test("tintInks accepts only a plain hex colour", () => {
+  assert.deepEqual(tintInks("#AA3322"), { t: "#aa3322" });
+  assert.equal(tintInks("red"), null);
+  assert.equal(tintInks(undefined), null);
 });

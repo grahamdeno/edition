@@ -1,5 +1,5 @@
 /*
- * Edition model. Pure functions only: no DOM, no storage, no network.
+ * Shoebox model (formerly Edition). Pure functions only: no DOM, no storage, no network.
  * Everything that decides what an item is, what a verdict does, and what
  * goes into today's edition lives here so it can be tested in Node.
  */
@@ -337,6 +337,8 @@ export function interestProfile(items) {
     if (it.status === STATUS.DONE) w = it.readNow || it.suggested ? 1.5 : 1;
     else if (it.status === STATUS.ARCHIVED && !it.washedOut) w = -1;
     else if (it.status === STATUS.ARCHIVED && it.washedOut) w = -0.5;
+    // Loving something counts toward what you like, whatever its verdict.
+    if (it.loved && !(it.suggested && it.status === STATUS.ARCHIVED)) w += 0.5;
     if (!w) continue;
     for (const t of it.tags || []) bump(tags, t.toLowerCase(), w);
     bump(kinds, it.kind, w);
@@ -583,7 +585,7 @@ export function screenSuggestions(picks, profile) {
 }
 
 /* ---- Tags: one vocabulary, kept tidy ----
- * Tags are what Edition learns from, so "agile" and "agile methods" counting
+ * Tags are what Shoebox learns from, so "agile" and "agile methods" counting
  * as two interests dilutes everything. The AI is shown the tags already in
  * use and reuses them; renames and merges made in Settings are kept as
  * aliases, so a merged tag never comes back; a deleted tag maps to "".
@@ -733,4 +735,45 @@ export function asBook(item, book) {
     intent: "read",
     minutes: BOOK_SITTING_MINUTES,
   };
+}
+
+/* ---- Timeline helpers ---- */
+
+/**
+ * When something was saved, the way a person would say it: "just now",
+ * "this morning", "yesterday", "Tuesday", "last Tuesday", "3 weeks ago",
+ * "in March", "last year". Local time.
+ */
+export function friendlyWhen(ts, now = Date.now()) {
+  if (!ts) return "a while ago";
+  const t = new Date(ts), n = new Date(now);
+  const mins = Math.floor((now - ts) / 60000);
+  if (mins < 2) return "just now";
+  const startOf = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const days = Math.round((startOf(n) - startOf(t)) / DAY);
+  const hour = t.getHours();
+  const part = hour < 5 ? "last night" : hour < 12 ? "morning" : hour < 17 ? "afternoon" : "evening";
+  const wd = t.toLocaleDateString("en-US", { weekday: "long" });
+  if (days <= 0) {
+    if (mins < 60) return `${mins} minutes ago`;
+    return part === "last night" ? "last night" : part === "evening" ? "this evening" : `this ${part}`;
+  }
+  if (days === 1) return part === "evening" || part === "last night" ? "last night" : `yesterday ${part}`;
+  if (days < 7) return `${wd} ${part === "last night" ? "night" : part}`;
+  if (days < 14) return `last ${wd}`;
+  if (days < 35) return `${Math.floor(days / 7)} weeks ago`;
+  const month = t.toLocaleDateString("en-US", { month: "long" });
+  if (t.getFullYear() === n.getFullYear()) return `in ${month}`;
+  if (t.getFullYear() === n.getFullYear() - 1) return `last ${month}`;
+  return `in ${month} ${t.getFullYear()}`;
+}
+
+/**
+ * Is a picture worth showing on a post? Wide enough to fill a phone's width
+ * without looking soft, and not a banner strip or a skyscraper ad.
+ */
+export function usablePicture({ w, h } = {}, { minWidth = 600 } = {}) {
+  if (!w || !h) return false;
+  const ratio = w / h;
+  return w >= minWidth && h >= 300 && ratio >= 0.5 && ratio <= 2.4;
 }

@@ -121,7 +121,7 @@ export async function exportJson() {
 
 export async function importJson(text) {
   const data = JSON.parse(text);
-  if (data.app !== "edition" || !Array.isArray(data.items)) throw new Error("Not an Edition backup");
+  if (data.app !== "edition" || !Array.isArray(data.items)) throw new Error("That file isn't a Shoebox backup.");
   await items.putMany(data.items);
   return data.items.length;
 }

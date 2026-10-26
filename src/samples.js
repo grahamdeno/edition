@@ -1,7 +1,7 @@
 /*
- * Sample items, so a fresh install shows what Edition does: links, YouTube
- * videos, quotes and photos. All of them land in the feed: most as new saves,
- * a few queued so today's edition has something in it.
+ * Sample items, so a fresh install shows what Shoebox does: links, YouTube
+ * videos, quotes and photos, some with the reason they were saved. Most land
+ * on Today as new saves; a few are queued so today's six has something in it.
  *
  * SAMPLES_VERSION changes whenever this list changes, and the app then swaps
  * the old samples on each phone for the new ones (your own saves untouched).
@@ -19,7 +19,7 @@ const SAMPLES = [
   [STATUS.INBOX, 0, draftFromUrl("https://www.youtube.com/watch?v=UF8uR6Z6KLc"), {
     title: "Steve Jobs' 2005 Stanford commencement address",
     summary: "Three short stories on connecting the dots, love and loss, and death. Fifteen minutes that hold up.",
-    tags: ["career", "talks"], minutes: 15,
+    tags: ["career", "talks"], minutes: 15, why: "Watch this one with the kids some night.",
   }],
   [STATUS.INBOX, 0, { kind: KIND.QUOTE, text: "Plans are worthless, but planning is everything.", author: "Dwight D. Eisenhower" }, {
     title: "Plans are worthless, but planning is everything",
@@ -29,24 +29,29 @@ const SAMPLES = [
   [STATUS.INBOX, 1, draftFromUrl("https://scrumguides.org/scrum-guide.html"), {
     title: "The 2020 Scrum Guide",
     summary: "The source text, thirteen pages. Worth a reread before the next retro on how the team is adapting it.",
-    tags: ["scrum", "agile"], minutes: 25,
+    tags: ["scrum", "agile"], minutes: 25, why: "Reread before the next retro. Where are we really bending it?",
   }],
-  [STATUS.INBOX, 1, { kind: KIND.PHOTO, imageUrl: "https://picsum.photos/seed/edition-one/1200/800" }, {
+  [STATUS.INBOX, 1, { kind: KIND.PHOTO, imageUrl: "https://picsum.photos/seed/edition-one/1200/1500" }, {
     title: "Saved photo",
-    summary: "A stock sample. With an API key, Edition looks at each photo, describes it and titles it for you.",
-    tags: ["photos"], minutes: 1,
+    summary: "A stock sample. With an API key, Shoebox looks at each photo, describes it and titles it for you.",
+    tags: ["photos"], minutes: 1, why: "Light like this is why I get up early.",
   }],
 
   // ---- Queue: kept for a future edition ----
   [STATUS.INBOX, 4, draftFromUrl("https://martinfowler.com/articles/is-quality-worth-cost.html"), {
     title: "Is high quality software worth the cost?",
     summary: "Fowler's case that internal quality lowers cost within weeks, useful when trading off tech debt in planning.",
-    tags: ["software", "planning"], minutes: 18,
+    tags: ["software", "planning"], minutes: 18, why: "Bring this to planning when tech debt comes up again.",
   }],
   [STATUS.INBOX, 7, draftFromUrl("https://basecamp.com/shapeup"), {
     title: "Shape Up",
     summary: "Basecamp's free book on six-week cycles and shaping work before betting on it. A useful contrast to sprints.",
     tags: ["product", "agile", "planning"], minutes: 120,
+  }],
+  [STATUS.QUEUED, 5, { kind: KIND.PHOTO, imageUrl: "https://picsum.photos/seed/shoebox-two/1200/1500" }, {
+    title: "Saved photo",
+    summary: "A stock sample photo, kept on Today so the six has a picture in it.",
+    tags: ["photos"], minutes: 1, why: "Want to print this one.",
   }],
 
   [STATUS.INBOX, 0, draftFromUrl("https://sidelineswap.com/shop/hockey/inline-roller/inline-skates/brand-marsblade-inline/o1-2/l400456"), {

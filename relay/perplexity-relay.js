@@ -2,13 +2,14 @@
  * Relay for Edition: a Cloudflare Worker. Two jobs:
  *
  *   POST /v1/agent      forwards Perplexity calls (below)
- *   GET  /preview?url=  reads a page's preview image, title and description
- *                       (its Open Graph tags), so link cards can show a picture;
- *                       with &text=1 also the page's readable text, for a summary
- *   GET  /photo?q=      finds openly licensed photos for a few words (Openverse),
- *                       for cards that have no picture of their own
+ *   GET  /preview?url=  reads a page's title, description and pictures: its
+ *                       preview picture plus the article's own photos, so the
+ *                       app can offer a choice; with &text=1 also the page's
+ *                       readable text, for a summary
+ *   GET  /photo?q=      Openverse photo search (kept for older app versions;
+ *                       Shoebox no longer uses it)
  *
- * Perplexity relay for Edition.
+ * Perplexity relay for Shoebox (formerly Edition).
  *
  * Perplexity's API refuses calls made straight from a web page, so Edition
  * sends them here and this Worker forwards them. It holds no secrets: the
@@ -46,7 +47,7 @@ export default {
   async fetch(request) {
     const origin = request.headers.get("origin") || "";
     const cors = corsHeaders(origin);
-    if (!allowed(origin)) return json(403, "This relay only serves Edition.", cors);
+    if (!allowed(origin)) return json(403, "This relay only serves Shoebox.", cors);
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
     const { pathname, searchParams } = new URL(request.url);
     if (request.method === "GET" && pathname === "/preview") return preview(searchParams.get("url"), cors, searchParams.get("text") === "1");
@@ -92,8 +93,14 @@ export function parseMeta(html, base) {
   let image = pick("og:image:secure_url", "og:image", "og:image:url", "twitter:image", "twitter:image:src");
   if (image) { try { image = new URL(image, base).href; } catch { image = ""; } }
   if (image && !/^https?:\/\//.test(image)) image = "";
+  const abs = (u) => { try { u = new URL(u, base).href; } catch { return ""; } return /^https?:\/\//.test(u) ? u : ""; };
+  const tw = pick("twitter:image", "twitter:image:src");
   return {
     image: image || null,
+    imageW: parseInt(meta["og:image:width"], 10) || null,
+    imageH: parseInt(meta["og:image:height"], 10) || null,
+    imageAlt: pick("og:image:alt", "twitter:image:alt").slice(0, 160) || null,
+    twitterImage: tw ? abs(tw) || null : null,
     title: (pick("og:title", "twitter:title") || decode((titleTag || "").trim())).slice(0, 200) || null,
     description: pick("og:description", "twitter:description", "description").slice(0, 300) || null,
     site: pick("og:site_name").slice(0, 80) || null,
@@ -121,27 +128,24 @@ async function preview(target, cors, wantText = false) {
     return out(200, { image: null, title: null, description: null, site: null });
   }
   if (!res.ok || !/html/i.test(res.headers.get("content-type") || "")) return out(200, { image: null, title: null, description: null, site: null });
-  // Read only the start of the page.
+  // Read up to 1.5 MB: past the <head> and into the article, so its photos can be offered too.
   const reader = res.body.getReader();
   const dec = new TextDecoder();
   let html = "";
-  // Read the <head>; keep going into the article when there's text to read or no preview picture yet.
-  let headOnly = !wantText;
   while (html.length < 1500000) {
     const { done, value } = await reader.read();
     if (done) break;
     html += dec.decode(value, { stream: true });
-    if (headOnly && /<\/head>/i.test(html)) {
-      if (parseMeta(html, url.href).image) break;
-      headOnly = false;
-    }
   }
   try { reader.cancel(); } catch { /* already closed */ }
   const base = res.url || url.href;
   const meta = parseMeta(html, base);
-  // No preview picture: the article's own first large image, before anything found elsewhere.
-  if (!meta.image) meta.image = articleImage(html, base);
-  return out(200, wantText ? { ...meta, text: pageText(html) } : meta);
+  const images = pageImages(html, base, meta);
+  // No preview picture: the article's own first large image.
+  if (!meta.image) meta.image = images[0] ? images[0].src : null;
+  const { imageW, imageH, imageAlt, twitterImage, ...rest } = meta;
+  const body = { ...rest, images };
+  return out(200, wantText ? { ...body, text: pageText(html) } : body);
 }
 
 /*
@@ -152,11 +156,19 @@ async function preview(target, cors, wantText = false) {
 const NOT_A_PHOTO = /(logo|icon|favicon|sprite|avatar|gravatar|badge|emoji|spinner|loader|pixel|spacer|blank|1x1|tracking|beacon|placeholder|button|banner|advert|\bads?\b|doubleclick|adserver|share|social|facebook|twitter|linkedin|pinterest)/i;
 
 export function articleImage(html, base) {
+  const first = articleImages(html, base, 1)[0];
+  return first ? first.src : null;
+}
+
+/** Every usable photo in the article, in page order, up to `max`, without duplicates. */
+export function articleImages(html, base, max = 8) {
   const h = String(html).replace(/<(script|style|noscript|nav|header|footer|aside|form)\b[\s\S]*?<\/\1>/gi, " ");
   const pick = (tag) => { const m = h.match(new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)<\\/${tag}>`, "i")); return m ? m[1] : ""; };
   const scope = pick("article") || pick("main") || pick("body") || h;
   const attr = (tag, name) => (tag.match(new RegExp(`\\b${name}\\s*=\\s*["']([^"']*)["']`, "i")) || [])[1] || "";
+  const out = [];
   for (const tag of scope.match(/<img\b[^>]*>/gi) || []) {
+    if (out.length >= max) break;
     const w = parseInt(attr(tag, "width"), 10), hgt = parseInt(attr(tag, "height"), 10);
     if ((w && w < 300) || (hgt && hgt < 200)) continue;
     const cls = `${attr(tag, "class")} ${attr(tag, "id")} ${attr(tag, "alt")}`;
@@ -167,9 +179,24 @@ export function articleImage(html, base) {
     let src = (set[0] && set[0].u) || attr(tag, "data-src") || attr(tag, "data-original") || attr(tag, "data-lazy-src") || attr(tag, "src");
     if (!src || /^data:/i.test(src) || /\.svg(\?|$)/i.test(src) || /\.gif(\?|$)/i.test(src) || NOT_A_PHOTO.test(src)) continue;
     try { src = new URL(decode(src), base).href; } catch { continue; }
-    if (/^https?:\/\//.test(src)) return src;
+    if (!/^https?:\/\//.test(src) || out.some((o) => o.src === src)) continue;
+    out.push({ src, w: w || null, h: hgt || null, alt: decode(attr(tag, "alt")).slice(0, 160) || null, from: "article" });
   }
-  return null;
+  return out;
+}
+
+/**
+ * Picture candidates for the picker: the page's preview picture, its Twitter
+ * card picture if different, then the article's own photos. Logos and icons
+ * are skipped here; the app drops anything small or oddly shaped once loaded.
+ */
+export function pageImages(html, base, meta, max = 8) {
+  const list = [];
+  const add = (c) => { if (c && c.src && !list.some((o) => o.src === c.src) && !NOT_A_PHOTO.test(c.src.split("?")[0].split("/").pop())) list.push(c); };
+  if (meta.image) add({ src: meta.image, w: meta.imageW || null, h: meta.imageH || null, alt: meta.imageAlt || null, from: "preview" });
+  if (meta.twitterImage) add({ src: meta.twitterImage, w: null, h: null, alt: null, from: "preview" });
+  for (const c of articleImages(html, base, max)) add(c);
+  return list.slice(0, max);
 }
 
 /**

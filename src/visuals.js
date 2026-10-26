@@ -84,3 +84,11 @@ export function dominantColor(src) {
     img.src = src;
   });
 }
+
+/**
+ * A picture's colour, ready to tint its post: the hex itself when valid, or
+ * null. The faint wash is mixed in CSS, so it suits light and dark alike.
+ */
+export function tintInks(hex) {
+  return /^#[0-9a-f]{6}$/i.test(String(hex || "")) ? { t: hex.toLowerCase() } : null;
+}
