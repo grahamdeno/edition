@@ -223,6 +223,7 @@ test("friendlyWhen says when, the way a person would", () => {
   assert.equal(friendlyWhen(now - 30000, now), "just now");
   assert.equal(friendlyWhen(now - 20 * 60000, now), "20 minutes ago");
   assert.equal(friendlyWhen(at(26, 8), now), "this morning");
+  assert.equal(friendlyWhen(at(26, 3), now), "early this morning");
   assert.equal(friendlyWhen(at(25, 9), now), "yesterday morning");
   assert.equal(friendlyWhen(at(25, 21), now), "last night");
   assert.equal(friendlyWhen(at(22, 15), now), "Thursday afternoon");

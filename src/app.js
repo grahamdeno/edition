@@ -223,7 +223,9 @@ function topUpEdition() {
   if (room <= 0) return;
   const inEdition = new Set(ed.ids);
   const hasSuggestion = ed.ids.some((id) => byId(id)?.suggested);
-  const rest = state.items.filter((i) => !inEdition.has(i.id) && !(hasSuggestion && i.suggested));
+  // Saves kept today wait for a later day's six, as Keep promises.
+  const rest = state.items.filter((i) => !inEdition.has(i.id) && !(hasSuggestion && i.suggested)
+    && !(i.queuedAt && dayKey(i.queuedAt) === today && i.created && dayKey(i.created) === today));
   const extra = buildEdition(rest, null, { size: room }).ids;
   if (!extra.length) return;
   state.edition = { date: today, ids: [...ed.ids, ...extra] };
@@ -270,6 +272,7 @@ async function removeItems(list) {
     await db.items.remove(it.id);
     if (it.blobId) await db.blobs.remove(it.blobId);
     if (it.thumbId) await db.blobs.remove(it.thumbId);
+    if (it.cover && it.cover.blobId) await db.blobs.remove(it.cover.blobId);
   }
   const ids = new Set(list.map((i) => i.id));
   state.items = state.items.filter((i) => !ids.has(i.id));
@@ -410,8 +413,10 @@ async function enrichPending() {
       } catch (e) {
         noteError(e, { quiet: true, where: `enrich ${next.kind}` });
         const cur = byId(next.id);
-        if (cur) await saveItem({ ...cur, enrichTries: (cur.enrichTries || 0) + 1 });
+        // Count the try on whichever pass failed, so no item is picked again straight away.
+        if (cur) await saveItem(cur.enrichedAt ? { ...cur, extTries: (cur.extTries || 0) + 1 } : { ...cur, enrichTries: (cur.enrichTries || 0) + 1 });
         if (e.status === 401 || e.message === "No API key set.") { toast(e.message); break; }
+        if (e.status === 429 || e.status === 529) break; // busy or rate-limited: try again on the next pass
       } finally {
         state.enriching.delete(next.id);
         if (state.reader && state.reader.ids[state.reader.index] === next.id) renderStory();
@@ -1127,6 +1132,7 @@ function openReply(id) {
     const text = input.value.trim();
     if (!text) { const st = $("#reply-st", wrap); st.textContent = "Write something first."; st.classList.add("err"); input.focus(); return; }
     const cur = byId(id);
+    if (!cur) { closeSheet(); toast("That item was deleted."); return; }
     await saveItem({ ...cur, replies: [...(cur.replies || []), { id: db.newId(), text: text.slice(0, 600), at: Date.now() }] });
     closeSheet();
     render();
@@ -1165,6 +1171,7 @@ function openStories(mode, startId) {
   el.className = "reader";
   el.setAttribute("role", "dialog");
   el.setAttribute("aria-modal", "true");
+  el.setAttribute("aria-label", "Reading");
   el.innerHTML = `<div class="reader-inner">
     <div class="segs" id="segs" aria-hidden="true"></div>
     <div class="reader-top" id="reader-top">
@@ -1184,10 +1191,13 @@ function openStories(mode, startId) {
   el.addEventListener("pointerdown", wakeReader, true);
   renderStory();
   wakeReader();
+  $("#app")?.setAttribute("inert", "");
+  el.querySelector("[data-close]")?.focus();
 }
 
 function closeReader() {
   $(".reader")?.remove();
+  $("#app")?.removeAttribute("inert");
   state.reader = null;
   clearTimeout(readerTimer);
   render();
@@ -1308,6 +1318,9 @@ function updateTimeLeft(item) {
  * profile. Returns null if you backed out, else { after, undo } where undo
  * puts back the item and what was learned.
  */
+/** What a verdict changes on an item, and so all that Undo puts back. */
+const VERDICT_FIELDS = ["status", "queuedAt", "doneAt", "archivedAt", "deferredAt", "skips", "fadedAt", "washedOut", "readNow", "history", "whyNot"];
+
 async function recordVerdict(before, verdict) {
   let whyNot = null;
   if (verdict === VERDICT.LET_GO && before.suggested) {
@@ -1320,16 +1333,23 @@ async function recordVerdict(before, verdict) {
   if (whyNot) after.whyNot = whyNot;
   await saveItem(after);
   const prevSuggest = state.suggest;
+  let learned = null;
   if (before.suggested) {
-    state.suggest = learnFromSuggestion(state.suggest, before, verdict, whyNot);
+    learned = state.suggest = learnFromSuggestion(state.suggest, before, verdict, whyNot);
     await db.meta.set("suggest", state.suggest);
   }
   tick(true);
   return {
     after, stage, whyNot,
+    // Undo puts back only what the verdict changed, onto the item as it is now, so a reply,
+    // love, edit or summary added since is kept. What a suggestion taught is taken back only
+    // if nothing has changed the suggestion profile since.
     undo: async () => {
-      await saveItem(before);
-      if (before.suggested) { state.suggest = prevSuggest; await db.meta.set("suggest", prevSuggest); }
+      const cur = byId(before.id) || after;
+      const back = { ...cur };
+      for (const f of VERDICT_FIELDS) { if (f in before) back[f] = before[f]; else delete back[f]; }
+      await saveItem(back);
+      if (learned && state.suggest === learned) { state.suggest = prevSuggest; await db.meta.set("suggest", prevSuggest); }
     },
   };
 }
@@ -1360,9 +1380,11 @@ function askWhyNot(item) {
 
 async function storyVerdict(id, verdict) {
   $(".reader")?.remove();
+  $("#app")?.removeAttribute("inert");
   state.reader = null;
   clearTimeout(readerTimer);
   await timelineVerdict(id, verdict);
+  document.querySelector(`#p-${CSS.escape(id)} .undo, #p-${CSS.escape(id)} .act`)?.focus();
 }
 
 /** Swipe left or right for the next or previous item, without a verdict. */
@@ -1584,11 +1606,11 @@ function bindPictureEdit(wrap, id) {
       await after();
       return;
     }
+    const c = k === "none" ? null : (box._cands || [])[+k];
+    if (k !== "none" && !c) return;
     if (cur.cover && cur.cover.blobId) await db.blobs.remove(cur.cover.blobId);
     if (k === "none") await saveItem({ ...cur, cover: null, coverOff: true, picPicked: true, tint: undefined });
     else {
-      const c = (box._cands || [])[+k];
-      if (!c) return;
       await saveItem({ ...cur, cover: null, coverOff: false, imageUrl: c.src, imageAlt: c.alt || cur.imageAlt, picPicked: true, tint: undefined });
     }
     tick(true);
@@ -1645,17 +1667,18 @@ async function deleteItem(id) {
   tick(true);
   render();
   let undone = false;
-  const purge = setTimeout(async () => {
+  // The files go only once the Undo message has closed without Undo, however long it stayed up.
+  const purge = async () => {
     if (undone) return;
     if (item.blobId) await db.blobs.remove(item.blobId);
     if (item.thumbId) await db.blobs.remove(item.thumbId);
     if (item.cover && item.cover.blobId) await db.blobs.remove(item.cover.blobId);
-  }, 7000);
+  };
   toast("Deleted.", {
+    onExpire: purge,
     action: "Undo",
     onAction: async () => {
       undone = true;
-      clearTimeout(purge);
       await saveItem(item);
       if (edAt >= 0 && state.edition) { const ids = [...state.edition.ids]; ids.splice(edAt, 0, id); state.edition = { ...state.edition, ids }; await db.meta.set("edition", state.edition); }
       render();
@@ -1902,13 +1925,13 @@ async function applyCapPicture(item) {
     if (p.page.description && !upd.summary) upd.summary = String(p.page.description).slice(0, 200);
     if (p.page.site) upd.site = String(p.page.site).slice(0, 60);
   }
-  if (p.status === "done") { upd.imageCands = p.list; upd.picSettled = p.picked ? Date.now() : undefined; }
+  if (p.status === "done" && p.list.length) { upd.imageCands = p.list; upd.picSettled = p.picked ? Date.now() : undefined; }
   if (p.choice === "own" && p.ownFile) {
     const blob = (await shrinkImage(p.ownFile)) || p.ownFile;
     const blobId = db.newId();
     await db.blobs.put(blobId, blob);
     Object.assign(upd, { cover: { blobId, from: "mine", pinned: true }, picPicked: true });
-  } else if (p.choice === "none") {
+  } else if (p.choice === "none" && p.picked) {
     Object.assign(upd, { coverOff: true, picPicked: true, picSettled: Date.now() });
   } else if (typeof p.choice === "number" && p.list[p.choice]) {
     const c = p.list[p.choice];
@@ -1997,6 +2020,7 @@ function openSettings() {
         <button class="btn" type="button" id="set-import">Import</button>
       </div>
       <input type="file" id="set-import-file" accept="application/json,.json" hidden>
+      <span class="st" id="set-bk-st" role="status"></span>
       <p class="note">Exports titles, notes, links and history as JSON. Photos and files stay on this device.</p>
     </div>
     <div class="section">
@@ -2113,7 +2137,7 @@ function openSettings() {
       const n = await db.importJson(await f.text());
       state.items = await db.items.all();
       closeSheet(); render(); toast(`Imported ${n} items.`);
-    } catch (e) { say(st, e.message, true); }
+    } catch (e) { say($("#set-bk-st", wrap), e.message || "That file couldn't be read.", true); }
   });
 }
 
@@ -2353,7 +2377,7 @@ function showToCopy(text) {
 let lastFocus = null;
 function sheet(html, { tall = false, label = "" } = {}) {
   closeSheet();
-  $(".toast")?.remove(); // a leftover message shouldn't sit over the sheet
+  expireToast(); // a leftover message shouldn't sit over the sheet
   lastFocus = document.activeElement;
   const wrap = document.createElement("div");
   wrap.className = "sheet-wrap";
@@ -2372,7 +2396,7 @@ function sheet(html, { tall = false, label = "" } = {}) {
 function closeSheet() {
   const s = $(".sheet-wrap");
   if (s) { const cb = s._onClose; s._onClose = null; s.remove(); if (cb) cb(); }
-  $("#app")?.removeAttribute("inert");
+  if (!$(".reader")) $("#app")?.removeAttribute("inert");
   $(".reader")?.removeAttribute("inert");
   if (lastFocus && lastFocus.focus && document.contains(lastFocus)) lastFocus.focus();
   lastFocus = null;
@@ -2444,17 +2468,27 @@ function bindPull({ scroller, target, host, label, onBack }) {
 }
 
 let toastTimer;
-function toast(msg, { action, onAction, high = false, sticky = false } = {}) {
-  $(".toast")?.remove();
+/** Close the message on screen; whatever it was waiting on (a delete's file purge) goes ahead. */
+function expireToast(el = $(".toast")) {
+  if (!el) return;
+  el.remove();
+  const f = el._onExpire;
+  el._onExpire = null;
+  if (f) f();
+}
+
+function toast(msg, { action, onAction, onExpire, high = false, sticky = false } = {}) {
+  expireToast();
   clearTimeout(toastTimer);
   const el = document.createElement("div");
   el.className = "toast" + (high || state.reader ? " high" : "");
   el.setAttribute("role", "status");
   el.innerHTML = `<span>${esc(msg)}</span>${action ? `<button type="button">${esc(action)}</button>` : ""}`;
-  if (action) $("button", el).addEventListener("click", () => { el.remove(); onAction && onAction(); });
+  el._onExpire = onExpire || null;
+  if (action) $("button", el).addEventListener("click", () => { el._onExpire = null; el.remove(); onAction && onAction(); });
   document.body.appendChild(el);
   // Long enough to read and reach Undo; held while a finger or the keyboard is on it.
-  const arm = () => { clearTimeout(toastTimer); if (!sticky) toastTimer = setTimeout(() => el.remove(), action ? 7000 : 3500); };
+  const arm = () => { clearTimeout(toastTimer); if (!sticky) toastTimer = setTimeout(() => expireToast(el), action ? 7000 : 3500); };
   el.addEventListener("pointerenter", () => clearTimeout(toastTimer));
   el.addEventListener("pointerleave", arm);
   el.addEventListener("focusin", () => clearTimeout(toastTimer));
@@ -2511,6 +2545,7 @@ function wireGlobal() {
     else if (state.reader) closeReader();
   });
   document.addEventListener("visibilitychange", async () => {
+    if (document.visibilityState === "hidden") { const t = $(".toast"); if (t && t._onExpire) expireToast(t); return; }
     if (document.visibilityState !== "visible") return;
     const before = state.items.length;
     const day = state.edition && state.edition.date;

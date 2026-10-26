@@ -756,7 +756,7 @@ export function friendlyWhen(ts, now = Date.now()) {
   const wd = t.toLocaleDateString("en-US", { weekday: "long" });
   if (days <= 0) {
     if (mins < 60) return `${mins} minutes ago`;
-    return part === "last night" ? "last night" : part === "evening" ? "this evening" : `this ${part}`;
+    return part === "last night" ? "early this morning" : part === "evening" ? "this evening" : `this ${part}`;
   }
   if (days === 1) return part === "evening" || part === "last night" ? "last night" : `yesterday ${part}`;
   if (days < 7) return `${wd} ${part === "last night" ? "night" : part}`;
