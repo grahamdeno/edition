@@ -344,34 +344,57 @@ export async function rank(queue, profile) {
 }
 
 /**
- * Find a few new things worth reading, using the web search tool.
- * Returns [{ title, url, why, tags }].
+ * Today's top stories for this person: the biggest stories of the last few
+ * days in the areas they care about, from established outlets.
+ * Returns [{ title, url, why, tags, minutes }], most prominent first.
  */
-export async function discover(profile, { count = 3, known = new Set(), guide = "", vocab = [] } = {}) {
-  if (settings.pplxEnabled()) return pplxDiscover(profile, { count, known, guide, vocab });
-  return claudeDiscover(profile, { count, guide, vocab });
+export async function discover(profile, { count = 3, known = new Set(), guide = "", vocab = [], blocked = [] } = {}) {
+  if (settings.pplxEnabled()) return pplxDiscover(profile, { count, known, guide, vocab, blocked });
+  return claudeDiscover(profile, { count, guide, vocab, blocked });
 }
 
-const BECAUSE = 'why: one plain sentence, max 120 chars, starting "Because you", naming what they finished or keep saving that this connects to';
+export const STORY_DAYS = 3; // how far back a top story may go
+const WHY_STORY = "why: one plain sentence, max 120 chars: what happened and why it matters to them. No hype";
 
-async function claudeDiscover(profile, { count = 3, guide = "", vocab = [] } = {}) {
-  const interests = topTags(profile, 10);
-  const kept = profile.kept.slice(0, 10).map((i) => `- ${i.title}${i.url ? ` (${i.url})` : ""}`).join("\n");
+/** Sites that aggregate, host chatter or sell, never the original story. */
+export const NOT_NEWS = ["reddit.com", "quora.com", "pinterest.com", "x.com", "twitter.com", "facebook.com",
+  "instagram.com", "tiktok.com", "linkedin.com", "news.google.com", "msn.com", "yahoo.com", "amazon.com"];
+
+/** The brief both search engines get: what counts as a top story. */
+export function storyBrief(profile, { count = 3, guide = "", vocab = [], now = Date.now() } = {}) {
+  const interests = topTags(profile, 8);
+  const kept = profile.kept.slice(0, 10).map((i) => `- ${i.title}${tagStr(i)}`).join("\n");
   const dropped = profile.dropped.slice(0, 6).map((i) => `- ${i.title}`).join("\n");
-  if (!interests.length && !kept && !(profile.books || []).length) throw new AiError("Finish or let go of a few items first, so there is something to learn from.");
-  const prompt =
-    `Find ${count} things this person would want in their private daily reading edition: substantial articles, essays, ` +
-    `papers or talks, published in the last year, not news briefs or listicles. Avoid anything they already have.\n\n` +
-    `Interests, strongest first: ${interests.join(", ") || "(learn from the list below)"}\n` +
-    `Recently finished:\n${kept || "(none)"}\n` + booksLine(profile) +
-    `Recently let go (avoid these directions):\n${dropped || "(none)"}\n` +
+  const today = new Date(now).toDateString();
+  return (
+    `Today is ${today}. Find the ${count} top stories of the last ${STORY_DAYS} days for this person: ` +
+    `the most important, most-covered news in the areas they follow, the way a good front page would lead with it.\n` +
+    `- One story each: no two picks about the same event.\n` +
+    `- Link the original reporting from an established outlet or the primary source (the company, agency or paper), ` +
+    `not an aggregator, a forum or a rewrite.\n` +
+    `- Skip opinion columns, listicles, how-to guides, product pages, press-release reposts and anything older than ${STORY_DAYS} days.\n` +
+    `- Order by how big the story is, biggest first.\n\n` +
+    `Areas they follow, strongest first: ${interests.join(", ") || "(learn from the list below)"}\n` +
+    `What they finished recently:\n${kept || "(none)"}\n` + booksLine(profile) +
+    `What they let go (avoid these directions):\n${dropped || "(none)"}\n` +
     `${guide ? `What their answers to past suggestions taught:\n${guide}\n` : ""}` +
-    `${vocab.length ? `${vocabLine(vocab)}\n` : ""}\n` +
-    `Search, then reply with JSON only: {"picks":[{"title":string,"url":string,"why":string (${BECAUSE}),"tags":[1-3 lowercase words],"minutes":integer}]}`;
+    `${vocab.length ? `${vocabLine(vocab)}\n` : ""}`
+  );
+}
+
+function needsHistory(profile) {
+  if (!topTags(profile, 1).length && !profile.kept.length && !(profile.books || []).length)
+    throw new AiError("Finish or let go of a few items first, so there is something to learn from.");
+}
+
+async function claudeDiscover(profile, { count = 3, guide = "", vocab = [], blocked = [] } = {}) {
+  needsHistory(profile);
+  const prompt = storyBrief(profile, { count, guide, vocab }) +
+    `\nSearch, then reply with JSON only: {"picks":[{"title":string,"url":string,"why":string (${WHY_STORY}),"tags":[1-3 lowercase words],"minutes":integer}]}`;
   const data = await call({
     content: prompt,
     maxTokens: 2500,
-    tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 4 }],
+    tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 5, blocked_domains: [...new Set([...NOT_NEWS, ...blocked])].slice(0, 40) }],
   });
   const out = parseJson(textOf(data));
   return (out.picks || [])
@@ -522,35 +545,54 @@ const PICKS_SCHEMA = {
   additionalProperties: false,
 };
 
-async function pplxDiscover(profile, { count = 3, known = new Set(), guide = "", vocab = [] } = {}) {
-  const interests = topTags(profile, 8);
-  const kept = profile.kept.slice(0, 10).map((i) => `- ${i.title}${tagStr(i)}`).join("\n");
-  const dropped = profile.dropped.slice(0, 6).map((i) => `- ${i.title}`).join("\n");
-  if (!interests.length && !kept && !(profile.books || []).length) throw new AiError("Finish or let go of a few items first, so there is something to learn from.");
-  const input =
-    `Search the web for ${count} articles, essays or talks this person would want in their private daily reading. ` +
-    `Favour pieces that are popular and widely shared right now, published in the last month or two, and substantial: ` +
-    `no news briefs, listicles or product pages.\n\n` +
-    `Interests, strongest first: ${interests.join(", ") || "(learn from the list below)"}\n` +
-    `Recently finished:\n${kept || "(none)"}\n` + booksLine(profile) +
-    `Recently let go (avoid these directions):\n${dropped || "(none)"}\n` +
-    `Already saved (skip): ${[...known].slice(0, 30).join(" ") || "(none)"}\n` +
-    `${guide ? `What their answers to past suggestions taught:\n${guide}\n` : ""}` +
-    `${vocab.length ? `${vocabLine(vocab)}\n` : ""}\n` +
-    `For each pick: the title, the exact URL from your search results, ${BECAUSE}, ` +
-    `1-3 lowercase topic tags, and minutes to read or watch.`;
-  const data = await pplxAgent({
+/** MM/DD/YYYY, the date format Perplexity's search filters take. */
+export function pplxDate(ts) {
+  const d = new Date(ts);
+  return `${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")}/${d.getFullYear()}`;
+}
+
+/** The web search tool, held to recent news from real outlets. At most 20 domains. */
+export function storySearchTool({ blocked = [], now = Date.now() } = {}) {
+  const deny = [...new Set([...blocked, ...NOT_NEWS])].slice(0, 20).map((d) => `-${d}`);
+  return {
+    type: "web_search",
+    max_results: 20,
+    filters: { search_after_date_filter: pplxDate(now - STORY_DAYS * 86400000), search_domain_filter: deny },
+  };
+}
+
+async function pplxDiscover(profile, { count = 3, known = new Set(), guide = "", vocab = [], blocked = [] } = {}) {
+  needsHistory(profile);
+  const input = storyBrief(profile, { count, guide, vocab }) +
+    `Already saved (skip): ${[...known].slice(0, 30).join(" ") || "(none)"}\n\n` +
+    `For each pick: the headline, the exact URL from your search results, ${WHY_STORY}, ` +
+    `1-3 lowercase topic tags, and minutes to read.`;
+  const body = {
     preset: PPLX_PRESET,
-    instructions: "You find reading for one person's private reading app. Write plainly. No hype.",
+    instructions: "You are the front-page editor for one person's private news app. Pick the stories that matter most today. Write plainly.",
     input,
+    tools: [storySearchTool({ blocked })],
     response_format: { type: "json_schema", json_schema: { name: "picks", schema: PICKS_SCHEMA, strict: true } },
-  });
-  const results = searchResultsOf(data);
+  };
+  let data;
+  try { data = await pplxAgent(body); } catch (e) {
+    // If Perplexity won't take the filtered search with this preset, ask again without the filters.
+    if (e.status !== 400 && e.status !== 422) throw e;
+    const { tools, ...plain } = body;
+    data = await pplxAgent(plain);
+  }
+  const results = searchResultsOf(data).filter((r) => isRecent(r));
   let picks = [];
   try { picks = parseJson(outputText(data)).picks || []; } catch { /* use the raw results below */ }
   const out = reconcilePicks(picks, results, { count, known });
-  if (!out.length) throw new AiError("Perplexity didn't turn up anything new. Try again later.");
+  if (!out.length) throw new AiError("Perplexity didn't turn up any new top stories. Try again later.");
   return out;
+}
+
+/** A result with a known date older than the window is not a top story. */
+export function isRecent(r, now = Date.now()) {
+  const t = Date.parse(r && (r.date || r.last_updated) || "");
+  return !Number.isFinite(t) || now - t <= (STORY_DAYS + 1) * 86400000;
 }
 
 function tagStr(i) { return i.tags && i.tags.length ? ` [${i.tags.join(", ")}]` : ""; }
