@@ -120,6 +120,18 @@ async function boot() {
   registerWorker();
 }
 
+/** The update bar: its own element, above the + button, so no toast or sheet can clear it. */
+function updateBar() {
+  if ($("#update-bar")) return;
+  const el = document.createElement("div");
+  el.id = "update-bar";
+  el.className = "update-bar";
+  el.setAttribute("role", "status");
+  el.innerHTML = `<span>${APP} was updated.</span><button type="button">Reload</button>`;
+  $("button", el).addEventListener("click", () => location.reload());
+  document.body.appendChild(el);
+}
+
 /* Your photo: the face on every post you wrote. Kept on this phone only. */
 async function loadAvatar() {
   const id = await db.meta.get("avatarBlobId", null);
@@ -133,16 +145,17 @@ function avatarHtml(cls = "") {
 }
 
 /*
- * Updates, as in Tabs. When a new release has been saved in the background,
- * offer to switch to it now ("Update ready · Reload"); otherwise it's used on
- * the next launch. Coming back to the app checks for a release too, since an
- * installed app that's only resumed never reloads the page.
+ * Updates, as in Scales. When a new release has been saved in the background
+ * and takes over, a bar says "Shoebox was updated" with Reload, and it stays
+ * until Reload is tapped: other messages never replace it. Coming back to the
+ * app checks for a release too, since an installed app that's only resumed
+ * never reloads the page.
  */
 function registerWorker() {
   if (!("serviceWorker" in navigator)) return;
   const hadWorker = !!navigator.serviceWorker.controller;
   navigator.serviceWorker.addEventListener("controllerchange", () => {
-    if (hadWorker) toast("Update ready", { action: "Reload", onAction: () => location.reload(), sticky: true });
+    if (hadWorker) updateBar();
   });
   navigator.serviceWorker.register("sw.js").then((reg) => {
     document.addEventListener("visibilitychange", () => {

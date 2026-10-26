@@ -116,3 +116,14 @@ test("tintInks accepts only a plain hex colour", () => {
   assert.equal(tintInks("red"), null);
   assert.equal(tintInks(undefined), null);
 });
+
+import { readFileSync } from "node:fs";
+test("an update shows a bar that says Shoebox was updated, with Reload, and stays until tapped", () => {
+  const app = readFileSync(new URL("../src/app.js", import.meta.url), "utf8");
+  assert.match(app, /navigator\.serviceWorker\.addEventListener\("controllerchange", \(\) => \{\n\s+if \(hadWorker\) updateBar\(\);/);
+  assert.match(app, /\$\{APP\} was updated\.<\/span><button type="button">Reload<\/button>/);
+  assert.doesNotMatch(app, /\.update-bar"\)\?\.remove|#update-bar"\)\?\.remove/, "nothing else removes the bar");
+  const sw = readFileSync(new URL("../sw.js", import.meta.url), "utf8");
+  assert.match(sw, /self\.skipWaiting\(\)/);
+  assert.match(sw, /self\.clients\.claim\(\)/, "the new worker takes over, which fires controllerchange");
+});
