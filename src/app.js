@@ -33,7 +33,7 @@ import { I, LOGO } from "./icons.js";
 import { topicColor, dominantColor, tintInks } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "4.2.1";
+export const VERSION = "4.3.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 
@@ -739,12 +739,10 @@ function leftToday() {
 function render({ top = false } = {}) {
   const prev = $("#tl");
   const scroll = prev && !top ? prev.scrollTop : 0;
-  const left = leftToday();
   app.innerHTML = `<div class="tl" id="tl">
     <header class="top">
       <div class="bar">
         <h1 class="mark"><span class="logo" aria-hidden="true">${LOGO}</span><span class="word">${APP}</span></h1>
-        <span class="count" id="count" aria-live="polite">${left ? `${left} left today` : "Done for today"}</span>
         <button class="icon-btn" type="button" data-act="settings" aria-label="Settings">${I.settings}</button>
       </div>
       <div class="tabs" role="tablist" aria-label="Show">
@@ -753,7 +751,6 @@ function render({ top = false } = {}) {
       </div>
     </header>
     <main id="panel" role="tabpanel" aria-labelledby="tab-${state.tab}">
-      <button class="composer" type="button" data-act="add">${avatarHtml()}<span class="ph">Save a link, photo or thought</span><span class="pill">Add</span></button>
       ${state.tab === "today" ? todayHtml() : allHtml()}
     </main>
   </div>
@@ -786,11 +783,38 @@ function sectionHead(title, note = "") {
 
 function todayHtml() {
   const s = todaySections();
-  let h = "";
+  let h = stripHtml(s);
   if (s.fresh.length) h += sectionHead("New", `${s.fresh.filter(isOpen).length || "All"} to sort`) + s.fresh.map((i) => postHtml(i)).join("");
   if (s.six.length) h += sectionHead("Today's six", `${s.six.filter(isOpen).length} of ${s.six.length} left`) + s.six.map((i) => postHtml(i)).join("");
   if (s.sugg.length) h += sectionHead("From outside your saves") + s.sugg.map((i) => postHtml(i)).join("");
   return h + endHtml(s);
+}
+
+/*
+ * The Today strip, at the top of Today: a greeting, what's left, and a
+ * circle for each of today's six. A circle fills with a check once that
+ * post has its verdict; tap one to jump to its post. Cleared, it becomes
+ * a gold badge.
+ */
+function stripHtml(s) {
+  const all = [...s.fresh, ...s.six];
+  if (!all.length) return "";
+  const left = all.filter(isOpen).length;
+  const h = new Date().getHours();
+  const hello = h < 5 ? "Good evening" : h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening";
+  const status = !left ? "Today is cleared" : `${left} left today${s.fresh.filter(isOpen).length ? `, ${s.fresh.filter(isOpen).length} new` : ""}`;
+  const dots = s.six.map((i) => {
+    const done = !isOpen(i);
+    const pic = pictureOf(i);
+    const face = pic && pic.blobId ? `<img alt="" data-blob="${esc(pic.blobId)}">`
+      : pic && pic.src ? `<img alt="" src="${esc(pic.src)}" referrerpolicy="no-referrer" onerror="this.remove()">`
+      : `<span class="dot-l" style="--c:${topicColor(i)}">${esc(firstWords(headline(i), 1).charAt(0).toUpperCase() || "•")}</span>`;
+    return `<button class="dot${done ? " done" : ""}" type="button" data-jump="${esc(i.id)}" aria-label="${esc(firstWords(headline(i), 8))}${done ? ", done" : ""}">${face}${done ? `<span class="tick" aria-hidden="true">${I.done}</span>` : ""}</button>`;
+  }).join("");
+  return `<section class="strip" aria-label="Today">
+    <div class="hello">${avatarHtml("sm")}<div><p class="hi">${hello}.</p><p class="left" id="count" aria-live="polite">${esc(status)}</p></div></div>
+    ${left || !s.six.length ? `<div class="dots" role="group" aria-label="Today's six">${dots}</div>` : `<span class="cleared">${I.done}<span>Cleared</span></span>`}
+  </section>`;
 }
 
 /** The end of Today: what's left, or the finish moment once it's all cleared. */
@@ -1058,6 +1082,11 @@ async function onTimelineClick(e) {
     const before = byId(b.dataset.letgo);
     await saveItem(applyVerdict(before, VERDICT.LET_GO, { stage: "edition" })); tick(true); render();
     toast("Let go.", { action: "Undo", onAction: async () => { await saveItem(before); render(); } });
+    return;
+  }
+  if ((b = hit("[data-jump]"))) {
+    const el = document.getElementById("p-" + b.dataset.jump);
+    if (el) { el.scrollIntoView({ behavior: reduced() ? "auto" : "smooth", block: "start" }); el.querySelector("button")?.focus({ preventScroll: true }); }
     return;
   }
   if ((b = hit("[data-open]"))) {

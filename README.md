@@ -18,7 +18,7 @@ Built like [Scales](https://github.com/grahamdeno/scales) and [Tabs](https://git
   type)      Today)                                 ranked)   the day)           3 weeks untouched = Fading
 ```
 
-**Today** is the opening screen, a timeline in three parts:
+**Today** is the opening screen. At the top, the **Today strip**: a greeting, what's left, and a circle for each of today's six that fills with a check as you settle it (tap one to jump to its post); when everything is settled it becomes a gold *Cleared* badge. Below it, a timeline in three parts:
 
 1. **New**: what you saved since you last looked, newest first. Each post is yours: your photo, when you saved it ("last Tuesday"), and your reason in your own words. Keep sends it to your queue; Done and Let go settle it.
 2. **Today's six**: chosen from your queue once a day and never reshuffled. Later moves one to another day.
