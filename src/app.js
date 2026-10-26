@@ -33,7 +33,7 @@ import { I, LOGO } from "./icons.js";
 import { topicColor, dominantColor, tintInks } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "4.1.0";
+export const VERSION = "4.1.1";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 
@@ -1979,8 +1979,8 @@ function openSettings() {
       <p class="note">The key stays on this device and is sent only to Anthropic. With it, Shoebox titles and tags each new save (photos and PDFs too), picks the best picture from a link's page, ranks your queue from what you finish and let go, and can search for new reading. Each is a paid API call on your account.</p>
     </div>
     <div class="section">
-      <h3>Discovery (Perplexity API)</h3>
-      <div class="field"><label for="set-pplx">API key</label>
+      <h3>Relay and discovery</h3>
+      <div class="field"><label for="set-pplx">Perplexity API key <span class="hint">(optional)</span></label>
         <input id="set-pplx" type="password" autocomplete="off" spellcheck="false" placeholder="pplx-…" value="${esc(ai.settings.pplxKey())}"></div>
       <div class="field"><label for="set-relay">Relay address</label>
         <input id="set-relay" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://edition-relay.you.workers.dev" value="${esc(ai.settings.relay())}"></div>
@@ -1989,7 +1989,7 @@ function openSettings() {
         <button class="btn" type="button" id="set-pplx-clear">Remove key</button>
       </div>
       <span class="st" id="set-pplx-st" role="status"></span>
-      <p class="note">With this key, Find something new asks Perplexity to search for popular recent articles on what you keep finishing. Perplexity blocks calls made straight from a web app, so they go through your own relay (a free Cloudflare Worker; steps in the repo's relay folder). The key stays on this phone and passes through the relay to Perplexity. Without a Perplexity key, Claude does the searching.</p>
+      <p class="note">The relay is your own free Cloudflare Worker (steps in the repo's relay folder). Its address looks like https://edition-relay.yourname.workers.dev. It reads link pages so posts get their own pictures, and it carries Perplexity calls. The Perplexity key is optional: with it, Find something new asks Perplexity; without it, Claude does the searching. The key stays on this phone.</p>
     </div>
     <div class="section">
       <h3>Today</h3>
@@ -2079,19 +2079,39 @@ function openSettings() {
     const relay = ai.relayBase($("#set-relay", wrap).value);
     ai.settings.setRelay(relay);
     $("#set-relay", wrap).value = relay;
-    if (!ai.settings.pplxEnabled()) { say(pSt, "No key saved."); return; }
+    if (!relay && !ai.settings.pplxEnabled()) { say(pSt, "Nothing saved yet. Add the relay address."); return; }
     say(pSt, "Testing…");
-    try {
-      await ai.testPplxKey();
-      say(pSt, "Key and relay work. Find something new now uses Perplexity, and links get their pictures.");
-      state.items = state.items.map((i) => (i.imageCands ? i : { ...i, pageTries: 0 }));
-      picturePending();
-      $("#set-discover", wrap).disabled = false;
-    } catch (e) {
-      noteError(e, { quiet: true, where: "settings: Perplexity test" });
-      say(pSt, e.message, true);
-      refreshProblems(wrap);
+    const notes = [];
+    // The relay on its own: it reads link pages for pictures, no Perplexity key needed.
+    if (relay) {
+      try {
+        const res = await withTimeout(fetch(`${relay}/preview?url=${encodeURIComponent("https://example.com/")}`), 15000);
+        if (res.status === 403) throw new Error("The relay answered but refused this app. Check ALLOWED_ORIGINS in the relay code.");
+        if (!res.ok) throw new Error(`The relay answered with an error (${res.status}). Check the address.`);
+        const data = await res.json();
+        notes.push(Array.isArray(data.images) ? "Relay works. Links get pictures from their pages." : "Relay works, but it's the older version: redeploy it to get the full picture picker.");
+        state.items = state.items.map((i) => (i.imageCands ? i : { ...i, pageTries: 0 }));
+        picturePending();
+      } catch (e) {
+        noteError(e, { quiet: true, where: "settings: relay test" });
+        say(pSt, e.message === "Failed to fetch" || e.message === "Timed out" ? "Couldn't reach the relay. Check the address, and that the Worker is deployed." : e.message, true);
+        refreshProblems(wrap);
+        return;
+      }
     }
+    if (ai.settings.pplxEnabled()) {
+      try {
+        await ai.testPplxKey();
+        notes.push("Perplexity key works. Find something new uses Perplexity.");
+        $("#set-discover", wrap).disabled = false;
+      } catch (e) {
+        noteError(e, { quiet: true, where: "settings: Perplexity test" });
+        say(pSt, [...notes, e.message].join(" "), true);
+        refreshProblems(wrap);
+        return;
+      }
+    }
+    say(pSt, notes.join(" "));
   });
   $("#set-pplx-clear", wrap).addEventListener("click", () => {
     ai.settings.setPplxKey("");
