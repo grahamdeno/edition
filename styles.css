@@ -30,6 +30,8 @@
   --sig-soft: #EFE6FF;
   --on-sig: #FFFFFF;
   --hl: rgba(255, 210, 63, 0.55);
+  --gold: #FFD23F;      /* the + button: never the same colour as the violet buttons under it */
+  --on-gold: #22123B;
   --later: #7A5300;
   --later-soft: #FFF1C9;
   --love: #E0457B;
@@ -337,7 +339,7 @@ a { color: inherit; text-decoration: none; }
 .fab {
   position: fixed; z-index: 8; right: calc(var(--gutter-r) + 4px); bottom: calc(var(--safe-b) + 20px);
   width: 60px; height: 60px; border-radius: 20px; display: grid; place-items: center;
-  background: var(--sig); color: var(--on-sig); box-shadow: 0 8px 22px color-mix(in srgb, var(--sig) 40%, transparent);
+  background: var(--gold); color: var(--on-gold); box-shadow: 0 8px 22px rgba(34, 18, 59, 0.28);
 }
 .fab .i { width: 26px; height: 26px; stroke-width: 2.2; }
 .fab:active { transform: scale(0.96); }

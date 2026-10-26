@@ -106,9 +106,9 @@ Bump `VERSION` in `sw.js` and `src/app.js` with each release so installed copies
 
 ## Design
 
-A bright white page, warm brown-black ink and one brick-red signature (`#C2362B`); dark mode is a warm near-black with the same brick red. Photos carry the rest of the colour. Instrument Serif for your own words and headlines, Geist for everything else. The mark is a box with its lid lifted and things standing inside. The app opens on a loading screen with the mark, the name and the line *Keep it. Come back to it.*, and the lid lifts once.
+**Grape soda.** A lavender-white page, deep grape ink and one violet signature (`#7B3FF2`) for buttons, tabs and the mark. Dark mode is a deep plum (`#1B1033`), not black, with the same violet. Your own words carry a soft gold underline. Later and Let go are tinted chips; Done is a solid violet pill. The + button is gold (`#FFD23F`), so it never blends with the violet buttons scrolling under it. Photos carry the rest of the colour, and each tints its post faintly. Instrument Serif for your own words and headlines, Geist for everything else. The mark is a box with its lid lifted and things standing inside; the app opens on a loading screen with the mark, the name and *Keep it. Come back to it.*
 
-On iPhone, the installed app blurs a band under the status bar; the header, sheets and reader all start below it. The mark is a photo tucked into an open box.
+On iPhone, the installed app blurs a band under the status bar; the header, sheets and reader all start below it.
 
 Accessibility: all text meets 4.5:1 contrast in both themes; every control is at least 44px; type follows the phone's text size; photos carry alt text (from the AI when a key is set); sheets are dialogs that hold focus, close with Escape and return focus; Undo stays for seven seconds and pauses while touched; love has a button as well as the double-tap; motion respects Reduce Motion.
 
