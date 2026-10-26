@@ -1,7 +1,7 @@
 /*
  * Shoebox.
  * A bright white page, warm brown-black ink and one brick-red signature;
- * dark mode is a warm near-black with a coral red. Photos carry the rest of
+ * dark mode is a warm near-black with the same brick red. Photos carry the rest of
  * the colour, and each one tints its own post faintly.
  * Instrument Serif for your own words and headlines, Geist for everything else.
  *
@@ -66,10 +66,10 @@
     --line-2: #3A322D;
     --soft: #221B17;
     --panel: #1F1814;
-    --sig: #FF7A6B;
-    --sig-ink: #FF8D80;
+    --sig: #C2362B;      /* the same brick red as light mode: buttons, tabs, the mark */
+    --sig-ink: #EF6A5D;  /* brick lifted for small text on the dark ground (6:1) */
     --sig-soft: #3A1C17;
-    --on-sig: #17120F;
+    --on-sig: #FFFFFF;
     --later: #E9B35A;
     --later-soft: #33270F;
     --love: #FF6B7D;
@@ -79,7 +79,7 @@
     --toast-fg: #17120F;
     --toast-act: #A82C22;
     --mix: 10%;
-    --logo-box: #FF7A6B;
+    --logo-box: #C2362B;
     --logo-rim: #E2574A;
     --logo-card: #17120F;
     color-scheme: dark;
