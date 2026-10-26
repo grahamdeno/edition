@@ -40,6 +40,8 @@ When everything is settled, the end of Today shows what you cleared as a collage
 
 **Your photo.** Settings › Your photo sets the face on your posts. It stays on the phone.
 
+**Appearance.** Settings › Appearance: Match phone (default), Light or Dark. The choice is applied before the first paint, so the app never flashes the other look.
+
 **Updates**, as in Scales: when a new release has downloaded and taken over, a bar at the top says *Shoebox was updated* with **Reload**. It stays until you tap Reload; no other message replaces it. Returning to the app checks for a release.
 
 ## AI (optional)
