@@ -33,7 +33,7 @@ import { I, LOGO } from "./icons.js";
 import { topicColor, dominantColor, tintInks } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "4.0.0";
+export const VERSION = "4.1.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 
@@ -114,6 +114,7 @@ async function boot() {
   render();
   if (migrated) toast(`Brought over ${migrated} saved item${migrated === 1 ? "" : "s"} from the old version.`);
   else if (seeded) toast(`Loaded ${seeded} sample items. Remove them in Settings.`);
+  hideSplash();
   wireGlobal();
   picturePending();
   enrichPending();
@@ -130,6 +131,15 @@ function updateBar() {
   el.innerHTML = `<span>${APP} was updated.</span><button type="button">Reload</button>`;
   $("button", el).addEventListener("click", () => location.reload());
   document.body.appendChild(el);
+}
+
+/** Fade the loading screen once the timeline is on screen, after the lid has had time to lift. */
+const opened = performance.now();
+function hideSplash() {
+  const el = $("#splash");
+  if (!el) return;
+  const wait = reduced() ? 0 : Math.max(0, 900 - (performance.now() - opened));
+  setTimeout(() => { el.classList.add("out"); setTimeout(() => el.remove(), 400); }, wait);
 }
 
 /* Your photo: the face on every post you wrote. Kept on this phone only. */
@@ -2599,5 +2609,6 @@ function withTimeout(p, ms) { return Promise.race([p, new Promise((_, r) => setT
 
 boot().catch((e) => {
   noteError(e, { quiet: true, where: "start" });
+  $("#splash")?.remove();
   app.innerHTML = `<main class="tl"><section class="end"><h2>Something broke.</h2><p>${esc(e && e.message)}</p></section></main>`;
 });

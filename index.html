@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#FFFFFF" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#17120F" media="(prefers-color-scheme: dark)">
   <meta name="color-scheme" content="light dark">
-  <meta name="description" content="Shoebox: the things you saved for yourself, back as a short daily timeline.">
+  <meta name="description" content="Shoebox. Keep it. Come back to it. The things you saved for yourself, back as a short daily timeline.">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="Shoebox">
@@ -21,6 +21,11 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+  <div id="splash" class="splash" role="status" aria-label="Loading Shoebox">
+    <svg class="splash-mark" viewBox="0 0 64 64" aria-hidden="true" focusable="false"><rect x="10" y="22" width="9" height="12" rx="1.5" style="fill:var(--logo-card);stroke:var(--logo-rim)" stroke-width="2"/><rect x="21" y="19" width="10" height="15" rx="1.5" style="fill:var(--logo-card);stroke:var(--logo-rim)" stroke-width="2"/><rect x="33" y="21" width="9" height="13" rx="1.5" style="fill:var(--logo-card);stroke:var(--logo-rim)" stroke-width="2"/><path d="M5 31h54v19a5 5 0 0 1-5 5H10a5 5 0 0 1-5-5z" style="fill:var(--logo-box)"/><g class="lid" transform="rotate(-16 6 26)"><rect x="3" y="17" width="58" height="10" rx="3" style="fill:var(--logo-rim)"/></g></svg>
+    <p class="splash-name">Shoebox</p>
+    <p class="splash-line">Keep it. Come back to it.</p>
+  </div>
   <div id="app" class="app"></div>
   <noscript>Shoebox needs JavaScript.</noscript>
   <script type="module" src="src/app.js"></script>

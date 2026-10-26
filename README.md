@@ -1,5 +1,7 @@
 # Shoebox
 
+*Keep it. Come back to it.*
+
 <img src="icons/logo.svg" alt="" width="72" align="right">
 
 Personal media, not social media. Shoebox is where the links, photos, quotes, notes and files you mean to come back to go, and it gives them back as a timeline that feels like a feed but is written by you: your face on every post, your reason for saving it at the top, the page's own picture underneath. Each day it's finite. Clear it and you're done until tomorrow.
@@ -104,7 +106,9 @@ Bump `VERSION` in `sw.js` and `src/app.js` with each release so installed copies
 
 ## Design
 
-A bright white page, warm brown-black ink and one brick-red signature (`#C2362B`); dark mode is a warm near-black with the same brick red. Photos carry the rest of the colour. Instrument Serif for your own words and headlines, Geist for everything else. The mark is a photo tucked into an open box.
+A bright white page, warm brown-black ink and one brick-red signature (`#C2362B`); dark mode is a warm near-black with the same brick red. Photos carry the rest of the colour. Instrument Serif for your own words and headlines, Geist for everything else. The mark is a box with its lid lifted and things standing inside. The app opens on a loading screen with the mark, the name and the line *Keep it. Come back to it.*, and the lid lifts once.
+
+On iPhone, the installed app blurs a band under the status bar; the header, sheets and reader all start below it. The mark is a photo tucked into an open box.
 
 Accessibility: all text meets 4.5:1 contrast in both themes; every control is at least 44px; type follows the phone's text size; photos carry alt text (from the AI when a key is set); sheets are dialogs that hold focus, close with Escape and return focus; Undo stays for seven seconds and pauses while touched; love has a button as well as the double-tap; motion respects Reduce Motion.
 

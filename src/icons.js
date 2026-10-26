@@ -39,10 +39,9 @@ export const I = {
 };
 
 /*
- * The Shoebox mark: a photo tucked into an open box. Colours come from the
- * page's tokens (--logo-box, --logo-rim, --logo-card), so it follows the theme.
+ * The Shoebox mark: a box with its lid lifted, things standing inside.
+ * Colours come from the page's tokens (--logo-box, --logo-rim, --logo-card),
+ * so it follows the theme.
  */
 export const LOGO = '<svg class="logo-svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false">'
-  + '<g transform="rotate(-11 32 24)"><rect x="18" y="4" width="28" height="30" rx="3.5" style="fill:var(--logo-card);stroke:var(--logo-rim)" stroke-width="2.6"/>'
-  + '<circle cx="37.5" cy="13" r="3.4" style="fill:var(--logo-box)"/><path d="M21 31l8-9.5 5.5 5.5 4-4 6.5 8z" style="fill:var(--logo-box)"/></g>'
-  + '<path d="M8 28h48v22a6 6 0 0 1-6 6H14a6 6 0 0 1-6-6z" style="fill:var(--logo-box)"/><path d="M8 28h48v6H8z" style="fill:var(--logo-rim)"/></svg>';
+  + '<rect x="10" y="22" width="9" height="12" rx="1.5" style="fill:var(--logo-card);stroke:var(--logo-rim)" stroke-width="2"/><rect x="21" y="19" width="10" height="15" rx="1.5" style="fill:var(--logo-card);stroke:var(--logo-rim)" stroke-width="2"/><rect x="33" y="21" width="9" height="13" rx="1.5" style="fill:var(--logo-card);stroke:var(--logo-rim)" stroke-width="2"/><path d="M5 31h54v19a5 5 0 0 1-5 5H10a5 5 0 0 1-5-5z" style="fill:var(--logo-box)"/><g class="lid" transform="rotate(-16 6 26)"><rect x="3" y="17" width="58" height="10" rx="3" style="fill:var(--logo-rim)"/></g>' + '</svg>';
