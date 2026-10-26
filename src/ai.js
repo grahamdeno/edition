@@ -76,7 +76,8 @@ async function call({ content, system, maxTokens = 600, tools }) {
       body: JSON.stringify(body),
     });
   } catch {
-    throw new AiError("Couldn't reach the API. Check your connection.");
+    // Status 0: the request never got an answer (offline, or the app was closed mid-call).
+    throw new AiError("Couldn't reach the API. Check your connection.", 0);
   }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -244,8 +245,15 @@ export async function hook(item, { context = null } = {}) {
     item.tags?.length && `Tags: ${item.tags.join(", ")}`,
     item.transcript && `Text in the picture: ${String(item.transcript).slice(0, 800)}`,
     ...contextLines(context), "", HOOK_RULE, 'Return JSON: {"hook": string}'].filter(Boolean);
-  const out = parseJson(textOf(await call({ content: lines.join("\n"), system: ENRICH_SYSTEM, maxTokens: 200 })));
-  return cleanHook(out.hook);
+  const text = textOf(await call({ content: lines.join("\n"), system: ENRICH_SYSTEM, maxTokens: 200 }));
+  try {
+    return cleanHook(parseJson(text).hook);
+  } catch (e) {
+    // The model sometimes answers with just the line, no JSON. A short single line is the hook itself.
+    const line = String(text).trim().split("\n").filter(Boolean)[0] || "";
+    if (line && line.length <= 70 && !/[{}]/.test(line)) return cleanHook(line);
+    throw e;
+  }
 }
 
 /** What the model is shown of an item: the file itself where it can read one. */
