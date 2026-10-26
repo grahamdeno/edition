@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
   <style>
     .box { fill: #C2362B } .rim { fill: #8E2219 } .card { fill: #FFF7EE; stroke: #8E2219 }
-    @media (prefers-color-scheme: dark) { .box { fill: #FF7A6B } .rim { fill: #E2574A } .card { fill: #17120F; stroke: #E2574A } }
+    @media (prefers-color-scheme: dark) { .box { fill: #C2362B } .rim { fill: #E2574A } .card { fill: #17120F; stroke: #E2574A } }
   </style>
   <g transform="rotate(-11 32 24)">
     <rect class="card" x="18" y="4" width="28" height="30" rx="3.5" stroke-width="2.6"/>
