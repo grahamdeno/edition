@@ -33,7 +33,7 @@ import { I, LOGO } from "./icons.js";
 import { topicColor, dominantColor, tintInks } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "4.2.0";
+export const VERSION = "4.2.1";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 
@@ -120,6 +120,24 @@ async function boot() {
   enrichPending();
   registerWorker();
 }
+
+/* Appearance: Match phone, Light or Dark. Kept on this phone; applied before the first paint by index.html. */
+const THEME_KEY = "edition.theme";
+function themeChoice() { try { return localStorage.getItem(THEME_KEY) || "system"; } catch { return "system"; } }
+function setThemeChoice(t) {
+  try { if (t === "system") localStorage.removeItem(THEME_KEY); else localStorage.setItem(THEME_KEY, t); } catch { /* storage blocked */ }
+  applyTheme();
+}
+function applyTheme() {
+  const t = themeChoice();
+  if (t === "system") document.documentElement.removeAttribute("data-theme");
+  else document.documentElement.setAttribute("data-theme", t);
+  // The status bar and browser chrome follow the chosen look too.
+  const dark = t === "dark" || (t === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
+  document.querySelectorAll('meta[name="theme-color"]').forEach((m) => { m.removeAttribute("media"); m.setAttribute("content", dark ? "#1B1033" : "#FBF8FF"); });
+}
+matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => { if (themeChoice() === "system") applyTheme(); });
+applyTheme();
 
 /** The update bar: its own element, above the + button, so no toast or sheet can clear it. */
 function updateBar() {
@@ -1959,6 +1977,13 @@ function openSettings() {
   const wrap = sheet(`
     <div class="sheet-head"><h2>Settings</h2><button class="x" type="button" data-close aria-label="Close">${I.close}</button></div>
     <div class="section">
+      <h3>Appearance</h3>
+      <div class="chips" role="group" aria-label="Appearance">
+        ${["system", "light", "dark"].map((t) => `<button class="chip" type="button" data-look="${t}" aria-pressed="${themeChoice() === t}">${{ system: "Match phone", light: "Light", dark: "Dark" }[t]}</button>`).join("")}
+      </div>
+      <p class="note">Match phone follows your iPhone's light and dark setting.</p>
+    </div>
+    <div class="section">
       <h3>Your photo</h3>
       <div class="me-row"><span id="set-me">${avatarHtml("lg")}</span>
         <div class="two">
@@ -2146,6 +2171,10 @@ function openSettings() {
     render();
   });
   bindAvatarSettings(wrap);
+  wrap.querySelectorAll("[data-look]").forEach((b) => b.addEventListener("click", () => {
+    setThemeChoice(b.dataset.look);
+    wrap.querySelectorAll("[data-look]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+  }));
   wrap.querySelectorAll("[data-sound]").forEach((b) => b.addEventListener("click", () => {
     setSound(b.dataset.sound === "1");
     wrap.querySelectorAll("[data-sound]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
