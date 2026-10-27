@@ -5,7 +5,7 @@ import WidgetKit
 
 /// Shows Shoebox and answers what it asks of the phone.
 final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler, WKDownloadDelegate {
-    private let home = URL(string: "https://grahamdeno.github.io/edition/?native=1")!
+    private let home = URL(string: "https://shoebox.tangomike.app/?native=1")!
     private var web: WKWebView!
     private var ready = false          // Shoebox has started and can take things in
     private var queued: [String] = []  // scripts waiting for that
@@ -144,7 +144,7 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
         let scheme = url.scheme ?? ""
         if ["blob", "data", "about"].contains(scheme) { return .allow }
         if action.targetFrame?.isMainFrame == false { return .allow } // embedded videos
-        if url.host == home.host && url.path.hasPrefix("/edition") { return .allow }
+        if url.host == home.host { return .allow }
         // Everything else (articles, Apple Music, highlights) opens in its own app or Safari.
         await UIApplication.shared.open(url)
         return .cancel

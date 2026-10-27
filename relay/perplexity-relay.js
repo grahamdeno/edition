@@ -161,7 +161,7 @@ async function preview(target, cors, wantText = false) {
   try {
     res = await fetch(url.href, {
       redirect: "follow",
-      headers: { "user-agent": "Mozilla/5.0 (compatible; EditionPreview/1.0; +https://grahamdeno.github.io/edition/)", accept: "text/html,application/xhtml+xml" },
+      headers: { "user-agent": "Mozilla/5.0 (compatible; EditionPreview/1.0; +https://shoebox.tangomike.app/)", accept: "text/html,application/xhtml+xml" },
       cf: { cacheTtl: 86400, cacheEverything: true },
     });
   } catch {
@@ -436,7 +436,7 @@ async function vapidKeys(kv) {
 export async function vapidAuth(endpoint, keys, now = Date.now()) {
   const enc = new TextEncoder();
   const head = b64u.enc(enc.encode(JSON.stringify({ typ: "JWT", alg: "ES256" })));
-  const body = b64u.enc(enc.encode(JSON.stringify({ aud: new URL(endpoint).origin, exp: Math.floor(now / 1000) + 12 * 3600, sub: "https://grahamdeno.github.io/edition/" })));
+  const body = b64u.enc(enc.encode(JSON.stringify({ aud: new URL(endpoint).origin, exp: Math.floor(now / 1000) + 12 * 3600, sub: "mailto:support@tangomike.app" })));
   const key = await crypto.subtle.importKey("jwk", keys.privateJwk, { name: "ECDSA", namedCurve: "P-256" }, false, ["sign"]);
   const sig = await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, key, enc.encode(`${head}.${body}`));
   return `vapid t=${head}.${body}.${b64u.enc(sig)}, k=${keys.publicKey}`;
