@@ -113,6 +113,10 @@ const ENRICH_SYSTEM =
   "You file things a person saved into Shoebox, their private app for what they mean to come back to. " +
   "Write plainly. No hype, no exclamation marks, no emoji. Reply with JSON only.";
 
+/* Where a picture's subject is, so a crop keeps it in view. */
+const FOCUS_SHAPE = 'null, or {"x": integer 0-100, "y": integer 0-100} (the point a crop must keep in view: the main subject; ' +
+  'for a person, between the eyes; 0,0 is the top left)';
+
 /**
  * Their own words say what a save is for, and tags follow that use first.
  * A pottery class noted as a date idea is a date idea before it is pottery.
@@ -136,6 +140,7 @@ const ENRICH_SHAPE =
   '"quote": null, or {"text": string, "author": string} when the item is really a quotation worth keeping as one, ' +
   '"alt": string (only when you were shown a picture: one plain sentence describing it for someone who cannot see it, max 140 chars, ' +
   'no "image of" or "photo of"; otherwise ""), ' +
+  '"focus": (only when you were shown a picture) ' + FOCUS_SHAPE + ', ' +
   '"hook": string (see Hook), ' +
   '"book": null, or {"title": string, "author": string} when the photo is mainly of a book (its cover, spine, or the book in hand): ' +
   'read the title and author from it; a person photographs a book because they want to read it}';
@@ -210,6 +215,7 @@ export async function enrich(item, blob, { vocab = [], context = null } = {}) {
     book: out.book && typeof out.book === "object" && out.book.title ? { title: clip(out.book.title, 140), author: clip(out.book.author, 80) } : null,
     extended: clip(out.extended, 1800),
     photoQuery: clip(String(out.photo_query || "").replace(/["']/g, ""), 60),
+    focus: cleanFocus(out.focus),
     alt: clip(capFirst(String(out.alt || "").replace(/^(an? )?(image|photo|picture) of /i, "")), 160),
   };
 }
@@ -222,7 +228,7 @@ export async function enrich(item, blob, { vocab = [], context = null } = {}) {
  */
 export async function pickPicture(item, candidates) {
   const list = (candidates || []).slice(0, 4);
-  if (!list.length) return { index: -1, alt: "" };
+  if (!list.length) return { index: -1, alt: "", focus: null };
   const parts = list.map((c) => ({ type: "image", source: { type: "url", url: c.src } }));
   parts.push({ type: "text", text: [
     `These are the ${list.length} pictures found on a page someone saved, numbered 0 to ${list.length - 1} in the order shown.`,
@@ -231,11 +237,26 @@ export async function pickPicture(item, candidates) {
     item.why && `Why they saved it: ${item.why}`,
     "Pick the one that best represents the page as a photo on a card: a real photograph or illustration of the subject. " +
     "Avoid logos, screenshots of text, charts, ads, author headshots and stock icons. If none suits, use -1.",
-    'Return JSON: {"index": integer, "alt": string (one plain sentence describing the chosen picture for someone who can\'t see it, max 140 chars; "" when index is -1)}',
+    'Return JSON: {"index": integer, "alt": string (one plain sentence describing the chosen picture for someone who can\'t see it, max 140 chars; "" when index is -1), ' +
+    `"focus": ${FOCUS_SHAPE} for the chosen picture}`,
   ].filter(Boolean).join("\n") });
   const out = parseJson(textOf(await call({ content: parts, system: ENRICH_SYSTEM, maxTokens: 200 })));
   const index = Number.isInteger(+out.index) && +out.index >= 0 && +out.index < list.length ? +out.index : -1;
-  return { index, alt: index >= 0 ? clip(out.alt, 160) : "" };
+  return { index, alt: index >= 0 ? clip(out.alt, 160) : "", focus: index >= 0 ? cleanFocus(out.focus) : null };
+}
+
+export function cleanFocus(f) {
+  if (!f || typeof f !== "object") return null;
+  const x = Math.round(+f.x), y = Math.round(+f.y);
+  return Number.isFinite(x) && Number.isFinite(y) && x >= 0 && x <= 100 && y >= 0 && y <= 100 ? { x, y } : null;
+}
+
+/** One picture, by address: where is its subject? A small call of its own. */
+export async function focusPoint(src) {
+  const parts = [{ type: "image", source: { type: "url", url: src } },
+    { type: "text", text: `This picture is cropped to fit cards of different shapes. Return JSON: {"focus": ${FOCUS_SHAPE}}` }];
+  const out = parseJson(textOf(await call({ content: parts, system: ENRICH_SYSTEM, maxTokens: 100 })));
+  return cleanFocus(out.focus);
 }
 
 /** Books they've read, as a prompt line: an interest signal with no date implied. */

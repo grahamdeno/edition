@@ -6,6 +6,8 @@
  *                       preview picture plus the article's own photos, so the
  *                       app can offer a choice; with &text=1 also the page's
  *                       readable text, for a summary
+ *   GET  /image?url=    a picture from another site, passed through so the
+ *                       app may read its pixels (to find its subject)
  *   GET  /photo?q=      Openverse photo search (kept for older app versions;
  *                       Shoebox no longer uses it)
  *
@@ -51,6 +53,7 @@ export default {
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
     const { pathname, searchParams } = new URL(request.url);
     if (request.method === "GET" && pathname === "/preview") return preview(searchParams.get("url"), cors, searchParams.get("text") === "1");
+    if (request.method === "GET" && pathname === "/image") return image(searchParams.get("url"), cors);
     if (request.method === "GET" && pathname === "/photo") return photo(searchParams.get("q"), cors);
     if (request.method !== "POST" || !PATHS.has(pathname)) return json(404, "Not found.", cors);
     const auth = request.headers.get("authorization");
@@ -239,6 +242,21 @@ async function photo(q, cors) {
   }
   const data = await res.json().catch(() => ({}));
   return out(200, { photos: pickPhotos(data.results || []) });
+}
+
+/** Pass a picture through with CORS headers. Pictures only, up to 8 MB. */
+export async function image(target, cors) {
+  let u;
+  try { u = new URL(String(target || "")); } catch { return json(400, "No picture address.", cors); }
+  if (!/^https?:$/.test(u.protocol)) return json(400, "No picture address.", cors);
+  let res;
+  try {
+    res = await fetch(u.href, { headers: { "user-agent": "Mozilla/5.0 (ShoeboxRelay)", accept: "image/*" }, cf: { cacheTtl: 86400, cacheEverything: true } });
+  } catch { return json(502, "Couldn't fetch the picture.", cors); }
+  const type = res.headers.get("content-type") || "";
+  const size = +(res.headers.get("content-length") || 0);
+  if (!res.ok || !type.startsWith("image/") || size > 8e6) return json(415, "Not a picture.", cors);
+  return new Response(res.body, { status: 200, headers: { ...cors, "content-type": type, "cache-control": "public, max-age=86400" } });
 }
 
 /** Keep photos big enough to fill a phone screen; prefer upright and square ones. */

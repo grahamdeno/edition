@@ -137,12 +137,12 @@ test("pickPicture shows the candidates as images and keeps a valid index with it
   const { pickPicture } = await import("../src/ai.js");
   const sent = stubApi({ index: 1, alt: "A trail along the dunes at sunrise" });
   const out = await pickPicture({ title: "Coastal trails" }, [{ src: "https://a.test/1.jpg" }, { src: "https://a.test/2.jpg" }]);
-  assert.deepEqual(out, { index: 1, alt: "A trail along the dunes at sunrise" });
+  assert.deepEqual(out, { index: 1, alt: "A trail along the dunes at sunrise", focus: null });
   const parts = sent[0].messages[0].content;
   assert.deepEqual(parts.filter((p) => p.type === "image").map((p) => p.source.url), ["https://a.test/1.jpg", "https://a.test/2.jpg"]);
   stubApi({ index: 7, alt: "x" });
-  assert.deepEqual(await pickPicture({}, [{ src: "https://a.test/1.jpg" }]), { index: -1, alt: "" });
-  assert.deepEqual(await pickPicture({}, []), { index: -1, alt: "" });
+  assert.deepEqual(await pickPicture({}, [{ src: "https://a.test/1.jpg" }]), { index: -1, alt: "", focus: null });
+  assert.deepEqual(await pickPicture({}, []), { index: -1, alt: "", focus: null });
 });
 
 test("enrich returns alt text without an 'image of' lead-in", async () => {
