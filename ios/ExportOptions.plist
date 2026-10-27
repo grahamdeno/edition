@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
   <key>method</key><string>app-store-connect</string>
-  <key>destination</key><string>upload</string>
+  <key>destination</key><string>export</string>
   <key>teamID</key><string>7MHDTK68M2</string>
   <key>signingStyle</key><string>automatic</string>
   <key>uploadSymbols</key><true/>
