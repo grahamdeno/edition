@@ -568,13 +568,14 @@ details.group[open] { padding-bottom: 14px; }
 
 /* ================= Toast and drop ================= */
 .toast {
-  position: fixed; z-index: 40; left: 50%; transform: translateX(-50%);
-  bottom: calc(var(--safe-b) + 96px); /* above the + button, centred, measured from the real bottom edge */
+  position: fixed; z-index: 40; left: 50%; transform: translate(-50%, -50%);
+  top: 60%; /* a little below the middle, near where you're looking */
   width: calc(100% - var(--gutter-l) - var(--gutter-r)); max-width: 440px;
   min-height: 52px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-left: 16px;
   background: var(--toast-bg); color: var(--toast-fg); border-radius: 16px; font-size: 0.9375rem; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
 }
-.reader ~ .toast, .toast.high { bottom: calc(var(--safe-b) + 92px); }
+.toast.first { top: 30%; }
+.kb .toast { top: calc(var(--safe-t) + 96px); transform: translateX(-50%); } /* above the keyboard */
 .toast button { min-height: 52px; padding: 0 16px; font-weight: 600; color: var(--toast-act); }
 /* The update bar stays until Reload is tapped. It sits above the + button and any toast. */
 .update-bar {
@@ -927,3 +928,14 @@ input.time { font: 600 1rem var(--sans); color: var(--fg); background: var(--sof
 details.adv > summary, .group details.adv > summary, .ag-more summary { min-height: 44px; }
 .me-row { flex-wrap: wrap; }
 .row .sv { min-width: 0; overflow-wrap: anywhere; text-align: right; }
+
+/* A sheet's footer can hide what's below it: a soft fade and a "More below" pill say there's more. */
+.sheet-foot { position: relative; }
+.more-hint { position: absolute; left: 50%; bottom: calc(100% + 10px); transform: translateX(-50%); display: none; align-items: center; gap: 4px; min-height: 32px; padding: 0 12px; border-radius: 999px; background: var(--sig); color: #fff; font: 600 0.8125rem var(--sans); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18); }
+.more-hint::after { content: ""; position: absolute; inset: -6px -4px; }
+.sheet.more-below .more-hint { display: inline-flex; }
+.sheet.more-below .sheet-foot::before { content: ""; position: absolute; left: 0; right: 0; bottom: 100%; height: 48px; background: linear-gradient(to bottom, transparent, var(--bg)); pointer-events: none; }
+.cap-try { margin-top: 14px; padding: 12px; border-radius: 14px; background: var(--sig-soft); }
+.cap-try p { margin: 0 0 8px; font-size: 0.875rem; color: var(--fg); }
+.cap-try-b { display: flex; flex-wrap: wrap; gap: 8px; }
+.cap-try-b .btn { min-height: 44px; background: var(--bg); border: 1px solid var(--line-2); color: var(--sig-ink); font-weight: 600; }
