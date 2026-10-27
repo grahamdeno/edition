@@ -37,7 +37,7 @@ import { I, LOGO } from "./icons.js";
 import { topicColor, dominantColor, tintInks, focusOf } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "4.20.0";
+export const VERSION = "4.21.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 
@@ -136,7 +136,9 @@ async function boot() {
   state.wonDay = await db.meta.get("wonDay", null);
   await loadAvatar();
   await migratePictures();
-  const seeded = await seedSamples();
+  // No sample items any more: a new phone gets the welcome steps instead. Anyone with saves is past them.
+  const seeded = 0;
+  if (state.items.some((i) => !i.sample) || migrated) setFlag(ONBOARDED, true);
   await importShares();
   await importFromUrl();
   await wakeDue();
@@ -973,7 +975,7 @@ function sectionHead(title, note = "") {
 
 function todayHtml() {
   const s = todaySections();
-  let h = stripHtml(s) + aiAskHtml() + calendarHtml() + morningHtml() + schoolAskHtml();
+  let h = stripHtml(s) + welcomeHtml() + aiAskHtml() + calendarHtml() + morningHtml() + schoolAskHtml();
   if (s.school.length) h += sectionHead("From school", `${s.school.filter(isOpen).length || "All"} to do`) + s.school.map((i) => postHtml(i)).join("");
   if (s.fresh.length) h += sectionHead("New", `${s.fresh.filter(isOpen).length || "All"} to sort`) + s.fresh.map((i) => postHtml(i)).join("");
   if (s.six.length) h += sectionHead("Today's six", `${s.six.filter(isOpen).length} of ${s.six.length} left`) + s.six.map((i) => postHtml(i)).join("");
@@ -1003,6 +1005,33 @@ function morningSettings() {
   if (!personal()) for (const k of PERSONAL_MODULES) m[k] = false;
   return m;
 }
+/** Can this phone tell Shoebox where it is? (the iPhone app, or a browser that shares location) */
+const canLocate = () => nativeCan("location") || (!NATIVE && typeof navigator !== "undefined" && Boolean(navigator.geolocation));
+
+/** Weather for wherever the phone is, from now on. Asks for permission. Returns the place. */
+async function useMyLocation() {
+  const loc = await getLocation({ ask: true });
+  const place = await withTimeout(daily.placeFromCoords(loc.lat, loc.lon, { name: loc.name || "", zip: loc.zip || "" }), 15000);
+  setMorningSettings({ ...morningSettings(), place, zip: "", useLocation: true, weather: true });
+  const c = morningCache(); delete c.weather; c.locAt = Date.now(); saveMorningCache(c);
+  render({ top: false });
+  loadMorning();
+  return place;
+}
+
+/** Turn on the iPhone's own calendars: asks for access, then reads today. */
+async function turnOnNativeCalendar() {
+  try {
+    const r = await nativeAsk("calendar", { ask: true, from: startOfToday(), to: startOfToday() + 864e5 }, 90000);
+    if (!r.ok) return { ok: false, msg: r.status === "denied" ? "Calendar access is off. Turn it on in the iPhone's Settings › Shoebox › Calendars." : "Couldn't read your calendars." };
+    setCalNative(true);
+    await refreshCalendar({ force: true });
+    render({ top: false });
+    const n = (r.events || []).length;
+    return { ok: true, msg: n ? `On. ${n} event${n === 1 ? "" : "s"} today.` : "On. Nothing on your calendar today." };
+  } catch (e) { return { ok: false, msg: e.message }; }
+}
+
 /** Where the weather is for: the built-in place for a known ZIP, or one looked up in Settings. */
 const placeOf = (m) => daily.PLACES[m.zip] || m.place || null;
 const studyLabel = (m) => String(m.studyTopic || "Study").slice(0, 40);
@@ -1017,9 +1046,22 @@ let morningLoading = false;
 async function loadMorning() {
   if (morningLoading) return;
   morningLoading = true;
-  const m = morningSettings();
+  let m = morningSettings();
   let c = morningCache(), changed = false;
   try {
+    // Weather follows the phone: once a day, if it has moved town, the place moves with it.
+    if (m.weather && m.useLocation && !c.locAt) {
+      c.locAt = Date.now(); changed = true;
+      try {
+        const loc = await withTimeout(getLocation({ ask: false }), 25000);
+        if (!m.place || daily.kmBetween(m.place, loc) > 15) {
+          const place = await withTimeout(daily.placeFromCoords(loc.lat, loc.lon, { name: loc.name || "", zip: loc.zip || "" }), 15000);
+          m = { ...morningSettings(), place, zip: "" };
+          setMorningSettings(m);
+          delete c.weather;
+        }
+      } catch (e) { if (e.message !== "notAsked") noteError(e, { quiet: true, where: "location" }); }
+    }
     const place = placeOf(m);
     const relay = ai.relayBase();
     if (relay && (!c.relayInfo || Date.now() - c.relayInfo.at > 6 * 3600e3)) {
@@ -1086,7 +1128,7 @@ function morningHtml() {
   const place = placeOf(m);
   const card = (cls, rail, meta, body) => `<article class="post daily ${cls}"><div class="rail">${rail}</div><div class="main"><div class="meta">${meta}</div>${body}</div></article>`;
   const hm = (iso) => (iso ? new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) : "");
-  if (m.weather && !place) {
+  if (m.weather && !place && flag(ONBOARDED)) {
     cards.push(`<div class="wx-mini"><span class="wx-ic-s" aria-hidden="true">${I.sun}</span><span>Weather: add your ZIP code and it shows here each morning.</span>
       <button class="btn sm ghost" type="button" data-day="wx-setup">Add</button></div>`);
   } else if (m.weather && c.weather && c.wxHidden) {
@@ -1344,13 +1386,82 @@ function supportMail() {
   return `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 }
 
+/* ================= Welcome =================
+ * A new phone starts empty, with four steps done for real in the app: save
+ * one thing (with the same + everyone uses), set up the morning, choose
+ * about AI, and learn to save from other apps. Each ticks off as it's done.
+ */
+const ONBOARDED = "edition.onboarded";
+const flag = (k) => { try { return localStorage.getItem(k) === "1"; } catch { return true; } };
+const setFlag = (k, on) => { try { localStorage.setItem(k, on ? "1" : "0"); } catch { /* storage blocked */ } };
+
+function welcomeSteps() {
+  const m = morningSettings();
+  return [
+    { key: "save", done: state.items.some((i) => !i.sample), title: "Save your first thing",
+      body: "Something you mean to come back to: a link you haven't read, a photo, an idea. Tap + any time to add more.",
+      acts: `<button class="btn primary" type="button" data-welcome="add">${I.plus || ""}<span>Add it</span></button>` },
+    { key: "morning", done: flag("edition.welcomeMorning"), title: "Set up your morning",
+      body: "Your weather and today's calendar sit at the top of Today.",
+      acts: `${placeOf(m) ? `<span class="wel-ok">✓ Weather for ${esc(placeOf(m).name)}</span>`
+          : `${canLocate() ? `<button class="btn primary" type="button" data-welcome="loc">Use my location</button>` : ""}
+             <button class="btn" type="button" data-welcome="zip">Enter a ZIP code</button>`}
+        ${nativeCan("calendar") ? (calNative() ? `<span class="wel-ok">✓ Your calendar</span>` : `<button class="btn" type="button" data-welcome="cal">Show my calendar</button>`) : ""}
+        <button class="btn ${placeOf(m) || calNative() ? "primary" : "ghost"}" type="button" data-welcome="morning-skip">${placeOf(m) || calNative() ? "Done" : "Later"}</button>` },
+    { key: "ai", done: ai.settings.asked(), title: "Turn on AI?",
+      body: AI_DISCLOSURE,
+      acts: `<button class="btn primary" type="button" data-ai-ask="1">Turn on AI</button><button class="btn" type="button" data-ai-ask="0">Not now</button>` },
+    { key: "share", done: flag("edition.welcomeShare"), title: "Save from anywhere",
+      body: NATIVE ? "In Safari or any app, tap Share, then Shoebox. It lands here, ready for tomorrow morning."
+        : "On iPhone, tap Share, then Add to Home Screen, so Shoebox opens like an app. Links shared to it land here.",
+      acts: `<button class="btn primary" type="button" data-welcome="share">Got it</button>` },
+  ];
+}
+
+function welcomeHtml() {
+  if (flag(ONBOARDED)) return "";
+  const steps = welcomeSteps();
+  const cur = steps.findIndex((x) => !x.done);
+  if (cur === -1) { setFlag(ONBOARDED, true); setTimeout(() => toast("You're set. Your first edition is below."), 300); return ""; }
+  const done = steps.filter((x) => x.done).length;
+  return `<section class="ask welcome" aria-labelledby="wel-h">
+      <div class="ask-top">
+        <div><h2 id="wel-h">${done ? "Next" : "Welcome to Shoebox"}</h2><p>${done ? `${done} of ${steps.length} done` : "Save what you mean to come back to. Each morning, Shoebox hands a few things back, finished."}</p></div></div>
+      <ol class="wel-steps">${steps.map((x, k) => `<li class="${x.done ? "done" : k === cur ? "now" : ""}">
+          <span class="wel-n" aria-hidden="true">${x.done ? "✓" : k + 1}</span>
+          <div class="wel-b"><p class="wel-t">${esc(x.title)}${x.done ? '<span class="sr-only"> (done)</span>' : ""}</p>
+            ${k === cur ? `<p class="wel-d">${esc(x.body)}</p><div class="ask-acts">${x.acts}</div><span class="st" id="wel-st" role="status"></span>` : ""}</div></li>`).join("")}</ol>
+      <button class="btn ghost sm wel-skip" type="button" data-welcome="skip">Skip setup</button>
+    </section>`;
+}
+
+async function welcomeAction(what, btn) {
+  const st = $("#wel-st");
+  const say = (msg, err) => { if (st) { st.textContent = msg; st.classList.toggle("err", !!err); } };
+  if (what === "add") { openAdd(); return; }
+  if (what === "zip") { openSettings("set-morning"); return; }
+  if (what === "morning-skip") setFlag("edition.welcomeMorning", true);
+  else if (what === "share") setFlag("edition.welcomeShare", true);
+  else if (what === "skip") setFlag(ONBOARDED, true);
+  else if (what === "loc") {
+    btn.disabled = true; say("Finding where you are…");
+    try { const p = await useMyLocation(); toast(`Weather for ${p.name}.`); } catch (e) { btn.disabled = false; say(e.message, true); return; }
+  } else if (what === "cal") {
+    btn.disabled = true; say("Asking for your calendars…");
+    const r = await turnOnNativeCalendar();
+    if (!r.ok) { btn.disabled = false; say(r.msg, true); return; }
+    toast(r.msg);
+  }
+  render({ top: false });
+}
+
 /* Apple's rule 5.1.2(i): say plainly what goes to which AI company, and ask first. */
 export const AI_DISCLOSURE = "Shoebox uses Claude, an AI model made by Anthropic, to read, tag and rank what you save, find pictures, and turn newsletters into posts. "
   + "When AI is on, the text of your saves, your notes and photos you add are sent to Anthropic through Shoebox's server for that. "
   + "Anthropic doesn't use them to train its models, and Shoebox's server doesn't keep them. You can turn AI off any time in Settings.";
 
 function aiAskHtml() {
-  if (ai.settings.asked()) return "";
+  if (ai.settings.asked() || !flag(ONBOARDED)) return "";
   return `<section class="ask" aria-labelledby="ai-ask-h">
       <div class="ask-top"><span class="av av-school av-ai" aria-hidden="true">AI</span>
         <div><h2 id="ai-ask-h">Turn on AI?</h2><p>${esc(AI_DISCLOSURE)}</p></div></div>
@@ -1509,6 +1620,10 @@ function schoolMediaHtml(item) {
 
 const CAL_KEY = "edition.calendars", CAL_CACHE = "edition.calCache";
 const calUrls = () => { try { return JSON.parse(localStorage.getItem(CAL_KEY) || "[]"); } catch { return []; } };
+/** The iPhone's own calendars (iPhone app only), on or off. */
+const calNative = () => { try { return localStorage.getItem("edition.calNative") === "1" && nativeCan("calendar"); } catch { return false; } };
+const setCalNative = (on) => { try { localStorage.setItem("edition.calNative", on ? "1" : "0"); localStorage.removeItem(CAL_CACHE); } catch { /* private mode */ } };
+const calOn = () => calUrls().length > 0 || calNative();
 const setCalUrls = (list) => { try { localStorage.setItem(CAL_KEY, JSON.stringify(list)); localStorage.removeItem(CAL_CACHE); } catch { /* private mode */ } };
 
 function calCache() {
@@ -1521,14 +1636,21 @@ function calCache() {
 let calLoading = false;
 /** Read today's events from every calendar address. Keeps the last good read if offline. */
 async function loadCalendar({ force = false } = {}) {
-  const urls = calUrls();
-  if (!urls.length || !ai.relayBase() || calLoading) return calCache();
+  const urls = calUrls(), native = calNative();
+  if ((!urls.length && !native) || calLoading) return calCache();
   const have = calCache();
   if (!force && have && Date.now() - have.at < 15 * 60e3) return have;
   calLoading = true;
   try {
     const dayStart = startOfToday();
     const events = [], errors = [];
+    if (native) {
+      try {
+        const r = await nativeAsk("calendar", { from: dayStart, to: dayStart + 864e5 });
+        if (!r.ok) throw new Error(r.status === "denied" ? "Calendar access is off. Turn it on in the iPhone's Settings › Shoebox › Calendars." : "Couldn't read your calendars.");
+        events.push(...(r.events || []).map((e) => ({ ...e, start: +e.start, end: +e.end, allDay: Boolean(e.allDay), calendar: e.calendar || "Calendar" })));
+      } catch (e) { errors.push(e.message); noteError(e, { quiet: true, where: "calendar (iPhone)" }); }
+    }
     for (const url of urls) {
       try {
         let res;
@@ -1546,7 +1668,7 @@ async function loadCalendar({ force = false } = {}) {
         events.push(...eventsOn(parseIcs(await res.text()), dayStart).map((e) => ({ ...e, calendar: calName(e.calendar, label) })));
       } catch (e) { errors.push(e.message); noteError(e, { quiet: true, where: "calendar" }); }
     }
-    if (errors.length === urls.length && have) return have;
+    if (errors.length === urls.length + (native ? 1 : 0) && have) return have;
     const seen = new Set();
     const list = events.sort((a, b) => (b.allDay - a.allDay) || a.start - b.start)
       .filter((e) => { const k = `${e.uid}|${e.start}`; if (seen.has(k)) return false; seen.add(k); return true; });
@@ -1581,28 +1703,47 @@ function eventWhen(e) {
   return `${(am(a) && am(b)) || (pm(a) && pm(b)) ? a.replace(/ [AP]M$/, "") : a} – ${b}`;
 }
 
+/** A link to act on: the event's own, or the first in its notes (a video call, say). */
+function calLink(e) {
+  if (e.url && /^https?:\/\//.test(e.url)) return e.url;
+  return (String(e.notes || "").match(/https?:\/\/[^\s<>"')]+/) || [])[0] || "";
+}
+
+/** Today's events as one card: the day at a glance, a row per event. */
 function calendarHtml() {
   const c = calCache();
   if (!c || !c.events.length) return "";
   const now = Date.now();
   const left = c.events.filter((e) => e.allDay || e.end > now).length;
-  return sectionHead("On your calendar", left ? `${left} still to come` : "All done") + c.events.map((e) => {
+  const names = [...new Set(c.events.map((e) => calName(e.calendar, "Calendar")))];
+  const rows = c.events.map((e) => {
     const live = !e.allDay && e.start <= now && e.end > now, past = !e.allDay && (e.end > e.start ? e.end : e.start + 1) <= now;
-    const notes = e.notes ? e.notes.replace(/\s+/g, " ").slice(0, 220) + (e.notes.length > 220 ? "…" : "") : "";
-    return `<article class="post event${past ? " past" : ""}${live ? " live" : ""}" aria-label="${esc(eventWhen(e))}: ${esc(e.title)}">
+    const link = calLink(e);
+    const notes = e.notes ? e.notes.replace(/\s+/g, " ").trim().slice(0, 400) : "";
+    return `<li class="sched-row${past ? " past" : ""}${live ? " live" : ""}">
+      <span class="sched-t">${esc(eventWhen(e))}</span>
+      <div class="sched-w">
+        <p class="sched-title">${esc(e.title || "Busy")}${live ? ' <span class="tag now">Now</span>' : ""}</p>
+        ${e.location ? `<p class="sched-loc">${I.pin}<span>${esc(e.location)}</span></p>` : ""}
+        ${names.length > 1 ? `<p class="sched-cal">${esc(calName(e.calendar, "Calendar"))}</p>` : ""}
+        ${notes ? `<details class="sched-notes"><summary>Notes</summary><p>${esc(notes)}</p></details>` : ""}
+      </div>
+      ${link && !past ? `<a class="btn sm sched-go" href="${esc(link)}" target="_blank" rel="noopener">Open</a>` : ""}
+    </li>`;
+  }).join("");
+  const day = new Date().toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
+  return sectionHead("On your calendar", left ? `${left} still to come` : "All done") +
+    `<article class="post event sched" aria-label="Today's calendar">
       <div class="rail"><span class="av av-cal" aria-hidden="true">${I.cal}</span></div>
       <div class="main">
-        <div class="meta"><span class="who">${esc(calName(e.calendar, "Google Calendar"))},</span> <span class="when">${esc(eventWhen(e))}</span>${live ? '<span class="tag now">Now</span>' : past ? '<span class="tag">Ended</span>' : ""}</div>
-        <p class="ev-title">${esc(e.title)}</p>
-        ${e.location ? `<p class="ev-place">${I.pin}<span>${esc(e.location)}</span></p>` : ""}
-        ${notes ? `<p class="ev-notes">${esc(notes)}</p>` : ""}
+        <div class="meta"><span class="who">${esc(names.length === 1 ? names[0] : "Your calendars")},</span> <span class="when">${esc(day)}</span></div>
+        <ol class="sched-list">${rows}</ol>
       </div>
     </article>`;
-  }).join("");
 }
 
 async function refreshCalendar(opts) {
-  if (!calUrls().length) return;
+  if (!calOn()) return;
   const before = JSON.stringify(calCache()?.events || []);
   const c = await loadCalendar(opts);
   if (JSON.stringify(c?.events || []) !== before && state.tab === "today" && !state.reader && !$(".sheet-wrap")) render({ top: false });
@@ -1643,6 +1784,7 @@ function endHtml(s) {
   const more = `${c.queued ? `<button class="btn" type="button" data-act="one-more">Read one more</button>` : ""}
     ${ai.settings.canDiscover() ? `<button class="btn" type="button" data-act="discover">Get top stories</button>` : ""}`;
   if (!state.items.length) {
+    if (!flag(ONBOARDED)) return ""; // the welcome steps say it already
     return `<section class="end"><h2>Your shoebox is empty.</h2>
       <p>Save a link, a photo, a thought or a file, and say why if you like. It comes back here.</p>
       <button class="btn primary" type="button" data-act="add">Save something</button></section>`;
@@ -1921,6 +2063,7 @@ async function onTimelineClick(e) {
     if (ok) { tick(true); render({ top: true }); toast(`${state.schoolCount} post${state.schoolCount === 1 ? "" : "s"} from school, under From school on Today.`); }
     return;
   }
+  if ((b = hit("[data-welcome]"))) { await welcomeAction(b.dataset.welcome, b); return; }
   if ((b = hit("[data-ai-ask]"))) { setAi(b.dataset.aiAsk === "1"); render({ top: false }); return; }
   if ((b = hit("[data-school=skip]"))) { markSchoolAsked(); state.schoolDraft = ""; state.schoolForce = false; render({ top: false }); return; }
   if ((b = hit("[data-act]"))) { runAct(b.dataset.act, b); return; }
@@ -2719,6 +2862,37 @@ function dropReminder(item) {
  * announces itself as window.shoeboxNative; messages go to it here.
  */
 const NATIVE = typeof window !== "undefined" && Boolean(window.shoeboxNative);
+/** What this copy of the iPhone app can do (older builds can't answer calendar or location questions). */
+const nativeCan = (f) => NATIVE && (window.shoeboxNative.features || []).includes(f);
+const nativeWaits = new Map();
+/** Ask the iPhone app something and wait for its answer. */
+function nativeAsk(type, payload = {}, ms = 15000) {
+  if (!NATIVE) return Promise.reject(new Error("Only in the iPhone app."));
+  const id = `q${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => { nativeWaits.delete(id); reject(new Error("The iPhone app didn't answer.")); }, ms);
+    nativeWaits.set(id, (r) => { clearTimeout(t); resolve(r); });
+    toNative({ type, id, ...payload });
+  });
+}
+if (NATIVE) window.shoeboxReply = (id, r) => { const f = nativeWaits.get(id); if (f) { nativeWaits.delete(id); f(r || {}); } };
+
+/** Roughly where the phone is: the iPhone app's own location, or the browser's. Asks only when told to. */
+async function getLocation({ ask = false } = {}) {
+  if (nativeCan("location")) {
+    const r = await nativeAsk("location", { ask }, ask ? 90000 : 20000);
+    if (!r.ok) throw new Error(r.status === "denied" ? "Location is off for Shoebox. Turn it on in the iPhone's Settings › Shoebox." : r.status === "notAsked" ? "notAsked" : "Couldn't find where you are right now.");
+    return r;
+  }
+  if (!navigator.geolocation) throw new Error("This browser can't share a location.");
+  if (!ask) {
+    const st = await navigator.permissions?.query({ name: "geolocation" }).catch(() => null);
+    if (!st || st.state !== "granted") throw new Error("notAsked");
+  }
+  const pos = await new Promise((res, rej) => navigator.geolocation.getCurrentPosition(res, rej, { maximumAge: 3600e3, timeout: 30000, enableHighAccuracy: false }))
+    .catch((e) => { throw new Error(e && e.code === 1 ? "Location is off for Shoebox in this browser." : "Couldn't find where you are right now."); });
+  return { lat: pos.coords.latitude, lon: pos.coords.longitude };
+}
 function toNative(msg) {
   try { window.webkit?.messageHandlers?.shoebox?.postMessage(msg); } catch { /* not in the app */ }
 }
@@ -3265,8 +3439,9 @@ function openSettings(focus = "") {
     <details class="group" id="set-morning">
       <summary><span>Weather</span><span class="sv">${m.weather ? esc(placeOf(m)?.name || "Add a place") : "Off"}</span></summary>
       ${onOff("weather", "Show weather", m.weather)}
-      <div class="field"><label for="set-mo-zip">ZIP code or town</label>
-        <input id="set-mo-zip" type="text" autocomplete="postal-code" value="${esc(m.zip || placeOf(m)?.name || "")}" placeholder="e.g. 28409"></div>
+      ${canLocate() ? `<div class="row"><span class="rk">Where</span><button class="btn sm" type="button" id="set-mo-loc">${m.useLocation ? `Following you: ${esc(placeOf(m)?.name || "…")}` : "Use my location"}</button></div>` : ""}
+      <div class="field"><label for="set-mo-zip">${canLocate() ? "Or a ZIP code or town" : "ZIP code or town"}</label>
+        <input id="set-mo-zip" type="text" autocomplete="postal-code" value="${esc(m.useLocation ? "" : m.zip || placeOf(m)?.name || "")}" placeholder="e.g. 28409"></div>
       <div class="field"><label for="set-mo-cam">Camera <span class="hint">(optional)</span></label>
         <input id="set-mo-cam" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="A webcam picture or a YouTube live link" value="${esc(m.cam)}"></div>
       <p class="note">Blank shows the weather radar. To find a camera, search your town and "webcam": local TV stations and <a href="https://www.windy.com/webcams" target="_blank" rel="noopener">windy.com/webcams</a> list live ones. Use the address of the picture itself (often ending in .jpg) or a YouTube live link.</p>
@@ -3297,8 +3472,10 @@ function openSettings(focus = "") {
 
     <h3 class="set-h">What comes in</h3>
     <details class="group">
-      <summary><span>Calendar</span><span class="sv">${calUrls().length ? "On" : "Off"}</span></summary>
-      <div class="field"><label for="set-cal">Calendar addresses <span class="hint">(one per line)</span></label>
+      <summary><span>Calendar</span><span class="sv">${calOn() ? "On" : "Off"}</span></summary>
+      ${nativeCan("calendar") ? `<div class="row"><span class="rk">This iPhone's calendars</span><div class="seg" role="group" aria-label="This iPhone's calendars"><button type="button" data-calnative="1" aria-pressed="${calNative()}">On</button><button type="button" data-calnative="0" aria-pressed="${!calNative()}">Off</button></div></div>
+      <p class="note">Everything in the Calendar app: iCloud, Google, Outlook. Events stay on your iPhone.</p>` : ""}
+      <div class="field"><label for="set-cal">${nativeCan("calendar") ? "Or a calendar address" : "Calendar addresses"} <span class="hint">(one per line)</span></label>
         <textarea id="set-cal" rows="3" autocapitalize="off" autocomplete="off" spellcheck="false" placeholder="https://calendar.google.com/calendar/ical/…/basic.ics">${esc(calUrls().join("\n"))}</textarea></div>
       <div class="two">
         <button class="btn primary" type="button" id="set-cal-save">Save and test</button>
@@ -3361,11 +3538,8 @@ function openSettings(focus = "") {
       <p class="note">The backup holds everything: items, photos and files, and your settings. Keep it somewhere private.</p>
       <input type="file" id="set-import-file" accept="application/json,.json" hidden>
       <span class="st" id="set-bk-st" role="status"></span>
-      <div class="two">
-        <button class="btn" type="button" id="set-samples-load">Reload samples</button>
-        <button class="btn" type="button" id="set-samples-clear" ${state.items.some((i) => i.sample) ? "" : "disabled"}>Remove samples</button>
-      </div>
-      <span class="st" id="set-sm-st" role="status"></span>
+      ${state.items.some((i) => i.sample) ? `<button class="btn" type="button" id="set-samples-clear">Remove the sample items</button>
+      <span class="st" id="set-sm-st" role="status"></span>` : ""}
     </details>
     <details class="group">
       <summary><span>What Shoebox learned</span></summary>
@@ -3436,7 +3610,8 @@ function openSettings(focus = "") {
         next = { ...next, zip: place.zip || "", place, weather: true };
         const c = morningCache(); delete c.weather; saveMorningCache(c);
       } catch (e) { noteError(e, { quiet: true, where: "place lookup" }); say(st2, "Couldn't look that up right now. Try again shortly.", true); return; }
-    } else if (!q) next = { ...next, zip: "", place: null };
+      next.useLocation = false;
+    } else if (!q && !cur.useLocation) next = { ...next, zip: "", place: null };
     setMorningSettings(next);
     say(st2, placeOf(next) ? `Saved: weather for ${placeOf(next).name}.` : "Saved.");
     const sv = $("#set-morning .sv", wrap); if (sv) sv.textContent = next.weather ? placeOf(next)?.name || "Add a place" : "Off";
@@ -3477,22 +3652,33 @@ function openSettings(focus = "") {
     } catch (e) { say(edSt, e.message || "Could not rebuild.", true); }
   });
   $("#set-discover", wrap).addEventListener("click", () => findNew(st).then((n) => { refreshProblems(wrap); if (n) render(); }));
-  const smSt = $("#set-sm-st", wrap);
-  $("#set-samples-load", wrap).addEventListener("click", async () => {
-    const n = await seedSamples({ force: true });
-    await ensureEdition();
-    closeSheet();
-    state.tab = "today";
-    render({ top: true });
-    picturePending();
-    toast(`Loaded ${n} fresh samples. They're on Today.`);
-  });
-  $("#set-samples-clear", wrap).addEventListener("click", async () => {
+  $("#set-samples-clear", wrap)?.addEventListener("click", async () => {
     const n = await removeSamples();
     $("#set-samples-clear", wrap).disabled = true;
-    say(smSt, `Removed ${n} sample items.`);
+    say($("#set-sm-st", wrap), `Removed ${n} sample items.`);
     render();
   });
+  $("#set-mo-loc", wrap)?.addEventListener("click", async (ev) => {
+    const btn = ev.currentTarget, st2 = $("#set-mo-st", wrap);
+    say(st2, "Finding where you are…");
+    try {
+      const place = await useMyLocation();
+      btn.textContent = `Following you: ${place.name}`;
+      $("#set-mo-zip", wrap).value = "";
+      say(st2, `Weather for ${place.name}. It follows you when you travel.`);
+      const sv = $("#set-morning .sv", wrap); if (sv) sv.textContent = place.name;
+    } catch (e) { say(st2, e.message, true); }
+  });
+  wrap.querySelectorAll("[data-calnative]").forEach((b) => b.addEventListener("click", async () => {
+    const st2 = $("#set-cal-st", wrap);
+    if (b.dataset.calnative === "1") {
+      say(st2, "Asking for your calendars…");
+      const r = await turnOnNativeCalendar();
+      say(st2, r.msg, !r.ok);
+      if (!r.ok) return;
+    } else { setCalNative(false); say(st2, "This iPhone's calendars are off."); render({ top: false }); }
+    wrap.querySelectorAll("[data-calnative]").forEach((x) => x.setAttribute("aria-pressed", String((x.dataset.calnative === "1") === calNative())));
+  }));
   bindAvatarSettings(wrap);
   wrap.querySelectorAll("[data-look]").forEach((b) => b.addEventListener("click", () => {
     setThemeChoice(b.dataset.look);

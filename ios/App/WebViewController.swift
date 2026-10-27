@@ -2,6 +2,8 @@ import UIKit
 import WebKit
 import UserNotifications
 import WidgetKit
+import EventKit
+import CoreLocation
 
 /// Shows Shoebox and answers what it asks of the phone.
 final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler, WKDownloadDelegate {
@@ -9,6 +11,8 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
     private var web: WKWebView!
     private var ready = false          // Shoebox has started and can take things in
     private var queued: [String] = []  // scripts waiting for that
+    private let events = EKEventStore()
+    private var locator: Locator?
 
     override func loadView() {
         let config = WKWebViewConfiguration()
@@ -17,7 +21,7 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
         config.mediaTypesRequiringUserActionForPlayback = []
         let content = WKUserContentController()
         content.add(WeakHandler(self), name: "shoebox")
-        content.addUserScript(WKUserScript(source: "window.shoeboxNative = { version: 1, platform: 'ios' };",
+        content.addUserScript(WKUserScript(source: "window.shoeboxNative = { version: 2, platform: 'ios', features: ['calendar', 'location'] };",
                                            injectionTime: .atDocumentStart, forMainFrameOnly: true))
         config.userContentController = content
 
@@ -96,10 +100,84 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
             if let id = body["id"] as? String {
                 UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ["remind-\(id)"])
             }
+        case "calendar":
+            calendar(body)
+        case "location":
+            location(body)
         case "haptic":
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
         default:
             break
+        }
+    }
+
+    /// The answer to a question Shoebox asked (calendar, location), by its id.
+    private func reply(_ id: String, _ payload: [String: Any]) {
+        guard id.range(of: "^[A-Za-z0-9_-]{1,40}$", options: .regularExpression) != nil,
+              let data = try? JSONSerialization.data(withJSONObject: payload),
+              let text = String(data: data, encoding: .utf8) else { return }
+        DispatchQueue.main.async { [weak self] in
+            self?.web.evaluateJavaScript("window.shoeboxReply && window.shoeboxReply('\(id)', \(text))", completionHandler: nil)
+        }
+    }
+
+    /// Events from the iPhone's own calendars (iCloud, Google, Exchange: whatever is in the Calendar app).
+    /// Asks for access only when Shoebox says the person tapped to turn it on.
+    private func calendar(_ body: [String: Any]) {
+        guard let id = body["id"] as? String else { return }
+        let now = Date().timeIntervalSince1970 * 1000
+        let from = Date(timeIntervalSince1970: (body["from"] as? Double ?? now) / 1000)
+        let to = Date(timeIntervalSince1970: (body["to"] as? Double ?? now + 86_400_000) / 1000)
+        let ask = body["ask"] as? Bool ?? false
+        let store = events
+        let read: () -> Void = { [weak self] in
+            let found = store.events(matching: store.predicateForEvents(withStart: from, end: to, calendars: nil)).map { e -> [String: Any] in
+                var o: [String: Any] = [
+                    "uid": e.calendarItemExternalIdentifier ?? e.eventIdentifier ?? UUID().uuidString,
+                    "title": e.title ?? "",
+                    "start": e.startDate.timeIntervalSince1970 * 1000,
+                    "end": e.endDate.timeIntervalSince1970 * 1000,
+                    "allDay": e.isAllDay,
+                    "calendar": e.calendar?.title ?? "Calendar",
+                ]
+                if let l = e.location, !l.isEmpty { o["location"] = l }
+                if let n = e.notes, !n.isEmpty { o["notes"] = String(n.prefix(2000)) }
+                if let u = e.url { o["url"] = u.absoluteString }
+                return o
+            }
+            self?.reply(id, ["ok": true, "events": found])
+        }
+        switch EKEventStore.authorizationStatus(for: .event) {
+        case .fullAccess:
+            DispatchQueue.global(qos: .userInitiated).async(execute: read)
+        case .notDetermined where ask:
+            store.requestFullAccessToEvents { [weak self] granted, _ in
+                if granted { read() } else { self?.reply(id, ["ok": false, "status": "denied"]) }
+            }
+        case .notDetermined:
+            reply(id, ["ok": false, "status": "notAsked"])
+        default:
+            reply(id, ["ok": false, "status": "denied"])
+        }
+    }
+
+    /// Where the phone is, roughly, for the morning weather. Asks only when Shoebox says to.
+    private func location(_ body: [String: Any]) {
+        guard let id = body["id"] as? String else { return }
+        let ask = body["ask"] as? Bool ?? false
+        let finder = Locator()
+        locator = finder
+        finder.find(ask: ask) { [weak self] place, status in
+            self?.locator = nil
+            guard let place else { self?.reply(id, ["ok": false, "status": status]); return }
+            CLGeocoder().reverseGeocodeLocation(place) { marks, _ in
+                var out: [String: Any] = ["ok": true, "lat": place.coordinate.latitude, "lon": place.coordinate.longitude]
+                if let m = marks?.first {
+                    if let city = m.locality { out["name"] = city }
+                    if let zip = m.postalCode { out["zip"] = zip }
+                }
+                self?.reply(id, out)
+            }
         }
     }
 
@@ -184,6 +262,37 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         ready = false
         webView.reload()
+    }
+}
+
+/// One rough location fix (to the kilometre), then done.
+final class Locator: NSObject, CLLocationManagerDelegate {
+    private let manager = CLLocationManager()
+    private var done: ((CLLocation?, String) -> Void)?
+    private var ask = false
+
+    func find(ask: Bool, done: @escaping (CLLocation?, String) -> Void) {
+        self.done = done
+        self.ask = ask
+        manager.desiredAccuracy = kCLLocationAccuracyKilometer
+        manager.delegate = self // answers with the current permission straight away
+    }
+
+    func locationManagerDidChangeAuthorization(_ m: CLLocationManager) {
+        switch m.authorizationStatus {
+        case .authorizedWhenInUse, .authorizedAlways: m.requestLocation()
+        case .notDetermined: if ask { ask = false; m.requestWhenInUseAuthorization() } else { finish(nil, "notAsked") }
+        default: finish(nil, "denied")
+        }
+    }
+
+    func locationManager(_ m: CLLocationManager, didUpdateLocations list: [CLLocation]) { finish(list.last, "ok") }
+    func locationManager(_ m: CLLocationManager, didFailWithError error: Error) { finish(nil, "failed") }
+
+    private func finish(_ place: CLLocation?, _ status: String) {
+        guard let d = done else { return }
+        done = nil
+        d(place, status)
     }
 }
 
