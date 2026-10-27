@@ -22,7 +22,7 @@ import {
   SUGGESTIONS_PER_DAY, WHY_NOT, WHY_NOT_LABEL, emptySuggestProfile, learnFromSuggestion, suggestionGuide,
   screenSuggestions, suggestMaxMinutes,
   canonTags, tagVocab, tagStats, renameTag, addAlias, releaseTags, renameInSuggestProfile, localTags, normTag, MAX_TAGS,
-  friendlyWhen, usablePicture,
+  friendlyWhen, usablePicture, discoveryItems,
   setAside, wakeAside, bringBackNow, asideChoices, fromDateInput, toDateInput, shortDate, reminderIcs,
 } from "./model.js";
 import * as db from "./db.js";
@@ -36,7 +36,7 @@ import { I, LOGO } from "./icons.js";
 import { topicColor, dominantColor, tintInks, focusOf } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "4.11.1";
+export const VERSION = "4.11.2";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 
@@ -535,7 +535,7 @@ async function findNew(statusEl) {
   set(ai.settings.pplxEnabled() ? "Finding today's top stories with Perplexity…" : "Finding today's top stories…");
   try {
     const known = new Set(state.items.map((i) => i.url).filter(Boolean));
-    const picks = await ai.discover(interestProfile(state.items), { known, guide: suggestionGuide(state.suggest), vocab: vocab(), blocked: state.suggest?.blocked || [] });
+    const picks = await ai.discover(interestProfile(discoveryItems(state.items)), { known, guide: suggestionGuide(state.suggest), vocab: vocab(), blocked: state.suggest?.blocked || [] });
     const fresh = await tagPicks(screenSuggestions(picks.filter((p) => !known.has(p.url)), state.suggest));
     for (const p of fresh) {
       const item = createItem(

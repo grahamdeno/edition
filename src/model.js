@@ -351,6 +351,15 @@ export function interestProfile(items) {
   return { tags, kinds, kept, dropped, books };
 }
 
+/**
+ * What top stories learn from: your own saves, not school newsletter posts.
+ * Finishing a school post means you read the notice, not that you want more
+ * reading like it.
+ */
+export function discoveryItems(items) {
+  return items.filter((i) => !i.school);
+}
+
 export function topTags(profile, n = 8) {
   return Object.entries(profile.tags)
     .filter(([, v]) => v > 0)

@@ -248,3 +248,14 @@ test("loving something counts toward what you like, even before a verdict", () =
   assert.equal(p.tags.coast, 0.5);
   assert.equal(p.tags.tax, undefined);
 });
+
+import { discoveryItems, interestProfile as ip2, topTags as tt2, STATUS as S2 } from "../src/model.js";
+test("finished school posts don't shape top stories", () => {
+  const items = [
+    { id: "a", status: S2.DONE, tags: ["agile"], doneAt: 2, created: 1 },
+    { id: "b", status: S2.DONE, tags: ["band", "school"], doneAt: 3, created: 1, school: { name: "Myrtle Grove Middle" } },
+  ];
+  const p = ip2(discoveryItems(items));
+  assert.deepEqual(tt2(p), ["agile"]);
+  assert.deepEqual(p.kept.map((i) => i.id), ["a"]);
+});
