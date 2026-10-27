@@ -48,6 +48,8 @@ targets:
         NSCameraUsageDescription: Take a photo to save in Shoebox.
         NSPhotoLibraryUsageDescription: Choose photos to save in Shoebox.
         NSMicrophoneUsageDescription: Record a voice note for Shoebox.
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
         NSCalendarsFullAccessUsageDescription: Shoebox shows today's events at the top of your morning. They stay on your iPhone.
         NSLocationWhenInUseUsageDescription: Shoebox uses your rough location for the morning weather.
         CFBundleURLTypes:

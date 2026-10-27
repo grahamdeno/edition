@@ -864,7 +864,7 @@ export function shortDate(ts, now = Date.now()) {
  * A calendar file for the day it comes back: a short event at 9:00 with an
  * alert, so the phone reminds you outside the app.
  */
-export function reminderIcs({ title, why = "", url = "", until, appUrl, now = Date.now() }) {
+export function reminderIcs({ title, why = "", url = "", until, appUrl, now = Date.now(), time = "09:00" }) {
   const pad = (n) => String(n).padStart(2, "0");
   const d = new Date(until);
   const ymd = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}`;
@@ -878,7 +878,8 @@ export function reminderIcs({ title, why = "", url = "", until, appUrl, now = Da
     "BEGIN:VEVENT",
     `UID:shoebox-${ymd}-${Math.abs(hashStr(title + url + until))}@shoebox`,
     `DTSTAMP:${stamp}`,
-    `DTSTART:${ymd}T090000`, `DTEND:${ymd}T091500`,
+    ...(() => { const [h, m] = (/^\d{2}:\d{2}$/.test(time) ? time : "09:00").split(":").map(Number); const e = h * 60 + m + 15;
+      return [`DTSTART:${ymd}T${pad(h)}${pad(m)}00`, `DTEND:${ymd}T${pad(Math.min(23, Math.floor(e / 60)))}${pad(e >= 1440 ? 59 : e % 60)}00`]; })(),
     `SUMMARY:${esc(`Back in Shoebox: ${String(title || "something you set aside").slice(0, 80)}`)}`,
     `DESCRIPTION:${esc(text)}`,
     `URL:${appUrl}`,

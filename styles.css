@@ -847,3 +847,12 @@ table.usage th { color: var(--muted); font-weight: 600; }
 .tag.st-info { background: transparent; border: 1px solid var(--line-2); color: var(--muted); }
 :root[data-theme="dark"] .tag.st-action { background: #4A3410; color: #FFD98A; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .tag.st-action { background: #4A3410; color: #FFD98A; } }
+/* Settings: the rare option waits behind a tap */
+details.adv { border-top: 1px solid var(--line); padding-top: 10px; }
+details.adv > summary { cursor: pointer; list-style: none; font-size: 0.875rem; font-weight: 600; color: var(--sig-ink); min-height: 36px; display: flex; align-items: center; gap: 6px; }
+details.adv > summary::-webkit-details-marker { display: none; }
+.group details.adv > summary { justify-content: flex-start; min-height: 36px; font-weight: 600; }
+.group details.adv > summary::after { content: "›"; border: 0; width: auto; height: auto; margin: 0; transform: none; font-size: 1.1rem; line-height: 1; transition: transform 0.2s; }
+.group details.adv[open] > summary::after { transform: rotate(90deg); margin: 0; }
+details.adv[open] { display: flex; flex-direction: column; gap: 10px; }
+input.time { font: 600 1rem var(--sans); color: var(--fg); background: var(--soft); border: 0; border-radius: 10px; padding: 8px 10px; min-height: 40px; }

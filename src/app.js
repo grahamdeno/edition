@@ -38,7 +38,7 @@ import { topicColor, dominantColor, tintInks, focusOf } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 
-export const VERSION = "4.28.1";
+export const VERSION = "4.29.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -177,7 +177,10 @@ async function boot() {
   refreshCalendar();
   loadMorning();
   checkInbox();
+  dailyStories();
+  dailyBackup();
   setInterval(() => { if (document.visibilityState === "visible") refreshCalendar(); }, 15 * 60e3);
+  setInterval(() => { if (document.visibilityState === "visible") checkInbox(); }, 5 * 60e3);
 }
 
 /* Appearance: Match phone, Light or Dark. Kept on this phone; applied before the first paint by index.html. */
@@ -1370,6 +1373,29 @@ async function mailFiles(base, m) {
   return out;
 }
 
+/** Top stories once a day, by themselves, when AI is on. */
+async function dailyStories() {
+  if (!storiesAuto() || !ai.settings.canDiscover()) return;
+  try { if (localStorage.getItem("edition.storiesDay") === dayKey()) return; localStorage.setItem("edition.storiesDay", dayKey()); } catch { return; }
+  const n = await findNew(null).catch(() => 0);
+  if (n && state.tab === "today" && !$(".sheet-wrap")) render({ top: false });
+}
+
+/**
+ * A backup each day, kept by the iPhone app in Files › On My iPhone ›
+ * Shoebox › Backups (the last 7). It rides along in the phone's own iCloud
+ * Backup, and Import backup reads it on a new phone.
+ */
+async function dailyBackup() {
+  if (!nativeCan("backup")) return;
+  try { if (localStorage.getItem("edition.backupDay") === dayKey()) return; } catch { return; }
+  try {
+    const r = await nativeAsk("backup", { name: `shoebox-backup-${dayKey()}.json`, data: await db.exportJson() }, 60000);
+    if (r.ok) { localStorage.setItem("edition.backupDay", dayKey()); localStorage.setItem("edition.backupAt", String(Date.now())); }
+    else noteError(new Error(r.error || "Backup failed"), { quiet: true, where: "daily backup" });
+  } catch (e) { noteError(e, { quiet: true, where: "daily backup" }); }
+}
+
 let inboxRunning = false;
 async function checkInbox({ statusEl = null } = {}) {
   const base = ai.relayBase();
@@ -1415,6 +1441,7 @@ async function checkInbox({ statusEl = null } = {}) {
       done.push(m.id);
     }
     if (done.length) await fetch(`${base}/inbox/ack`, { method: "POST", headers: { "x-inbox-key": inboxKey(), "content-type": "application/json" }, body: JSON.stringify({ ids: done }) }).catch(() => {});
+    try { localStorage.setItem("edition.inboxChecked", String(Date.now())); } catch { /* full */ }
     say(done.length ? `${done.length} email${done.length === 1 ? "" : "s"} collected.` : "No new email.");
     if (made) { tick(true); render({ top: false }); enrichPending(); picturePending(); }
     return made;
@@ -3002,11 +3029,12 @@ function jumpTo(id) {
   requestAnimationFrame(() => { const el = document.getElementById("p-" + id); if (el) el.scrollIntoView({ block: "start" }); });
 }
 
-/** Ask the relay to notify this phone at 9:00 on the day. Quiet on failure, with a note. */
+/** Notify this phone at the reminder time on the day (on the phone itself, or through the relay). Quiet on failure, with a note. */
 async function scheduleReminder(item) {
   if (!item || !item.until || !notifyOn()) return;
   try {
-    const at = new Date(item.until).setHours(9, 0, 0, 0);
+    const [rh, rm] = remindTime().split(":").map(Number);
+    const at = new Date(item.until).setHours(rh, rm, 0, 0);
     const body = [item.title || headline(item), item.why].filter(Boolean).join(" · ").slice(0, 200);
     if (NATIVE) {
       // The iPhone app schedules it on the phone itself; no relay needed.
@@ -3119,6 +3147,11 @@ if (NATIVE) {
 
 const remindOn = () => { try { return localStorage.getItem("edition.remind") !== "0"; } catch { return true; } };
 const setRemind = (on) => { try { localStorage.setItem("edition.remind", on ? "1" : "0"); } catch { /* private mode */ } };
+/** Top stories picked by themselves once a day (on unless turned off). */
+const storiesAuto = () => { try { return localStorage.getItem("edition.storiesAuto") !== "0"; } catch { return true; } };
+/** When set-aside reminders arrive, "HH:MM" (default 9:00 AM). */
+const remindTime = () => { try { const t = localStorage.getItem("edition.remindTime") || ""; return /^\d{2}:\d{2}$/.test(t) ? t : "09:00"; } catch { return "09:00"; } };
+const remindLabel = (t = remindTime()) => { const [h, m] = t.split(":").map(Number); return new Date(2000, 0, 1, h, m).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }); };
 
 function asideHtml(prefix, until) {
   const choices = asideChoices();
@@ -3133,7 +3166,7 @@ function asideHtml(prefix, until) {
           <input type="date" id="${prefix}-aside-date" min="${tomorrow}" value="${custom ? toDateInput(until) : ""}" aria-label="Pick a date"></span>
       </div>
       <label class="check remind" ${until ? "" : "hidden"}><input type="checkbox" id="${prefix}-remind" ${remindOn() ? "checked" : ""}>
-        <span>Remind me that morning<small>${notifyOn() ? "A notification at 9:00" : "Adds a 9:00 alert to your Calendar"}</small></span></label>
+        <span>Remind me that day<small>${notifyOn() ? `A notification at ${remindLabel()}` : `Adds a ${remindLabel()} alert to your Calendar`}</small></span></label>
     </div>`;
 }
 
@@ -3167,7 +3200,7 @@ function bindAside(root, prefix, onPick) {
 
 /** Hand the phone a calendar alert for the day. Call straight from a tap, so the phone allows it. */
 function downloadReminder({ title, why, url, until }) {
-  const ics = reminderIcs({ title, why, url, until, appUrl: location.origin + location.pathname });
+  const ics = reminderIcs({ title, why, url, until, appUrl: location.origin + location.pathname, time: remindTime() });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([ics], { type: "text/calendar" }));
   a.download = "shoebox-reminder.ics";
@@ -3629,14 +3662,20 @@ function openSettings(panel = "", { fromCard = false } = {}) {
       <p class="note">Everything in the Calendar app: iCloud, Google, Outlook. Events stay on your iPhone.</p>` : ""}
       ${(() => { const seen = [...new Set((calCache()?.events || []).map((e) => calName(e.calendar, "Calendar")).concat(calHidden()))].sort();
         return seen.length > 1 ? `<h3 class="sub">Show on Today</h3>${seen.map((n) => `<div class="row"><span class="rk">${esc(n)}</span><div class="seg" role="group" aria-label="${esc(n)}"><button type="button" data-calshow="${esc(n)}:1" aria-pressed="${!calHidden().includes(n)}">Show</button><button type="button" data-calshow="${esc(n)}:0" aria-pressed="${calHidden().includes(n)}">Hide</button></div></div>`).join("")}` : ""; })()}
-      <div class="field"><label for="set-cal">${nativeCan("calendar") ? "Or add a calendar address" : "Calendar addresses"} <span class="hint">(one per line)</span></label>
-        <textarea id="set-cal" rows="3" autocapitalize="off" autocomplete="off" spellcheck="false" placeholder="https://calendar.google.com/calendar/ical/…/basic.ics">${esc(calUrls().join("\n"))}</textarea></div>
-      <div class="two">
-        <button class="btn primary" type="button" id="set-cal-save">Save and test</button>
-        <button class="btn" type="button" id="set-cal-clear">Remove</button>
-      </div>
+      ${(() => {
+        // On the iPhone, its own calendars cover almost everyone: a web address is the rare case, so it waits behind a tap.
+        const addr = `<div class="field"><label for="set-cal">Calendar addresses <span class="hint">(one per line)</span></label>
+          <textarea id="set-cal" rows="3" autocapitalize="off" autocomplete="off" spellcheck="false" placeholder="https://calendar.google.com/calendar/ical/…/basic.ics">${esc(calUrls().join("\n"))}</textarea></div>
+        <div class="two">
+          <button class="btn primary" type="button" id="set-cal-save">Save and test</button>
+          <button class="btn" type="button" id="set-cal-clear">Remove</button>
+        </div>
+        <p class="note">Google: calendar settings › Secret address in iCal format. iPhone: Calendar › calendar info › Public Calendar › Share Link.</p>`;
+        return nativeCan("calendar")
+          ? `<details class="adv" ${calUrls().length ? "open" : ""}><summary>A calendar that isn't on this iPhone?</summary>${addr}</details>`
+          : addr;
+      })()}
       <span class="st" id="set-cal-st" role="status"></span>
-      <p class="note">Google: calendar settings › Secret address in iCal format. iPhone: Calendar › calendar info › Public Calendar › Share Link.</p>
       </div>` },
     weather: { title: "Weather", value: m.weather ? placeOf(m)?.name || "Add a place" : "Off", body: `
       <div class="group">
@@ -3689,28 +3728,37 @@ function openSettings(panel = "", { fromCard = false } = {}) {
       </div>` },
     email: (me || mailOn) && { title: "Email to Shoebox", value: mailOn ? "On" : "Off", body: `
       <div class="group">
-      <p class="note">${(() => { try { const a = localStorage.getItem("edition.inboxAddress"); return a ? `Forward anything to <b>${esc(a)}</b>. Newsletters become posts; everything else becomes a post of its own.` : "Forward email to your own Shoebox address."; } catch { return ""; } })()}</p>
-      <button class="btn" type="button" id="set-mail-check">Check for email now</button>
+      <p class="note">${(() => { try { const a = localStorage.getItem("edition.inboxAddress"); return a ? `Forward anything to <b>${esc(a)}</b>. Newsletters become posts, with their flyers and PDFs read too; everything else becomes a post of its own.` : "Forward email to your own Shoebox address."; } catch { return ""; } })()}</p>
+      <p class="note">Shoebox checks by itself when you open it and every few minutes while it's open.${(() => { try { const t = +localStorage.getItem("edition.inboxChecked"); return t ? ` Last checked ${esc(clock(t))}.` : ""; } catch { return ""; } })()}</p>
+      <button class="btn ghost sm" type="button" id="set-mail-check">Check now</button>
       <span class="st" id="set-mail-st" role="status"></span>
       </div>` },
-    reminders: { title: "Reminders", value: NATIVE || push.enabled() ? "9:00 AM" : "Off", body: NATIVE ? `
-      <div class="group"><p class="note">When something you set aside comes back, your iPhone reminds you at 9:00 that morning. To stop them, turn off Shoebox in the iPhone's Settings › Notifications.</p></div>` : `
+    reminders: { title: "Reminders", value: NATIVE || push.enabled() ? remindLabel() : "Off", body: `
+      <div class="group">
+        <div class="row"><label class="rk" for="set-rem-time">Remind me at</label><input id="set-rem-time" class="time" type="time" value="${remindTime()}"></div>
+        <p class="note">When something you set aside comes back, ${NATIVE ? "your iPhone reminds you" : "you get a reminder"} at this time that day.${NATIVE ? " To stop them, turn off Shoebox in the iPhone's Settings › Notifications." : ""}</p>
+        <span class="st" id="set-rem-st" role="status"></span>
+      </div>` + (NATIVE ? "" : `
       <div class="group" id="set-push-g">
       <div class="two">
         <button class="btn primary" type="button" id="set-push-on">${push.enabled() ? "Turn off" : "Turn on"}</button>
         <button class="btn" type="button" id="set-push-test" ${push.enabled() ? "" : "disabled"}>Send a test</button>
       </div>
       <span class="st" id="set-push-st" role="status"></span>
-      <p class="note">When something you set aside comes back, at 9:00${push.needsHomeScreen() ? ". On iPhone, open Shoebox from your Home Screen" : ""}.</p>
-      </div>` },
+      <p class="note">Notifications need permission once${push.needsHomeScreen() ? ". On iPhone, open Shoebox from your Home Screen first" : ""}.</p>
+      </div>`) },
     ai: { title: "AI", value: ai.settings.enabled() ? "On" : "Off", body: `
       <div class="group">
       <div class="row"><span class="rk">Use AI</span>
         <div class="seg" role="group" aria-label="Use AI">
           <button type="button" data-ai="1" aria-pressed="${ai.settings.consented()}">On</button><button type="button" data-ai="0" aria-pressed="${!ai.settings.consented()}">Off</button></div></div>
-      <p class="note">${esc(AI_DISCLOSURE)}</p>
-      <p class="note" id="set-ai-use"></p>
-      <button class="btn" type="button" id="set-discover" ${ai.settings.canDiscover() ? "" : "disabled"}>Get top stories now</button>
+      <p class="note">Claude, by Anthropic, reads what you save to tag it, rank it, find pictures and turn newsletters into posts.</p>
+      <details class="adv"><summary>What's sent, and what isn't</summary><p class="note">${esc(AI_DISCLOSURE)}</p></details>
+      <div class="row"><span class="rk">Top stories each morning</span>
+        <div class="seg" role="group" aria-label="Top stories each morning"><button type="button" data-stories="1" aria-pressed="${storiesAuto()}">On</button><button type="button" data-stories="0" aria-pressed="${!storiesAuto()}">Off</button></div></div>
+      <p class="note">A few of the biggest stories in what you follow, picked once a day.</p>
+      ${me ? `<p class="note" id="set-ai-use"></p>` : ""}
+      <button class="btn ghost sm" type="button" id="set-discover" ${ai.settings.canDiscover() ? "" : "disabled"}>Get more top stories now</button>
       <span class="st" id="set-st" role="status"></span>
       </div>` },
     backup: { title: "Backup or move to a new phone", value: "", body: `
@@ -3719,6 +3767,7 @@ function openSettings(panel = "", { fromCard = false } = {}) {
         <button class="btn" type="button" id="set-export">Export backup</button>
         <button class="btn" type="button" id="set-import">Import backup</button>
       </div>
+      ${nativeCan("backup") ? `<p class="note"><b>Every day, by itself:</b> a backup goes to Files › On My iPhone › Shoebox › Backups (the last 7 are kept), and it's part of your iPhone's iCloud Backup.${(() => { try { const t = +localStorage.getItem("edition.backupAt"); return t ? ` Last one: ${esc(friendlyWhen(t))}.` : ""; } catch { return ""; } })()}</p>` : ""}
       <p class="note">The backup holds everything: items, photos and files, and your settings. Keep it somewhere private. On a new phone, open Shoebox and Import it.</p>
       <input type="file" id="set-import-file" accept="application/json,.json" hidden>
       <span class="st" id="set-bk-st" role="status"></span>
@@ -3786,7 +3835,7 @@ function openSettings(panel = "", { fromCard = false } = {}) {
     const sv = b.closest("details")?.querySelector(".sv"); if (sv) sv.textContent = on ? "On" : "Off";
     render({ top: false });
   }));
-  if (ai.settings.consented() && ai.settings.device()) {
+  if (me && ai.settings.consented() && ai.settings.device()) {
     ai.usage().then((u) => { const el = $("#set-ai-use", wrap); if (el) el.textContent = `Today: ${u.cents.toFixed(1)}¢ of AI${u.limit ? ` (daily allowance ${u.limit}¢)` : ""}. Install id: ${u.device}.`; }).catch(() => {});
   }
   renderSuggestProfile(wrap);
@@ -3846,6 +3895,19 @@ function openSettings(panel = "", { fromCard = false } = {}) {
   $("#set-song-copy", wrap)?.addEventListener("click", async () => {
     const st2 = $("#set-more-st", wrap);
     try { await navigator.clipboard.writeText($("#set-song-key", wrap).textContent); say(st2, "Song key copied."); } catch { say(st2, "Couldn't copy; select it and copy."); }
+  });
+  wrap.querySelectorAll("[data-stories]").forEach((b) => b.addEventListener("click", () => {
+    setFlag("edition.storiesAuto", b.dataset.stories === "1");
+    wrap.querySelectorAll("[data-stories]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+  }));
+  $("#set-rem-time", wrap)?.addEventListener("change", async (ev) => {
+    const t = ev.target.value;
+    if (!/^\d{2}:\d{2}$/.test(t)) return;
+    try { localStorage.setItem("edition.remindTime", t); } catch { /* storage blocked */ }
+    // Reminders already waiting move to the new time.
+    const waiting = state.items.filter((i) => i.status === STATUS.ASIDE && i.until && i.reminder);
+    for (const it of waiting) { dropReminder(it); await scheduleReminder(byId(it.id)); }
+    say($("#set-rem-st", wrap), `Reminders come at ${remindLabel(t)}${waiting.length ? `; ${waiting.length} moved` : ""}.`);
   });
   wrap.querySelectorAll("[data-stats]").forEach((b) => b.addEventListener("click", () => {
     setStatsOn(b.dataset.stats === "1");

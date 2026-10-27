@@ -21,7 +21,7 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
         config.mediaTypesRequiringUserActionForPlayback = []
         let content = WKUserContentController()
         content.add(WeakHandler(self), name: "shoebox")
-        content.addUserScript(WKUserScript(source: "window.shoeboxNative = { version: 2, platform: 'ios', features: ['calendar', 'location'] };",
+        content.addUserScript(WKUserScript(source: "window.shoeboxNative = { version: 2, platform: 'ios', features: ['calendar', 'location', 'backup'] };",
                                            injectionTime: .atDocumentStart, forMainFrameOnly: true))
         config.userContentController = content
 
@@ -104,6 +104,8 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
             calendar(body)
         case "location":
             location(body)
+        case "backup":
+            backup(body)
         case "haptic":
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
         default:
@@ -177,6 +179,29 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
                     if let zip = m.postalCode { out["zip"] = zip }
                 }
                 self?.reply(id, out)
+            }
+        }
+    }
+
+    /// Today's backup, written where the Files app shows it (On My iPhone › Shoebox › Backups).
+    /// The last 7 are kept; the folder is part of the iPhone's own iCloud Backup.
+    private func backup(_ body: [String: Any]) {
+        guard let id = body["id"] as? String else { return }
+        guard let name = body["name"] as? String, name.range(of: "^[A-Za-z0-9._-]{1,80}\\.json$", options: .regularExpression) != nil,
+              let text = body["data"] as? String else { reply(id, ["ok": false, "error": "bad backup"]); return }
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let fm = FileManager.default
+            do {
+                let docs = try fm.url(for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+                let folder = docs.appendingPathComponent("Backups", isDirectory: true)
+                try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+                try Data(text.utf8).write(to: folder.appendingPathComponent(name), options: .atomic)
+                let old = (try fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil))
+                    .filter { $0.pathExtension == "json" }.sorted { $0.lastPathComponent > $1.lastPathComponent }.dropFirst(7)
+                old.forEach { try? fm.removeItem(at: $0) }
+                self?.reply(id, ["ok": true])
+            } catch {
+                self?.reply(id, ["ok": false, "error": error.localizedDescription])
             }
         }
     }
