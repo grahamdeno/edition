@@ -656,3 +656,8 @@ details.group[open] { padding-bottom: 14px; }
 .sheet img, .sheet svg { max-width: 100%; }
 .sheet > *, .sheet .field > *, .aside-pick > * { min-width: 0; max-width: 100%; }
 .sheet .note, .sheet .st { overflow-wrap: anywhere; }
+.note-pic { margin-top: 12px; border-radius: 16px; overflow: hidden; aspect-ratio: 16 / 10; }
+.note-pic .open { display: block; width: 100%; height: 100%; padding: 0; }
+.note-pic img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.note-pic + .credit { margin: 6px 0 0; }
+.card + .credit { margin: 6px 0 0; }
