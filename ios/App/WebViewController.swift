@@ -19,6 +19,9 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
         config.websiteDataStore = .default()
         config.allowsInlineMediaPlayback = true
         config.mediaTypesRequiringUserActionForPlayback = []
+        // Shoebox's own address (and the video players it embeds) are this app's domains: that turns on
+        // the web app's offline copy (its service worker), so Shoebox opens without a connection.
+        config.limitsNavigationsToAppBoundDomains = true
         let content = WKUserContentController()
         content.add(WeakHandler(self), name: "shoebox")
         content.addUserScript(WKUserScript(source: "window.shoeboxNative = { version: 2, platform: 'ios', features: ['calendar', 'location', 'backup'] };",
@@ -243,6 +246,7 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
 
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction) async -> WKNavigationActionPolicy {
         guard let url = action.request.url else { return .cancel }
+        if url.scheme == "shoebox-retry" { web.load(URLRequest(url: home)); return .cancel }
         if action.shouldPerformDownload { return .download }
         let scheme = url.scheme ?? ""
         if ["blob", "data", "about"].contains(scheme) { return .allow }
@@ -281,6 +285,26 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
         let sheet = UIActivityViewController(activityItems: [url], applicationActivities: nil)
         sheet.popoverPresentationController?.sourceView = view
         present(sheet, animated: true)
+    }
+
+    /// No connection and no offline copy yet (the very first launch): say so plainly, with a way to try again.
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        let code = (error as NSError).code
+        guard code != NSURLErrorCancelled, code != 102 /* frame load interrupted: a download or an outside link */ else { return }
+        showOffline()
+    }
+
+    private func showOffline() {
+        let dark = traitCollection.userInterfaceStyle == .dark
+        let html = """
+        <!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
+        <style>body{margin:0;height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px;box-sizing:border-box;
+        font:17px -apple-system,system-ui,sans-serif;text-align:center;background:\(dark ? "#1B1033" : "#FBF8FF");color:\(dark ? "#F3ECFF" : "#22123B")}
+        h1{font:400 34px Georgia,serif;margin:0}p{margin:0;opacity:.75;max-width:320px}
+        a{display:inline-block;margin-top:8px;padding:12px 22px;border-radius:999px;background:#7B3FF2;color:#fff;text-decoration:none;font-weight:600}</style></head>
+        <body><h1>Shoebox</h1><p>Shoebox needs a connection the first time it opens. After that it works offline too.</p><a href="shoebox-retry://">Try again</a></body></html>
+        """
+        web.loadHTMLString(html, baseURL: nil)
     }
 
     /// If the page dies in the background, start it again.

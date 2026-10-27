@@ -48,6 +48,7 @@ targets:
         NSCameraUsageDescription: Take a photo to save in Shoebox.
         NSPhotoLibraryUsageDescription: Choose photos to save in Shoebox.
         NSMicrophoneUsageDescription: Record a voice note for Shoebox.
+        WKAppBoundDomains: [shoebox.tangomike.app, www.youtube-nocookie.com, www.youtube.com, player.vimeo.com]
         UIFileSharingEnabled: true
         LSSupportsOpeningDocumentsInPlace: true
         NSCalendarsFullAccessUsageDescription: Shoebox shows today's events at the top of your morning. They stay on your iPhone.
