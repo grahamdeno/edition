@@ -941,3 +941,8 @@ details.adv > summary, .group details.adv > summary, .ag-more summary { min-heig
 .cap-try-b .btn { min-height: 44px; background: var(--bg); border: 1px solid var(--line-2); color: var(--sig-ink); font-weight: 600; }
 .mail-addr { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 12px; background: var(--sig-soft); margin: 4px 0 8px; }
 .mail-addr b { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 0.9375rem; color: var(--sig-ink); -webkit-user-select: all; user-select: all; }
+.mail-pick { display: flex; align-items: center; gap: 6px; }
+.mail-pick input { flex: 1; min-width: 0; }
+.mail-pick span { flex: none; color: var(--muted); font-size: 0.875rem; }
+.mail-uses { margin: 4px 0 10px; padding-left: 1.2em; display: flex; flex-direction: column; gap: 6px; font-size: 0.875rem; color: var(--muted); }
+.mail-uses b { color: var(--fg); }

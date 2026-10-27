@@ -107,30 +107,34 @@ test("attachments wait on the relay, are fetched one by one, and go when the mai
 });
 
 /* ---- Personal addresses ---- */
-import { mailBox } from "../relay/perplexity-relay.js";
+import { mailBox, addressName } from "../relay/perplexity-relay.js";
 
-test("each phone gets its own address and only sees its own mail; the shared address still reaches its owner", async () => {
-  const env = { SHOEBOX: fakeKv(), EMAIL_ADDRESS: "shoebox@tangomike.app", EMAIL_ALIASES: "1" };
+test("each phone picks its own address and only sees its own mail; the shared address still reaches its owner", async () => {
+  const env = { SHOEBOX: fakeKv(), EMAIL_ADDRESS: "shoebox@teamd503.com", EMAIL_ALIASES: "1", EMAIL_DOMAIN: "tangomike.app" };
   const origin = "https://shoebox.tangomike.app";
   const call = (method, path, key, body) => relay.fetch(new Request(`https://relay.test${path}`, { method, headers: { origin, "x-inbox-key": key, "content-type": "application/json" }, body: body && JSON.stringify(body) }), env);
   const owner = "o".repeat(30), tester = "t".repeat(30);
   await env.SHOEBOX.put("inbox-key", owner);
-  const a = await (await call("GET", "/inbox", owner)).json();
-  const b = await (await call("GET", "/inbox", tester)).json();
-  assert.match(a.address, /^sb-[a-z2-9]{10}@tangomike\.app$/);
-  assert.match(b.address, /^sb-[a-z2-9]{10}@tangomike\.app$/);
-  assert.notEqual(a.address, b.address);
-  assert.equal(a.shared, "shoebox@tangomike.app");
-  assert.equal(b.shared, null);
-  const again = await (await call("GET", "/inbox", tester)).json();
-  assert.equal(again.address, b.address, "the address stays put");
+  const before = await (await call("GET", "/inbox", tester)).json();
+  assert.equal(before.address, null, "no address until one is picked");
+  assert.equal(before.pick, "tangomike.app");
+  const a = await (await call("POST", "/inbox/address", owner, { name: "Graham" })).json();
+  const b = await (await call("POST", "/inbox/address", tester, { name: "Ann-Marie O'Neil" })).json();
+  assert.match(a.address, /^graham-[a-z2-9]{4}@tangomike\.app$/);
+  assert.match(b.address, /^annmarieoneil-[a-z2-9]{4}@tangomike\.app$/);
+  const ownerView = await (await call("GET", "/inbox", owner)).json();
+  assert.equal(ownerView.address, a.address);
+  assert.equal(ownerView.shared, "shoebox@teamd503.com");
   // Mail to the tester's address, to the shared one, and to a stranger.
   const send = (to) => relay.email({ raw: new Response(raw).body, from: "news@nhcs.net", to, setReject(r) { this.rejected = r; } }, env);
-  await send(b.address);
-  await send("shoebox@tangomike.app");
-  const stray = { raw: new Response(raw).body, from: "x@y.z", to: "sb-nobodyhere@tangomike.app", setReject(r) { this.rejected = r; } };
+  await send(b.address.toUpperCase());
+  await send("shoebox@teamd503.com");
+  const stray = { raw: new Response(raw).body, from: "x@y.z", to: "graham-zzzz@tangomike.app", setReject(r) { this.rejected = r; } };
   await relay.email(stray, env);
   assert.ok(stray.rejected, "unknown addresses bounce");
+  const other = { raw: new Response(raw).body, from: "x@y.z", to: b.address.replace("tangomike.app", "teamd503.com"), setReject(r) { this.rejected = r; } };
+  await relay.email(other, env);
+  assert.ok(other.rejected, "only the mail domain");
   const ownerMail = await (await call("GET", "/inbox", owner)).json();
   const testerMail = await (await call("GET", "/inbox", tester)).json();
   assert.equal(ownerMail.mails.length, 1, "owner sees only the shared-address mail");
@@ -140,10 +144,18 @@ test("each phone gets its own address and only sees its own mail; the shared add
   await call("POST", "/inbox/ack", tester, { ids: [testerMail.mails[0].id] });
   assert.equal((await (await call("GET", "/inbox", tester)).json()).mails.length, 0);
   // A new address retires the old one.
-  const fresh = await (await call("POST", "/inbox/address", tester)).json();
+  const fresh = await (await call("POST", "/inbox/address", tester, { name: "ann" })).json();
   assert.notEqual(fresh.address, b.address);
   assert.equal(await mailBox(env, b.address), null);
   assert.ok(await mailBox(env, fresh.address));
+});
+
+test("address names are tidy", () => {
+  assert.equal(addressName("Graham"), "graham");
+  assert.equal(addressName("  José Núñez "), "josenunez");
+  assert.equal(addressName("42 Wallaby Way"), "wallabyway");
+  assert.equal(addressName("!!!"), "shoebox");
+  assert.equal(addressName("averyveryverylongname"), "averyveryverylon");
 });
 
 test("before personal addresses are on, nothing changes", async () => {
@@ -153,5 +165,5 @@ test("before personal addresses are on, nothing changes", async () => {
   const first = await (await call("a".repeat(30))).json();
   assert.equal(first.address, "shoebox@tangomike.app");
   assert.equal((await call("b".repeat(30))).status, 403);
-  assert.equal(await mailBox(env, "sb-abcdefghjk@tangomike.app"), null);
+  assert.equal(await mailBox(env, "graham-abcd@tangomike.app"), null);
 });

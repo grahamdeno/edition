@@ -39,7 +39,7 @@ import { problems, noteError as logError, onFirstProblem, clearProblems, formatP
 import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone } from "./onboard.js";
 
-export const VERSION = "4.35.0";
+export const VERSION = "4.36.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -1431,7 +1431,7 @@ async function checkInbox({ statusEl = null } = {}) {
       const before = localStorage.getItem("edition.inboxAddress");
       if (data.address) localStorage.setItem("edition.inboxAddress", data.address); else localStorage.removeItem("edition.inboxAddress");
       if (data.shared) localStorage.setItem("edition.inboxShared", data.shared); else localStorage.removeItem("edition.inboxShared");
-      if (data.address && before && before !== data.address && /^sb-/.test(data.address)) track("inbox_personal");
+      if (data.pick) localStorage.setItem("edition.inboxPick", data.pick); else localStorage.removeItem("edition.inboxPick");
     } catch { /* full */ }
     const done = [];
     for (const m of data.mails || []) {
@@ -1855,7 +1855,7 @@ function coachUsed(key) {
 const START_DAY = "edition.onboardedDay", TIP_LOG = "edition.dayTips";
 /* Built when used: NATIVE is set further down the file. */
 const dayTips = () => ({
-  email: { h: "Email anything to Shoebox", p: "Forward a newsletter, a receipt or a note to your own Shoebox address and it lands here.", go: "Set it up", act: () => openSettings("email") },
+  email: { h: "Your own Shoebox email address", p: "Sign up for newsletters with it and they come straight here. Anything else, forward to it.", go: "Set it up", act: () => openSettings("email") },
   more: { h: "Change a card where you see it", p: "Tap ••• on the weather or calendar card to change just that card, without hunting through Settings.", go: "Try it on weather", act: () => openSettings("weather", { fromCard: true }) },
   newsletters: { h: "School email becomes short posts", p: "Forward school email and newsletters. Shoebox pulls out each thing to do, decide or know, with the dates.", go: "Set it up", act: () => openSettings("newsletters") },
   later: { h: "Pick when things come back", p: "Set something aside until a day you choose. It waits under Coming back, then tops Today that morning, with a reminder if you like.", go: "Pick a reminder time", act: () => openSettings("reminders") },
@@ -1902,7 +1902,7 @@ function tipAction(v) {
 const features = () => [
   ["Getting things in", [
     ["Save from any app", "In Safari or any app, tap Share, then Shoebox.", "share"],
-    ["Email to Shoebox", "Forward anything to your own address and it lands here.", "email"],
+    ["Your Shoebox email address", "Sign up for newsletters with it, or forward anything to it.", "email"],
     ["Tap + or paste", "Links, photos, files and notes. Paste anywhere on Today, too.", "add"],
     ["School email and newsletters", "Each thing to do, decide or know becomes its own short post.", "newsletters"],
   ]],
@@ -4028,6 +4028,7 @@ function openSettings(panel = "", { fromCard = false } = {}) {
   const m = morningSettings(), sc = schoolSettings(), me = personal();
   const onOff = (key, label, on) => `<div class="row"><span class="rk">${label}</span><div class="seg" role="group" aria-label="${label}"><button type="button" data-mo="${key}:1" aria-pressed="${on}">On</button><button type="button" data-mo="${key}:0" aria-pressed="${!on}">Off</button></div></div>`;
   const mailOn = (() => { try { return Boolean(localStorage.getItem("edition.inboxAddress")); } catch { return false; } })();
+  const mailPick = (() => { try { return localStorage.getItem("edition.inboxPick") || ""; } catch { return ""; } })();
   const calShown = [...new Set((calCache()?.events || []).map((e) => calName(e.calendar, "Calendar")))].filter((n) => !calHidden().includes(n));
   const cardsOn = ["otd", ...(me ? ["song", "hockey", "jung"] : [])].filter((k) => m[k]).length;
   const P = {
@@ -4114,18 +4115,27 @@ function openSettings(panel = "", { fromCard = false } = {}) {
       </div>
       <span class="st" id="set-sc-st" role="status"></span>
       </div>` },
-    email: (me || mailOn) && { title: "Email to Shoebox", value: mailOn ? "On" : "Off", body: `
+    email: (me || mailOn || mailPick) && { title: "Email to Shoebox", value: mailOn ? "On" : "Off", body: `
       <div class="group">
       ${(() => {
         let a = "", shared = "";
         try { a = localStorage.getItem("edition.inboxAddress") || ""; shared = localStorage.getItem("edition.inboxShared") || ""; } catch { /* blocked */ }
+        if (!a && shared) a = shared;
+        const personal = Boolean(mailPick) && Boolean(a) && a !== shared;
+        const picker = (label) => `<div class="field"><label for="set-mail-name">${label}</label>
+            <div class="mail-pick"><input id="set-mail-name" type="text" autocomplete="given-name" autocapitalize="none" placeholder="graham" maxlength="16"><span>-····@${esc(mailPick)}</span></div></div>
+          <button class="btn ${personal ? "ghost" : "primary"} sm" type="button" id="set-mail-make">${personal ? "Change my address" : "Make my address"}</button>`;
+        const uses = `<ul class="mail-uses">
+            <li><b>Newsletters:</b> sign up with this address, and they come straight here.</li>
+            <li><b>School email:</b> add it as a second email in your school's parent app, such as ParentSquare or SchoolMessenger.</li>
+            <li><b>Anything else:</b> forward it. Newsletters become short posts, with their flyers and PDFs read too.</li></ul>`;
+        if (!a && mailPick) return `<p class="note">Make your own Shoebox address. Only this phone gets its mail. Pick the first part; four random characters keep it private.</p>${picker("First part of your address")}`;
         if (!a) return `<p class="note">Forward email to your own Shoebox address. It appears here after Shoebox checks for mail.</p>`;
-        const personal = /^sb-/.test(a);
         return `<p class="note">Your Shoebox address${personal ? ", only for this phone" : ""}:</p>
-          <div class="mail-addr"><b id="set-mail-addr">${esc(a)}</b><button class="btn sm" type="button" id="set-mail-copy">Copy</button></div>
-          <p class="note">Forward anything to it. Newsletters become posts, with their flyers and PDFs read too; everything else becomes a post of its own.</p>
-          ${shared ? `<p class="note">Your old address, <b>${esc(shared)}</b>, still works. To move a Gmail forward: Gmail › Settings › Forwarding › Add a forwarding address, paste the address above, and the confirmation code arrives here in Shoebox as a post.</p>` : ""}
-          ${personal ? `<button class="btn ghost sm" type="button" id="set-mail-new">Get a new address</button>` : ""}`;
+          <div class="mail-addr"><b id="set-mail-addr">${esc(personal ? a : shared || a)}</b><button class="btn sm" type="button" id="set-mail-copy">Copy</button></div>
+          ${uses}
+          ${shared && personal ? `<p class="note">Your old address, <b>${esc(shared)}</b>, still works. To move a Gmail forward: Gmail › Settings › Forwarding › Add a forwarding address, paste the address above, and Gmail's confirmation code arrives here as a post.</p>` : ""}
+          ${mailPick ? (personal ? `<details class="adv"><summary>Change my address</summary><p class="note">The old address stops working right away.</p>${picker("New first part")}</details>` : picker("Make a personal address for this phone")) : ""}`;
       })()}
       <p class="note">Shoebox checks by itself when you open it and every few minutes while it's open.${(() => { try { const t = +localStorage.getItem("edition.inboxChecked"); return t ? ` Last checked ${esc(clock(t))}.` : ""; } catch { return ""; } })()}</p>
       <button class="btn ghost sm" type="button" id="set-mail-check">Check now</button>
@@ -4318,21 +4328,19 @@ function openSettings(panel = "", { fromCard = false } = {}) {
     const a = $("#set-mail-addr", wrap)?.textContent || "";
     try { await navigator.clipboard.writeText(a); toast("Address copied."); } catch { say($("#set-mail-st", wrap), a); }
   });
-  $("#set-mail-new", wrap)?.addEventListener("click", async (e) => {
-    const st = $("#set-mail-st", wrap);
-    if (e.target.dataset.sure !== "1") { e.target.dataset.sure = "1"; e.target.textContent = "Tap again: the old address stops working"; return; }
-    e.target.disabled = true;
+  $("#set-mail-make", wrap)?.addEventListener("click", async (e) => {
+    const st = $("#set-mail-st", wrap), name = $("#set-mail-name", wrap)?.value.trim() || "";
+    if (!name) { say(st, "Type a first part, like your first name.", true); $("#set-mail-name", wrap)?.focus(); return; }
+    e.target.disabled = true; say(st, "Making your address…");
     try {
-      const res = await withTimeout(fetch(`${ai.relayBase()}/inbox/address`, { method: "POST", headers: { "x-inbox-key": inboxKey() } }), 15000);
+      const res = await withTimeout(fetch(`${ai.relayBase()}/inbox/address`, { method: "POST", headers: { "x-inbox-key": inboxKey(), "content-type": "application/json" }, body: JSON.stringify({ name }) }), 15000);
       const d = await res.json();
       if (!res.ok || !d.address) throw new Error(d?.error?.message || "No address came back.");
       localStorage.setItem("edition.inboxAddress", d.address);
-      $("#set-mail-addr", wrap).textContent = d.address;
-      e.target.textContent = "Get a new address"; e.target.dataset.sure = "0";
-      say(st, "New address ready. Update anything that forwards to the old one.");
-      track("inbox_new_address");
-    } catch (err) { say(st, err.message || "Couldn't reach the relay.", true); }
-    e.target.disabled = false;
+      track("inbox_address");
+      openSettings("email");
+      toast(`Your address: ${d.address}`);
+    } catch (err) { say(st, err.message || "Couldn't reach the relay.", true); e.target.disabled = false; }
   });
   const edSt = $("#set-ed-st", wrap);
   wrap.querySelectorAll("[data-feat]").forEach((b) => b.addEventListener("click", () => showFeature(b.dataset.feat)));

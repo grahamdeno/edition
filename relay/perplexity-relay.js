@@ -524,20 +524,27 @@ export async function nhl(date, cors) {
  * Mail arrives through Cloudflare Email Routing and waits in KV until the
  * phone picks it up, then it's deleted.
  *
- * Each phone has its own address, sb-<random>@<domain>, routed here by the
- * domain's catch-all rule; its mail is kept under its own box (a hash of the
- * phone's inbox key), so nobody else's phone can read it. Personal addresses
- * turn on with the EMAIL_ALIASES=1 variable, once the catch-all is set.
+ * Each phone can have its own address, <name>-<4 random>@<EMAIL_DOMAIN>
+ * (e.g. graham-7k2m@tangomike.app), routed here by that domain's catch-all
+ * rule. The name is picked in the app; the random part keeps it private.
+ * Its mail is kept under its own box (a hash of the phone's inbox key), so
+ * nobody else's phone can read it. Personal addresses turn on with the
+ * EMAIL_ALIASES=1 variable, once the catch-all is set.
  * The original shared address (EMAIL_ADDRESS) still delivers to the phone that
  * claimed it first, so an existing forward keeps working until it's moved.
  */
-const ALIAS_RE = /^sb-([a-z0-9]{8,16})@/;
+const ALIAS_RE = /^([a-z][a-z0-9]{0,15}-[a-z2-9]{4})@/;
 const aliasesOn = (env) => env.EMAIL_ALIASES === "1" || env.EMAIL_ALIASES === 1 || env.EMAIL_ALIASES === true;
-const mailDomain = (env) => String(env.EMAIL_DOMAIN || (env.EMAIL_ADDRESS || "").split("@")[1] || "tangomike.app").toLowerCase();
+const mailDomain = (env) => String(env.EMAIL_DOMAIN || "tangomike.app").toLowerCase();
+/** The name part of an address: letters and digits, starting with a letter, up to 16. */
+export function addressName(name) {
+  const n = String(name || "").toLowerCase().normalize("NFKD").replace(/[^a-z0-9]/g, "").replace(/^[0-9]+/, "").slice(0, 16);
+  return n || "shoebox";
+}
 async function boxOf(key) { return (await sha256(`inbox:${key}`)).slice(0, 20); }
-function newSlug() {
+function newSlug(name) {
   const abc = "abcdefghijkmnpqrstuvwxyz23456789"; // no look-alikes (l, o, 0, 1)
-  return Array.from(crypto.getRandomValues(new Uint8Array(10)), (b) => abc[b % abc.length]).join("");
+  return `${addressName(name)}-${Array.from(crypto.getRandomValues(new Uint8Array(4)), (b) => abc[b % abc.length]).join("")}`;
 }
 
 /** The box a recipient address delivers to: "" for the shared address, the box id for a personal one, null for neither. */
@@ -550,16 +557,17 @@ export async function mailBox(env, to) {
   return (await env.SHOEBOX.get(`alias:${m[1]}`)) || null;
 }
 
-/** This phone's personal address, made the first time it's asked for (or fresh, when `renew`). */
-async function personalAddress(env, box, { renew = false } = {}) {
+/** This phone's personal address, or null before one is made. `name` makes (or replaces) it. */
+async function personalAddress(env, box, { name = null } = {}) {
   const kv = env.SHOEBOX;
   const cur = await kv.get(`box:${box}`, "json");
-  if (cur && !renew) return `sb-${cur.slug}@${mailDomain(env)}`;
+  if (name === null) return cur ? `${cur.slug}@${mailDomain(env)}` : null;
+  let slug = newSlug(name);
+  for (let i = 0; i < 5 && await kv.get(`alias:${slug}`); i++) slug = newSlug(name);
   if (cur) await kv.delete(`alias:${cur.slug}`);
-  const slug = newSlug();
   await kv.put(`alias:${slug}`, box);
   await kv.put(`box:${box}`, JSON.stringify({ slug, at: Date.now() }));
-  return `sb-${slug}@${mailDomain(env)}`;
+  return `${slug}@${mailDomain(env)}`;
 }
 
 async function inboxRoute(request, env, pathname, cors) {
@@ -584,11 +592,12 @@ async function inboxRoute(request, env, pathname, cors) {
     for (const name of (await mailKeys()).slice(0, 20)) { const m = await kv.get(name, "json"); if (m) mails.push(m); }
     const address = aliasesOn(env) ? await personalAddress(env, box) : isOwner ? env.EMAIL_ADDRESS || null : null;
     const shared = aliasesOn(env) && isOwner ? env.EMAIL_ADDRESS || null : null;
-    return send({ mails, address, shared });
+    return send({ mails, address, shared, pick: aliasesOn(env) ? mailDomain(env) : null });
   }
   if (request.method === "POST" && pathname === "/inbox/address") {
     if (!aliasesOn(env)) return json(409, "Personal addresses aren't on yet.", cors);
-    return send({ address: await personalAddress(env, box, { renew: true }) });
+    const { name } = await request.json().catch(() => ({}));
+    return send({ address: await personalAddress(env, box, { name: name || "" }) });
   }
   if (request.method === "GET" && pathname === "/inbox/file") {
     const q = new URL(request.url).searchParams, id = q.get("id") || "", n = q.get("n") || "";
