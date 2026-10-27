@@ -38,7 +38,7 @@ import { topicColor, dominantColor, tintInks, focusOf } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 
-export const VERSION = "4.27.0";
+export const VERSION = "4.28.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -1438,6 +1438,9 @@ const SCHOOL_KEY = "edition.school", SCHOOL_ASKED = "edition.schoolAsked";
 const SCHOOL_PUBLIC = { on: false, days: [1, 5], child: "", school: "", about: "", words: [] };
 const SCHOOL_ME = { on: true, days: [1, 5], child: "Gunner", school: "Myrtle Grove Middle", words: ["nhcs.net", "Ducks", "Duck Weekly"],
   about: "Gunner is in 8th grade at Myrtle Grove Middle School. He plays in the band, and plays soccer and lacrosse." };
+/** What a school post asks of you. */
+const SCHOOL_TYPES = { action: "Action", decision: "Decision", info: "Info" };
+
 function schoolSettings() {
   const base = personal() ? SCHOOL_ME : SCHOOL_PUBLIC;
   let c;
@@ -1630,7 +1633,7 @@ async function pullNewsletter(raw, statusEl, { files = [] } = {}) {
     const p = out.posts[k];
     const item = createItem({ kind: KIND.NOTE, text: p.body, title: p.headline || p.body.slice(0, 80), tags: p.tags.length ? p.tags : ["school"] },
       { id: db.newId(), source: "school", now: now - k });
-    Object.assign(item, { title: p.headline || item.title, school: { name, body: p.body, date: p.date, from: url || undefined, query: p.query, pageImgs, fromFile: p.source || undefined }, url: url || undefined,
+    Object.assign(item, { title: p.headline || item.title, school: { name, body: p.body, date: p.date, type: p.type, from: url || undefined, query: p.query, pageImgs, fromFile: p.source || undefined }, url: url || undefined,
       enrichedAt: Date.now(), picSettled: Date.now(), coverOff: true, hook: p.body });
     await saveItem(item);
   }
@@ -2036,6 +2039,7 @@ function postHtml(item, { compact = false } = {}) {
   const b = byline(item);
   const tag = item.loved ? `<span class="tag love">${I.heartFill}<span>Loved</span></span>`
     : item.suggested ? `<span class="tag">Top story</span>`
+    : item.school && SCHOOL_TYPES[item.school.type] ? `<span class="tag st-${item.school.type}">${SCHOOL_TYPES[item.school.type]}</span>`
     : item.backAt && item.status === STATUS.INBOX && dayKey(item.backAt) === dayKey() ? `<span class="tag back">Back today</span>`
     : isFaded(item) ? `<span class="tag fade">Faded</span>`
     : state.tab === "all" && item.status !== STATUS.QUEUED ? `<span class="tag">${{ inbox: "New", done: "Finished", archived: "Let go", aside: "Coming back" }[item.status] || ""}</span>` : "";
@@ -2700,7 +2704,8 @@ function openEdit(id) {
     ${sch ? `${f("title", "Headline", item.title)}
       ${f("text", "Post", sch.body || item.text, { area: true })}
       ${f("overlay", "Line over the photo", sch.overlay, { ph: schoolSettings().child ? `${schoolSettings().child}, …` : "A line over the photo" })}
-      ${f("sdate", "Date", sch.date || "", { type: "date" })}`
+      ${f("sdate", "Date", sch.date || "", { type: "date" })}
+      <div class="row"><span class="rk">This is</span><div class="seg" role="group" aria-label="This is">${Object.entries(SCHOOL_TYPES).map(([k, v]) => `<button type="button" data-stype="${k}" aria-pressed="${(sch.type || "info") === k}">${v}</button>`).join("")}</div></div>`
     : words ? f("text", item.kind === KIND.QUOTE ? "Quote" : "Note", item.text, { area: true }) : f("title", "Title", item.title)}
     ${item.kind === KIND.QUOTE || item.kind === KIND.VIDEO ? f("author", item.kind === KIND.QUOTE ? "Who said it" : "Channel", item.author) : ""}
     ${item.kind === KIND.PHOTO ? `<label class="check"><input type="checkbox" id="ed-book" ${item.book ? "checked" : ""}><span>This is a book I want to read<small>Done becomes "I've read it", and counts toward what you like rather than as a recent read.</small></span></label>
@@ -2740,7 +2745,8 @@ function openEdit(id) {
       const t = (val("text") || "").trim();
       next.title = (val("title") || "").trim().slice(0, 140) || cur.title;
       next.text = t || cur.text;
-      next.school = { ...cur.school, body: t || cur.school.body, overlay: (val("overlay") || "").trim().slice(0, 60), date: /^\d{4}-\d{2}-\d{2}$/.test(val("sdate") || "") ? val("sdate") : null };
+      next.school = { ...cur.school, body: t || cur.school.body, overlay: (val("overlay") || "").trim().slice(0, 60), date: /^\d{4}-\d{2}-\d{2}$/.test(val("sdate") || "") ? val("sdate") : null,
+        type: wrap.querySelector("[data-stype][aria-pressed='true']")?.dataset.stype || cur.school.type || "info" };
     } else if (words) {
       const t = (val("text") || "").trim();
       if (!t) { $("#ed-st", wrap).textContent = "It can't be empty."; $("#ed-st", wrap).classList.add("err"); return; }
@@ -2794,6 +2800,9 @@ function openEdit(id) {
     render();
     toast(msg);
   };
+  wrap.querySelectorAll("[data-stype]").forEach((b) => b.addEventListener("click", () => {
+    wrap.querySelectorAll("[data-stype]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+  }));
   $("#ed-save", wrap).addEventListener("click", save);
   wrap.querySelectorAll("input").forEach((i) => i.addEventListener("keydown", (e) => { if (e.key === "Enter") save(); }));
   $("#ed-guess", wrap)?.addEventListener("click", (e) => {
