@@ -342,3 +342,15 @@ test("a newsletter's attachments go to Claude as a document and a picture, and p
   assert.equal(out.posts[0].source, "Flyer.pdf");
   assert.equal(out.posts[1].source, "");
 });
+
+test("school posts come back labeled Action, Decision or Info", async () => {
+  const { schoolPosts } = await import("../src/ai.js");
+  const sent = stubApi({ school: "MGMS", posts: [
+    { type: "action", headline: "Permission slip due Friday", body: "Sign and return.", tags: [] },
+    { type: "decision", headline: "Yearbook orders open", body: "$35 until Nov 15.", tags: [] },
+    { type: "info", headline: "Picture day recap", body: "Proofs are out.", tags: [] },
+    { type: "urgent!", headline: "Odd one", body: "x", tags: [] }] });
+  const out = await schoolPosts({ text: "newsletter", about: "8th grade" });
+  assert.deepEqual(out.posts.map((p) => p.type), ["action", "decision", "info", "info"]);
+  assert.match(promptOf(sent[0]), /"type": "action" \| "decision" \| "info"/);
+});

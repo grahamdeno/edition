@@ -751,6 +751,7 @@ export async function schoolPosts({ text, about, school = "", today = new Date()
     "Return JSON: {",
     '"school": string (the school\'s short name, e.g. "Myrtle Grove Middle"),',
     '"posts": array of up to 12 {',
+    '  "type": "action" | "decision" | "info" (action: the family has to do something, like sign, pay, bring, register or show up; decision: they have a choice to make, like whether to sign up, attend or buy; info: good to know, nothing to do),',
     '  "headline": string (a catchy line a parent would stop scrolling for, max 70 chars; specific, no clickbait, no emoji),',
     '  "body": string (1 to 3 short sentences, max 300 chars, written like a lively school social post: the details of this one piece; at most one exclamation mark; no emoji, no hashtags),',
     '  "date": "YYYY-MM-DD" or null (the day it happens or is due),',
@@ -776,6 +777,7 @@ export async function schoolPosts({ text, about, school = "", today = new Date()
     date: /^\d{4}-\d{2}-\d{2}$/.test(p?.date || "") ? p.date : null,
     tags: cleanTags(p?.tags),
     query: clip(String(p?.photo_query || "").replace(/["']/g, ""), 60),
+    type: ["action", "decision", "info"].includes(p?.type) ? p.type : "info",
     source: p?.source && p.source !== "email" && docs.some((f) => f.name === p.source) ? p.source : "",
   })).filter((p) => p.headline || p.body);
   return { school: clip(out.school, 60), posts };
