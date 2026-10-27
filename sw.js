@@ -4,7 +4,7 @@
  * Bump VERSION with each release so phones pick up the new shell.
  */
 
-const VERSION = "4.8.1";
+const VERSION = "4.9.0";
 const CACHE = `edition-${VERSION}`;
 const SHELL = [
   "./",
@@ -20,6 +20,7 @@ const SHELL = [
   "src/icons.js",
   "src/visuals.js",
   "src/push.js",
+  "src/calendar.js",
   "src/feel.js",
   "src/problems.js",
   "icons/icon-192.png",

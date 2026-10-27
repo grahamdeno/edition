@@ -8,6 +8,8 @@
  *                       readable text, for a summary
  *   GET  /image?url=    a picture from another site, passed through so the
  *                       app may read its pixels (to find its subject)
+ *   GET  /ical?url=     your calendar's private iCal file (calendar servers
+ *                       don't let web pages read them directly); not stored
  *   GET  /push/key      the public key phones subscribe to notifications with
  *   POST /push/test     send a test notification to a subscription now
  *   POST /remind        keep a reminder: { id, token, at, title, body, url, sub }
@@ -61,6 +63,7 @@ export default {
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
     const { pathname, searchParams } = new URL(request.url);
     if (request.method === "GET" && pathname === "/preview") return preview(searchParams.get("url"), cors, searchParams.get("text") === "1");
+    if (request.method === "GET" && pathname === "/ical") return ical(searchParams.get("url"), cors);
     if (request.method === "GET" && pathname === "/image") return image(searchParams.get("url"), cors);
     if (pathname === "/push/key" || pathname === "/push/test" || pathname.startsWith("/remind")) return pushRoute(request, env, pathname, searchParams, cors);
     if (request.method === "GET" && pathname === "/photo") return photo(searchParams.get("q"), cors);
@@ -251,6 +254,21 @@ async function photo(q, cors) {
   }
   const data = await res.json().catch(() => ({}));
   return out(200, { photos: pickPhotos(data.results || []) });
+}
+
+/** Pass a calendar file through. Calendar files only (they start BEGIN:VCALENDAR), up to 5 MB, never cached or kept. */
+export async function ical(target, cors) {
+  let u;
+  try { u = new URL(String(target || "").replace(/^webcals?:\/\//i, "https://")); } catch { return json(400, "Not a calendar address.", cors); }
+  if (!/^https?:$/.test(u.protocol) || PRIVATE_HOST.test(u.hostname)) return json(400, "Not a calendar address.", cors);
+  let res;
+  try {
+    res = await fetch(u.href, { redirect: "follow", headers: { "user-agent": "ShoeboxRelay/1.0", accept: "text/calendar,*/*" } });
+  } catch { return json(502, "Couldn't reach the calendar.", cors); }
+  if (!res.ok) return json(res.status === 404 || res.status === 401 || res.status === 403 ? 404 : 502, `The calendar server said ${res.status}. Check the address.`, cors);
+  const text = await res.text();
+  if (text.length > 5e6 || !/^\s*BEGIN:VCALENDAR/i.test(text)) return json(415, "That address isn't a calendar file.", cors);
+  return new Response(text, { status: 200, headers: { ...cors, "content-type": "text/calendar; charset=utf-8", "cache-control": "private, no-store" } });
 }
 
 /** Pass a picture through with CORS headers. Pictures only, up to 8 MB. */

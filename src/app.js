@@ -27,6 +27,7 @@ import {
 } from "./model.js";
 import * as db from "./db.js";
 import * as push from "./push.js";
+import { parseIcs, eventsOn } from "./calendar.js";
 import { captureText, captureFile, captureTransfer, readClipboard, captureShares } from "./capture.js";
 import { sampleItems, SAMPLES_VERSION } from "./samples.js";
 import * as ai from "./ai.js";
@@ -35,7 +36,7 @@ import { I, LOGO } from "./icons.js";
 import { topicColor, dominantColor, tintInks, focusOf } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "4.8.1";
+export const VERSION = "4.9.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 
@@ -147,6 +148,8 @@ async function boot() {
   picturePending();
   enrichPending();
   registerWorker();
+  refreshCalendar();
+  setInterval(() => { if (document.visibilityState === "visible") refreshCalendar(); }, 15 * 60e3);
 }
 
 /* Appearance: Match phone, Light or Dark. Kept on this phone; applied before the first paint by index.html. */
@@ -889,11 +892,97 @@ function sectionHead(title, note = "") {
 
 function todayHtml() {
   const s = todaySections();
-  let h = stripHtml(s);
+  let h = stripHtml(s) + calendarHtml();
   if (s.fresh.length) h += sectionHead("New", `${s.fresh.filter(isOpen).length || "All"} to sort`) + s.fresh.map((i) => postHtml(i)).join("");
   if (s.six.length) h += sectionHead("Today's six", `${s.six.filter(isOpen).length} of ${s.six.length} left`) + s.six.map((i) => postHtml(i)).join("");
   if (s.sugg.length) h += sectionHead("Top stories") + s.sugg.map((i) => postHtml(i)).join("");
   return h + endHtml(s);
+}
+
+/* ================= Today's calendar =================
+ * Your calendar's events for today, as pages at the top of Today. They come
+ * from the calendar's private address (Settings › Calendar), through your
+ * relay; they're never saved as items, so there's nothing to keep, let go or
+ * remove, and tomorrow they're gone. Read again every 15 minutes while open.
+ */
+
+const CAL_KEY = "edition.calendars", CAL_CACHE = "edition.calCache";
+const calUrls = () => { try { return JSON.parse(localStorage.getItem(CAL_KEY) || "[]"); } catch { return []; } };
+const setCalUrls = (list) => { try { localStorage.setItem(CAL_KEY, JSON.stringify(list)); localStorage.removeItem(CAL_CACHE); } catch { /* private mode */ } };
+
+function calCache() {
+  try {
+    const c = JSON.parse(localStorage.getItem(CAL_CACHE) || "null");
+    return c && c.day === dayKey() ? c : null; // yesterday's events go away by themselves
+  } catch { return null; }
+}
+
+let calLoading = false;
+/** Read today's events from every calendar address. Keeps the last good read if offline. */
+async function loadCalendar({ force = false } = {}) {
+  const urls = calUrls();
+  if (!urls.length || !ai.relayBase() || calLoading) return calCache();
+  const have = calCache();
+  if (!force && have && Date.now() - have.at < 15 * 60e3) return have;
+  calLoading = true;
+  try {
+    const dayStart = startOfToday();
+    const events = [], errors = [];
+    for (const url of urls) {
+      try {
+        const res = await withTimeout(fetch(`${ai.relayBase()}/ical?url=${encodeURIComponent(url)}`), 20000);
+        if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d?.error?.message || `The relay said ${res.status}.`); }
+        events.push(...eventsOn(parseIcs(await res.text()), dayStart));
+      } catch (e) { errors.push(e.message); noteError(e, { quiet: true, where: "calendar" }); }
+    }
+    if (errors.length === urls.length && have) return have;
+    const seen = new Set();
+    const list = events.sort((a, b) => (b.allDay - a.allDay) || a.start - b.start)
+      .filter((e) => { const k = `${e.uid}|${e.start}`; if (seen.has(k)) return false; seen.add(k); return true; });
+    const c = { day: dayKey(), at: Date.now(), events: list, errors };
+    try { localStorage.setItem(CAL_CACHE, JSON.stringify(c)); } catch { /* full */ }
+    return c;
+  } finally {
+    calLoading = false;
+  }
+}
+
+function startOfToday() { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); }
+
+const clock = (ts) => new Date(ts).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }).replace(":00", "");
+function eventWhen(e) {
+  if (e.allDay) return "All day";
+  if (e.end <= e.start) return clock(e.start);
+  const a = clock(e.start), b = clock(e.end);
+  const am = (t) => / AM$/.test(t), pm = (t) => / PM$/.test(t);
+  return `${(am(a) && am(b)) || (pm(a) && pm(b)) ? a.replace(/ [AP]M$/, "") : a} – ${b}`;
+}
+
+function calendarHtml() {
+  const c = calCache();
+  if (!c || !c.events.length) return "";
+  const now = Date.now();
+  const left = c.events.filter((e) => e.allDay || e.end > now).length;
+  return sectionHead("On your calendar", left ? `${left} still to come` : "All done") + c.events.map((e) => {
+    const live = !e.allDay && e.start <= now && e.end > now, past = !e.allDay && (e.end > e.start ? e.end : e.start + 1) <= now;
+    const notes = e.notes ? e.notes.replace(/\s+/g, " ").slice(0, 220) + (e.notes.length > 220 ? "…" : "") : "";
+    return `<article class="post event${past ? " past" : ""}" aria-label="${esc(eventWhen(e))}: ${esc(e.title)}">
+      <div class="rail"><span class="av av-cal" aria-hidden="true">${I.cal}</span></div>
+      <div class="main">
+        <div class="meta"><span class="who">${esc(e.calendar || "Calendar")},</span> <span class="when">${esc(eventWhen(e))}</span>${live ? '<span class="tag now">Now</span>' : past ? '<span class="tag">Ended</span>' : ""}</div>
+        <p class="ev-title">${esc(e.title)}</p>
+        ${e.location ? `<p class="ev-place">${I.pin}<span>${esc(e.location)}</span></p>` : ""}
+        ${notes ? `<p class="ev-notes">${esc(notes)}</p>` : ""}
+      </div>
+    </article>`;
+  }).join("");
+}
+
+async function refreshCalendar(opts) {
+  if (!calUrls().length) return;
+  const before = JSON.stringify(calCache()?.events || []);
+  const c = await loadCalendar(opts);
+  if (JSON.stringify(c?.events || []) !== before && state.tab === "today" && !state.reader && !$(".sheet-wrap")) render({ top: false });
 }
 
 /*
@@ -2327,6 +2416,31 @@ async function applyCapPicture(item) {
 
 /* ================= Settings (sheet) ================= */
 
+function bindCalendarSettings(wrap) {
+  const st = $("#set-cal-st", wrap);
+  const say = (msg, err) => { st.textContent = msg; st.classList.toggle("err", !!err); };
+  $("#set-cal-save", wrap).addEventListener("click", async () => {
+    const urls = [...new Set($("#set-cal", wrap).value.split(/\s+/).map((u) => u.trim()).filter(Boolean)
+      .map((u) => u.replace(/^webcals?:\/\//i, "https://")))].filter((u) => /^https:\/\//i.test(u)).slice(0, 6);
+    setCalUrls(urls);
+    $("#set-cal", wrap).value = urls.join("\n");
+    if (!urls.length) { say("Nothing saved. Paste a calendar address that starts with https:// or webcal://.", true); return; }
+    if (!ai.relayBase()) { say("Saved. Add your relay address (Relay, above) so Shoebox can read it.", true); return; }
+    say("Reading…");
+    const c = await loadCalendar({ force: true });
+    if (!c || c.errors.length === urls.length) { say((c && c.errors[0]) || "Couldn't read the calendar.", true); return; }
+    const n = c.events.length;
+    say(`${n ? `${n} event${n === 1 ? "" : "s"} today` : "Works. Nothing on it today"}${c.errors.length ? `. One address failed: ${c.errors[0]}` : "."}`, !!c.errors.length);
+    render({ top: false });
+  });
+  $("#set-cal-clear", wrap).addEventListener("click", () => {
+    setCalUrls([]);
+    $("#set-cal", wrap).value = "";
+    say("Removed. Your calendar no longer shows on Today.");
+    render({ top: false });
+  });
+}
+
 function bindPushSettings(wrap) {
   const say = (el, msg, err) => { el.textContent = msg; el.classList.toggle("err", !!err); };
   const st = $("#set-push-st", wrap), onBtn = $("#set-push-on", wrap), testBtn = $("#set-push-test", wrap);
@@ -2411,6 +2525,17 @@ function openSettings() {
       <p class="note">When something you set aside comes back, at 9:00. Needs the relay${push.needsHomeScreen() ? "; on iPhone, open Shoebox from your Home Screen" : ""}.</p>
     </details>
     <details class="group">
+      <summary><span>Calendar</span><span class="sv">${calUrls().length ? "On" : "Off"}</span></summary>
+      <div class="field"><label for="set-cal">Calendar addresses <span class="hint">(one per line)</span></label>
+        <textarea id="set-cal" rows="3" autocapitalize="off" autocomplete="off" spellcheck="false" placeholder="https://calendar.google.com/calendar/ical/…/basic.ics">${esc(calUrls().join("\n"))}</textarea></div>
+      <div class="two">
+        <button class="btn primary" type="button" id="set-cal-save">Save and test</button>
+        <button class="btn" type="button" id="set-cal-clear">Remove</button>
+      </div>
+      <span class="st" id="set-cal-st" role="status"></span>
+      <p class="note">Today's events show at the top of Today and leave at midnight. Google: calendar settings › Secret address in iCal format. iPhone: Calendar › calendar info › Public Calendar › Share Link. Needs the relay.</p>
+    </details>
+    <details class="group">
       <summary><span>Today</span></summary>
       <div class="two">
         <button class="btn" type="button" id="set-rebuild">Rebuild today</button>
@@ -2479,6 +2604,7 @@ function openSettings() {
   $("#set-pr-copy", wrap).addEventListener("click", copyDiagnostics);
   $("#set-pr-clear", wrap).addEventListener("click", () => { clearProblems(); refreshProblems(wrap); });
   bindPushSettings(wrap);
+  bindCalendarSettings(wrap);
   const pSt = $("#set-pplx-st", wrap);
   $("#set-pplx-save", wrap).addEventListener("click", async () => {
     ai.settings.setPplxKey($("#set-pplx", wrap).value.trim());
@@ -3006,6 +3132,7 @@ function wireGlobal() {
     const day = state.edition && state.edition.date;
     await importShares();
     const woke = await wakeDue();
+    refreshCalendar();
     await ensureEdition();
     if (woke || state.items.length !== before || (state.edition && state.edition.date !== day)) {
       if (state.edition && state.edition.date !== day) state.recent.clear();

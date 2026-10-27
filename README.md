@@ -42,6 +42,8 @@ When everything is settled, the end of Today shows what you cleared as a collage
 
 **Set aside until a date.** In Add (or ⋯ › Edit later), *Show it* offers Now, Tomorrow, This weekend, Next week, In a month or Pick a date. A set-aside item is out of sight (All saves › Set aside lists them, with Bring back now) and comes back as new at the top of Today that morning, marked *Back today*. **Remind me that morning** sends a notification at 9:00 through your relay (Settings › Notifications), or, with notifications off, hands your phone a calendar file with a 9:00 alert. Tapping the notification opens Shoebox on that post.
 
+**Your calendar.** Settings › Calendar takes your calendar's private iCal address (Google: Secret address in iCal format; iPhone: Public Calendar share link; Outlook: published ICS link), one per line. Today's events show at the top of Today under *On your calendar*: all-day first, then by time, with *Now* and *Ended*. They're read through the relay, never saved as items, can't be kept or removed, and are gone at midnight. Repeating events, time zones, skipped and moved dates are handled on the phone (`src/calendar.js`).
+
 **Your photo.** Settings › Your photo sets the face on your posts. It stays on the phone.
 
 **Appearance.** Settings › Appearance: Match phone (default), Light or Dark. The choice is applied before the first paint, so the app never flashes the other look.
@@ -95,6 +97,7 @@ src/icons.js          the icon set and the Shoebox mark (SVG only, no text glyph
 src/visuals.js        topic colours and picture tints, worked out on the phone
 src/feel.js           soft click on verdicts and saves
 src/push.js           notifications through the relay: subscribe, remind, cancel
+src/calendar.js       reads iCal files: today's events, repeats, time zones
 relay/                Cloudflare Worker: page pictures and text, Perplexity forwarding
 icons/                app icons, favicon and logo.svg
 sw.js                 offline shell and share target
