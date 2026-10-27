@@ -61,6 +61,7 @@ targets:
         LSSupportsOpeningDocumentsInPlace: true
         NSCalendarsFullAccessUsageDescription: Shoebox shows today's events at the top of your morning. They stay on your iPhone.
         NSLocationWhenInUseUsageDescription: Shoebox uses your rough location for the morning weather.
+        NSAppleMusicUsageDescription: Shoebox picks a song from your library each morning, one you haven't played in a while. It stays on your iPhone.
         CFBundleURLTypes:
           - CFBundleURLName: com.grahamdeno.shoebox
             CFBundleURLSchemes: [shoebox]

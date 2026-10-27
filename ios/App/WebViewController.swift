@@ -4,6 +4,7 @@ import UserNotifications
 import WidgetKit
 import EventKit
 import CoreLocation
+import MediaPlayer
 
 /// Shows Shoebox and answers what it asks of the phone.
 final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler, WKDownloadDelegate {
@@ -24,7 +25,7 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
         config.limitsNavigationsToAppBoundDomains = true
         let content = WKUserContentController()
         content.add(WeakHandler(self), name: "shoebox")
-        content.addUserScript(WKUserScript(source: "window.shoeboxNative = { version: 2, platform: 'ios', features: ['calendar', 'location', 'backup'] };",
+        content.addUserScript(WKUserScript(source: "window.shoeboxNative = { version: 2, platform: 'ios', features: ['calendar', 'location', 'backup', 'music'] };",
                                            injectionTime: .atDocumentStart, forMainFrameOnly: true))
         config.userContentController = content
 
@@ -109,6 +110,8 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
             location(body)
         case "backup":
             backup(body)
+        case "music":
+            music(body)
         case "haptic":
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
         default:
@@ -163,6 +166,56 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
             reply(id, ["ok": false, "status": "notAsked"])
         default:
             reply(id, ["ok": false, "status": "denied"])
+        }
+    }
+
+    /// Song of the day, from the music library on this iPhone: one of the songs played least recently
+    /// (a different one each day, from the oldest 30). Nothing leaves the phone. "play" plays it in Music.
+    /// Asks for access only when Shoebox says the person tapped to turn it on.
+    private func music(_ body: [String: Any]) {
+        guard let id = body["id"] as? String else { return }
+        let op = body["op"] as? String ?? "pick"
+        let go = { [weak self] in
+            guard let self else { return }
+            if op == "play" {
+                guard let pid = (body["song"] as? String).flatMap({ UInt64($0) }) else { self.reply(id, ["ok": false, "status": "missing"]); return }
+                let q = MPMediaQuery.songs()
+                q.addFilterPredicate(MPMediaPropertyPredicate(value: NSNumber(value: pid), forProperty: MPMediaItemPropertyPersistentID))
+                guard let items = q.items, !items.isEmpty else { self.reply(id, ["ok": false, "status": "missing"]); return }
+                DispatchQueue.main.async {
+                    let player = MPMusicPlayerController.systemMusicPlayer
+                    player.setQueue(with: MPMediaItemCollection(items: items))
+                    player.play()
+                    self.reply(id, ["ok": true])
+                }
+                return
+            }
+            DispatchQueue.global(qos: .userInitiated).async {
+                let played = (MPMediaQuery.songs().items ?? [])
+                    .filter { $0.playCount > 0 && $0.lastPlayedDate != nil && $0.mediaType.contains(.music) }
+                    .sorted { ($0.lastPlayedDate ?? .distantPast) < ($1.lastPlayedDate ?? .distantPast) }
+                    .prefix(30)
+                guard !played.isEmpty else { self.reply(id, ["ok": false, "status": "empty"]); return }
+                let seed = body["seed"] as? Int ?? 0
+                let song = played[played.startIndex + (abs(seed) % played.count)]
+                var out: [String: Any] = ["ok": true, "id": String(song.persistentID), "title": song.title ?? "", "artist": song.artist ?? "",
+                                          "album": song.albumTitle ?? "", "plays": song.playCount,
+                                          "lastPlayed": (song.lastPlayedDate?.timeIntervalSince1970 ?? 0) * 1000]
+                if let year = song.releaseDate.map({ Calendar.current.component(.year, from: $0) }) { out["year"] = String(year) }
+                if let art = song.artwork?.image(at: CGSize(width: 300, height: 300)), let jpg = art.jpegData(compressionQuality: 0.75) {
+                    out["art"] = jpg.base64EncodedString()
+                }
+                self.reply(id, out)
+            }
+        }
+        switch MPMediaLibrary.authorizationStatus() {
+        case .authorized: go()
+        case .notDetermined:
+            guard body["ask"] as? Bool == true else { reply(id, ["ok": false, "status": "notAsked"]); return }
+            MPMediaLibrary.requestAuthorization { status in
+                if status == .authorized { go() } else { self.reply(id, ["ok": false, "status": "denied"]) }
+            }
+        default: reply(id, ["ok": false, "status": "denied"])
         }
     }
 
