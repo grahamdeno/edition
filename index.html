@@ -21,7 +21,7 @@
   <link rel="stylesheet" href="styles.css">
   <script>
     // Appearance chosen in Settings, applied before the first paint so the screen never flashes the other look.
-    try { var t = localStorage.getItem("edition.theme"); if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t); } catch (e) {}
+    try { var t = localStorage.getItem("edition.theme"); if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t); if (localStorage.getItem("edition.palette") === "plain") document.documentElement.setAttribute("data-palette", "plain"); } catch (e) {}
   </script>
 </head>
 <body>

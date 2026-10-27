@@ -184,3 +184,12 @@ export async function importJson(text) {
   }
   return { items: parts.items.length, files: parts.files.length, settings: Object.keys(parts.settings).length };
 }
+
+/** Delete the whole database: every save, photo and setting kept here. */
+export async function eraseAll() {
+  if (dbPromise) { try { (await dbPromise).close(); } catch { /* already closed */ } dbPromise = null; }
+  await new Promise((resolve) => {
+    const req = indexedDB.deleteDatabase(DB_NAME);
+    req.onsuccess = req.onerror = req.onblocked = () => resolve();
+  });
+}

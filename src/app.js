@@ -39,7 +39,7 @@ import { problems, noteError as logError, onFirstProblem, clearProblems, formatP
 import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone, mixStories, followOrder } from "./onboard.js";
 
-export const VERSION = "4.37.0";
+export const VERSION = "4.38.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -197,6 +197,49 @@ async function boot() {
   setInterval(() => { if (document.visibilityState === "visible") checkInbox(); }, 5 * 60e3);
 }
 
+/* Colors: Grape soda (the default) or Plain, a quiet paper-and-ink look. Applied before the first paint by index.html. */
+const PALETTE_KEY = "edition.palette";
+function paletteChoice() { try { return localStorage.getItem(PALETTE_KEY) === "plain" ? "plain" : "grape"; } catch { return "grape"; } }
+function setPalette(p) {
+  try { if (p === "plain") localStorage.setItem(PALETTE_KEY, "plain"); else localStorage.removeItem(PALETTE_KEY); } catch { /* storage blocked */ }
+  if (p === "plain") document.documentElement.setAttribute("data-palette", "plain"); else document.documentElement.removeAttribute("data-palette");
+  track(`palette_${p}`);
+  applyTheme();
+}
+
+/*
+ * Delete all my data: the relay's copy first (it needs this phone's keys),
+ * then reminders, then everything on the phone. The page starts over empty.
+ */
+function confirmErase() {
+  const wrap = sheet(`
+    <div class="sheet-head"><h2>Delete all your data?</h2><button class="x" type="button" data-close aria-label="Close">${I.close}</button></div>
+    <p class="note">Every save, photo, note and setting on this ${NATIVE ? "iPhone" : "device"} goes, along with your Shoebox email address and any mail waiting for it. This can't be undone.</p>
+    ${NATIVE ? `<p class="note">Daily backups already in Files or iCloud Drive stay. Delete them in the Files app if you want them gone too.</p>` : ""}
+    <span class="st" id="erase-st" role="status"></span>
+    <div class="sheet-foot two"><button class="btn" type="button" id="erase-backup">Back up first</button><button class="btn erase" type="button" id="erase-go">Delete everything</button></div>`, { label: "Delete all your data" });
+  $("#erase-backup", wrap).addEventListener("click", () => openSettings("backup"));
+  $("#erase-go", wrap).addEventListener("click", async (e) => {
+    e.target.disabled = true;
+    $("#erase-st", wrap).textContent = "Deleting…";
+    track("erase");
+    const base = ai.relayBase();
+    const got = (k) => { try { return localStorage.getItem(k) || ""; } catch { return ""; } };
+    if (base) {
+      await withTimeout(fetch(`${base}/me/delete`, { method: "POST", headers: { "x-inbox-key": got("edition.inboxKey"), "x-shoebox-device": got("edition.aiDevice"), "x-shoebox-token": got("edition.aiToken") } }), 15000).catch(() => {});
+    }
+    for (const i of state.items) {
+      if (!i.reminder) continue;
+      if (i.reminder.native) toNative({ type: "cancel", id: i.reminder.id }); else await push.cancel(i.reminder).catch(() => {});
+    }
+    await push.turnOff().catch(() => {});
+    await db.eraseAll();
+    try { localStorage.clear(); sessionStorage.clear(); } catch { /* blocked */ }
+    try { for (const k of await caches.keys()) await caches.delete(k); } catch { /* no caches */ }
+    location.replace(location.href.split("#")[0]);
+  });
+}
+
 /* Appearance: Match phone, Light or Dark. Kept on this phone; applied before the first paint by index.html. */
 const THEME_KEY = "edition.theme";
 function themeChoice() { try { return localStorage.getItem(THEME_KEY) || "system"; } catch { return "system"; } }
@@ -210,7 +253,9 @@ function applyTheme() {
   else document.documentElement.setAttribute("data-theme", t);
   // The status bar and browser chrome follow the chosen look too.
   const dark = t === "dark" || (t === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
-  document.querySelectorAll('meta[name="theme-color"]').forEach((m) => { m.removeAttribute("media"); m.setAttribute("content", dark ? "#1B1033" : "#FBF8FF"); });
+  const plain = paletteChoice() === "plain";
+  const bar = plain ? (dark ? "#161514" : "#FAF9F6") : (dark ? "#1B1033" : "#FBF8FF");
+  document.querySelectorAll('meta[name="theme-color"]').forEach((m) => { m.removeAttribute("media"); m.setAttribute("content", bar); });
 }
 matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => { if (themeChoice() === "system") applyTheme(); });
 applyTheme();
@@ -4056,6 +4101,8 @@ function openSettings(panel = "", { fromCard = false } = {}) {
           <input type="file" id="set-me-file" accept="image/*" hidden></div>
         <div class="row"><span class="rk">Look</span>
           <div class="seg" role="group" aria-label="Look">${["system", "light", "dark"].map((t) => `<button type="button" data-look="${t}" aria-pressed="${themeChoice() === t}">${{ system: "Phone", light: "Light", dark: "Dark" }[t]}</button>`).join("")}</div></div>
+        <div class="row"><span class="rk">Colors</span>
+          <div class="seg" role="group" aria-label="Colors">${["grape", "plain"].map((t) => `<button type="button" data-palette="${t}" aria-pressed="${paletteChoice() === t}">${{ grape: "Grape soda", plain: "Plain" }[t]}</button>`).join("")}</div></div>
         <div class="row"><span class="rk">Sounds</span>
           <div class="seg" role="group" aria-label="Sounds">
             <button type="button" data-sound="1" aria-pressed="${soundOn()}">On</button><button type="button" data-sound="0" aria-pressed="${!soundOn()}">Off</button></div></div>
@@ -4210,7 +4257,10 @@ function openSettings(panel = "", { fromCard = false } = {}) {
         <div class="seg" role="group" aria-label="Anonymous usage stats"><button type="button" data-stats="1" aria-pressed="${statsOn()}">On</button><button type="button" data-stats="0" aria-pressed="${!statsOn()}">Off</button></div></div>
       <p class="note">Once a day: counts only (how many saves, finished mornings, kinds of problem), never what you saved. It helps make Shoebox better.</p>
       </div>
-      <div class="group help-links"><a class="row" href="privacy" target="_blank" rel="noopener"><span class="rk">Read the privacy policy</span>${I.next}</a></div>` },
+      <div class="group help-links"><a class="row" href="privacy" target="_blank" rel="noopener"><span class="rk">Read the privacy policy</span>${I.next}</a></div>
+      <div class="group"><h3 class="sub">Delete all my data</h3>
+        <p class="note">Removes every save, photo, note and setting from this ${NATIVE ? "iPhone" : "device"}, and from Shoebox's server your email address, any mail waiting there and this phone's AI sign-up. It can't be undone.</p>
+        <button class="btn erase" type="button" id="set-erase">Delete all my data</button></div>` },
     features: { title: "Things Shoebox can do", value: "", body: featuresBody() },
     help: { title: "Help and feedback", value: problems.length ? `${problems.length} logged` : "", body: `
       <div class="group help-links">
@@ -4412,6 +4462,11 @@ function openSettings(panel = "", { fromCard = false } = {}) {
     wrap.querySelectorAll("[data-calnative]").forEach((x) => x.setAttribute("aria-pressed", String((x.dataset.calnative === "1") === calNative())));
   }));
   if ($("#set-me-choose", wrap)) bindAvatarSettings(wrap);
+  $("#set-erase", wrap)?.addEventListener("click", () => confirmErase());
+  wrap.querySelectorAll("[data-palette]").forEach((b) => b.addEventListener("click", () => {
+    setPalette(b.dataset.palette);
+    wrap.querySelectorAll("[data-palette]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+  }));
   wrap.querySelectorAll("[data-look]").forEach((b) => b.addEventListener("click", () => {
     setThemeChoice(b.dataset.look);
     wrap.querySelectorAll("[data-look]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));

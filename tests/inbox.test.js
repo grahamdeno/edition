@@ -167,3 +167,25 @@ test("before personal addresses are on, nothing changes", async () => {
   assert.equal((await call("b".repeat(30))).status, 403);
   assert.equal(await mailBox(env, "graham-abcd@tangomike.app"), null);
 });
+
+test("delete my data clears this phone's address, mail and AI sign-up, and nobody else's", async () => {
+  const env = { SHOEBOX: fakeKv(), EMAIL_ALIASES: "1", EMAIL_DOMAIN: "tangomike.app", ANTHROPIC_API_KEY: "k" };
+  const origin = "https://shoebox.tangomike.app";
+  const mine = "m".repeat(30), theirs = "t".repeat(30);
+  const post = (path, headers, body) => relay.fetch(new Request(`https://relay.test${path}`, { method: "POST", headers: { origin, "content-type": "application/json", ...headers }, body: body && JSON.stringify(body) }), env);
+  const a = await (await post("/inbox/address", { "x-inbox-key": mine }, { name: "me" })).json();
+  const b = await (await post("/inbox/address", { "x-inbox-key": theirs }, { name: "them" })).json();
+  await relay.email({ raw: new Response(raw).body, from: "x@y.z", to: a.address, setReject() {} }, env);
+  await relay.email({ raw: new Response(raw).body, from: "x@y.z", to: b.address, setReject() {} }, env);
+  const reg = await (await post("/ai/register", { "cf-connecting-ip": "9.9.9.9" })).json();
+  const out = await (await post("/me/delete", { "x-inbox-key": mine, "x-shoebox-device": reg.device, "x-shoebox-token": reg.token })).json();
+  assert.equal(out.ai, true);
+  assert.ok(out.mail >= 1);
+  assert.equal(await mailBox(env, a.address), null);
+  assert.ok(await mailBox(env, b.address), "the other phone's address stays");
+  assert.equal(await env.SHOEBOX.get(`aid:${reg.device}`), null);
+  const left = [...env.SHOEBOX.m.keys()].filter((k) => k.startsWith("m:"));
+  assert.equal(left.length, 1, "only the other phone's mail is left");
+  const wrong = await (await post("/me/delete", { "x-shoebox-device": reg.device, "x-shoebox-token": "nope" })).json();
+  assert.equal(wrong.ai, false);
+});

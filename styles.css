@@ -121,6 +121,81 @@
     color-scheme: dark;
 }
 
+/* Plain: a quiet paper-and-ink look, picked in Settings › You › Colors. */
+:root[data-palette="plain"] {
+  --bg: #FAF9F6;
+  --fg: #1C1B19;
+  --muted: #5F5B54;
+  --faint: #6F6A63;
+  --line: #ECE9E3;
+  --line-2: #DEDAD2;
+  --soft: #F0EDE7;
+  --panel: #F5F3EE;
+  --sig: #2E4A7D;
+  --sig-ink: #2E4A7D;
+  --sig-soft: #E8ECF3;
+  --on-sig: #FFFFFF;
+  --gold: #1C1B19;
+  --on-gold: #FAF9F6;
+  --scrim: rgba(28, 27, 25, 0.42);
+  --toast-bg: #1C1B19;
+  --toast-fg: #FAF9F6;
+  --toast-act: #F2C94C;
+  --logo-box: #3A3733;
+  --logo-rim: #1C1B19;
+  --logo-card: #F5E9C8;
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-palette="plain"]:not([data-theme="light"]) {
+  --bg: #161514;
+  --fg: #F2F0EC;
+  --muted: #B3AEA6;
+  --faint: #9A958D;
+  --line: #2A2826;
+  --line-2: #36332F;
+  --soft: #24221F;
+  --panel: #1E1C1A;
+  --sig: #4A6FB3;
+  --sig-ink: #A9C0EA;
+  --sig-soft: #232B3A;
+  --on-sig: #FFFFFF;
+  --gold: #F2F0EC;
+  --on-gold: #161514;
+  --scrim: rgba(0, 0, 0, 0.6);
+  --toast-bg: #F2F0EC;
+  --toast-fg: #161514;
+  --toast-act: #2E4A7D;
+  --logo-box: #4A4640;
+  --logo-rim: #A9C0EA;
+  --logo-card: #2A2826;
+  color-scheme: dark;
+  }
+}
+:root[data-palette="plain"][data-theme="dark"] {
+  --bg: #161514;
+  --fg: #F2F0EC;
+  --muted: #B3AEA6;
+  --faint: #9A958D;
+  --line: #2A2826;
+  --line-2: #36332F;
+  --soft: #24221F;
+  --panel: #1E1C1A;
+  --sig: #4A6FB3;
+  --sig-ink: #A9C0EA;
+  --sig-soft: #232B3A;
+  --on-sig: #FFFFFF;
+  --gold: #F2F0EC;
+  --on-gold: #161514;
+  --scrim: rgba(0, 0, 0, 0.6);
+  --toast-bg: #F2F0EC;
+  --toast-fg: #161514;
+  --toast-act: #2E4A7D;
+  --logo-box: #4A4640;
+  --logo-rim: #A9C0EA;
+  --logo-card: #2A2826;
+  color-scheme: dark;
+}
+
 /* On iPhone, an installed web app gets a blurred fade under the status bar that covers
    whatever is there. Everything pinned to the top starts below it, as in Scales. */
 @media (display-mode: standalone) { :root { --fade: 44px; } }
@@ -946,3 +1021,5 @@ details.adv > summary, .group details.adv > summary, .ag-more summary { min-heig
 .mail-pick span { flex: none; color: var(--muted); font-size: 0.875rem; }
 .mail-uses { margin: 4px 0 10px; padding-left: 1.2em; display: flex; flex-direction: column; gap: 6px; font-size: 0.875rem; color: var(--muted); }
 .mail-uses b { color: var(--fg); }
+.btn.erase { color: var(--warn); border-color: var(--warn); background: transparent; font-weight: 600; }
+.sheet-foot .btn.erase { background: var(--warn); color: #fff; }
