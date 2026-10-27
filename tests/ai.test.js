@@ -65,7 +65,7 @@ test("relay: forwards only Edition's POST /v1/agent with the key, and adds CORS"
 import { enrich, retag, tagItems, vocabLine } from "../src/ai.js";
 
 function stubApi(reply) {
-  const store = { "edition.apiKey": "sk-test" };
+  const store = { "edition.aiConsent": "1", "edition.aiDevice": "dev1", "edition.aiToken": "tok" };
   globalThis.localStorage = { getItem: (k) => store[k] ?? null, setItem: (k, v) => { store[k] = v; }, removeItem: (k) => { delete store[k]; } };
   const sent = [];
   globalThis.fetch = async (url, opts) => {
@@ -153,7 +153,7 @@ test("enrich returns alt text without an 'image of' lead-in", async () => {
 
 test("a card face that comes back as plain text, not JSON, is still used", async () => {
   const { hook } = await import("../src/ai.js");
-  const store = { "edition.apiKey": "sk-test" };
+  const store = { "edition.aiConsent": "1", "edition.aiDevice": "dev1", "edition.aiToken": "tok" };
   globalThis.localStorage = { getItem: (k) => store[k] ?? null, setItem: (k, v) => { store[k] = v; }, removeItem: (k) => { delete store[k]; } };
   globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => ({ content: [{ type: "text", text: "A short read on coastal trails" }] }) });
   assert.equal(await hook({ kind: "link", title: "Trails" }), "A short read on coastal trails");
@@ -164,7 +164,7 @@ test("a card face that comes back as plain text, not JSON, is still used", async
 test("an unreachable API is reported with status 0, so the app stops and retries later", async () => {
   const { hook } = await import("../src/ai.js");
   globalThis.fetch = async () => { throw new TypeError("Load failed"); };
-  await assert.rejects(() => hook({ kind: "link", title: "x" }), (e) => e.status === 0 && /Couldn't reach the API/.test(e.message));
+  await assert.rejects(() => hook({ kind: "link", title: "x" }), (e) => e.status === 0 && /Couldn't reach/.test(e.message));
 });
 
 import { pplxDate, storySearchTool, isRecent, storyBrief, NOT_NEWS } from "../src/ai.js";
@@ -215,4 +215,84 @@ test("Outlook Safe Links unwrap to the real address", () => {
   assert.equal(unwrapLink(safe), "https://myrtlegrovemiddle.givebacks.com/shop/items/0b1c061aa483cd");
   assert.equal(unwrapLink("https://example.com/a"), "https://example.com/a");
   assert.equal(unwrapLink("not a link"), "not a link");
+});
+
+/* ---- AI proxy ---- */
+import { aiCost, checkAiBody } from "../relay/perplexity-relay.js";
+import { migrateAiSettings, settings as aiSettings, DEFAULT_RELAY } from "../src/ai.js";
+
+function memKv() {
+  const m = new Map();
+  return { m, get: async (k, t) => (m.has(k) ? (t === "json" ? JSON.parse(m.get(k)) : m.get(k)) : null), put: async (k, v) => { m.set(k, v); } };
+}
+
+test("AI cost is counted in hundredths of a cent, searches included", () => {
+  assert.equal(aiCost("claude-haiku-5-5", { input_tokens: 3000, output_tokens: 600 }), 6);
+  assert.equal(aiCost("claude-haiku-5-5", { input_tokens: 0, output_tokens: 0, server_tool_use: { web_search_requests: 2 } }), 200);
+  assert.equal(aiCost("claude-sonnet-5-5", { input_tokens: 1e6, output_tokens: 0 }), 20000);
+});
+
+test("the proxy only takes the app's own kind of request", () => {
+  const ok = { model: "claude-haiku-5-5", max_tokens: 600, messages: [{ role: "user", content: "hi" }] };
+  assert.equal(checkAiBody(ok), "");
+  assert.match(checkAiBody({ ...ok, model: "claude-opus-5-5" }), /model/);
+  assert.match(checkAiBody({ ...ok, max_tokens: 64000 }), /max_tokens/);
+  assert.match(checkAiBody({ ...ok, tools: [{ type: "bash_20250124", name: "bash" }] }), /tool/);
+  assert.equal(checkAiBody({ ...ok, tools: [{ type: "web_search_20250305", name: "web_search" }] }), "");
+  assert.match(checkAiBody({ ...ok, stream: true }), /Streaming/);
+});
+
+test("proxy: register, call with the relay's key, charge the budget, stop at the limit", async () => {
+  const kv = memKv();
+  const env = { SHOEBOX: kv, ANTHROPIC_API_KEY: "sk-relay", AI_DEVICE_DAILY_CENTS: "0.1" };
+  const origin = "https://shoebox.tangomike.app";
+  const reg = await relay.fetch(new Request("https://w.test/ai/register", { method: "POST", headers: { origin } }), env);
+  const { device, token } = await reg.json();
+  assert.ok(device && token);
+  const realFetch = globalThis.fetch;
+  let upstreamKey;
+  globalThis.fetch = async (url, opts) => { upstreamKey = opts.headers["x-api-key"]; return new Response(JSON.stringify({ content: [{ type: "text", text: "ok" }], usage: { input_tokens: 10000, output_tokens: 0 } }), { status: 200 }); };
+  const body = JSON.stringify({ model: "claude-haiku-5-5", max_tokens: 10, messages: [{ role: "user", content: "hi" }] });
+  const call = (tok = token) => relay.fetch(new Request("https://w.test/ai/messages", { method: "POST", headers: { origin, "x-shoebox-device": device, "x-shoebox-token": tok }, body }), env);
+  try {
+    assert.equal((await call("wrong")).status, 401);
+    const first = await call();
+    assert.equal(first.status, 200);
+    assert.equal(upstreamKey, "sk-relay");
+    assert.equal((await first.json()).content[0].text, "ok");
+    // 10,000 input tokens on Haiku = 10 hundredths of a cent = the whole 0.1 cent allowance.
+    const second = await call();
+    assert.equal(second.status, 429);
+    env.AI_OWNER_DEVICES = device;
+    assert.equal((await call()).status, 200);
+  } finally { globalThis.fetch = realFetch; }
+});
+
+test("proxy says plainly when the relay has no key yet", async () => {
+  const res = await relay.fetch(new Request("https://w.test/ai/messages", { method: "POST", headers: { origin: "https://shoebox.tangomike.app" }, body: "{}" }), { SHOEBOX: memKv() });
+  assert.equal(res.status, 503);
+});
+
+test("an older Anthropic key counts as having agreed to AI; Perplexity keys are dropped", () => {
+  const store = { "edition.apiKey": "sk-old", "edition.perplexityKey": "pplx" };
+  globalThis.localStorage = { getItem: (k) => store[k] ?? null, setItem: (k, v) => { store[k] = v; }, removeItem: (k) => { delete store[k]; } };
+  migrateAiSettings();
+  assert.equal(aiSettings.enabled(), true);
+  assert.equal(store["edition.perplexityKey"], undefined);
+  assert.equal(aiSettings.relay(), DEFAULT_RELAY);
+});
+
+test("the app falls back to an older key while the relay has no AI, then drops the key once it does", async () => {
+  const { hook } = await import("../src/ai.js");
+  const store = { "edition.aiConsent": "1", "edition.apiKey": "sk-old", "edition.aiDevice": "d", "edition.aiToken": "t" };
+  globalThis.localStorage = { getItem: (k) => store[k] ?? null, setItem: (k, v) => { store[k] = v; }, removeItem: (k) => { delete store[k]; } };
+  const reply = { ok: true, status: 200, json: async () => ({ content: [{ type: "text", text: "A note" }] }) };
+  const urls = [];
+  globalThis.fetch = async (url) => { urls.push(url); return /\/ai\/messages/.test(url) ? { ok: false, status: 503, json: async () => ({ error: { message: "AI isn't set up on the relay yet." } }) } : reply; };
+  assert.equal(await hook({ kind: "link", title: "x" }), "A note");
+  assert.match(urls[1], /api\.anthropic\.com/);
+  assert.equal(store["edition.apiKey"], "sk-old");
+  globalThis.fetch = async () => reply;
+  await hook({ kind: "link", title: "x" });
+  assert.equal(store["edition.apiKey"], undefined);
 });

@@ -630,6 +630,7 @@ details.group[open] { padding-bottom: 14px; }
 .ask .st:empty { display: none; }
 .av-school { display: grid; place-items: center; background: #1F6F5C; color: #fff; font: 600 1.1rem var(--sans); box-shadow: none; flex: none; }
 .ask .av-school { width: 40px; height: 40px; border-radius: 50%; }
+.ask .av-ai { background: var(--sig-ink); font-size: .85rem; }
 .school-head { margin: 2px 0 4px; font: 400 1.6rem/1.15 var(--serif); color: var(--fg); }
 .coming ul { padding-left: 1.1em; }
 .coming b { font-weight: 600; }

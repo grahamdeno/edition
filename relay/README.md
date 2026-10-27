@@ -59,3 +59,12 @@ When this folder changes, copy `perplexity-relay.js` over the one in your `shoeb
 - A reminder is kept only until it's sent (or for a week after its time, if the phone can't be reached). Bring back now, a new date, or Delete cancels it.
 - Free plan limits that matter here: 100,000 requests a day, 1,000 storage writes a day (one per reminder), 5 Cron Triggers (this uses one).
 - If your Perplexity key is ever exposed, rotate it at console.perplexity.ai and paste the new one into Shoebox.
+
+## AI (version 6)
+
+The relay now makes every Claude call with Shoebox's own key, so the app never asks for one.
+
+- Secret `ANTHROPIC_API_KEY` (required for AI).
+- Optional variables: `AI_DEVICE_DAILY_CENTS` (per install per day, default 25), `AI_DAILY_CENTS` (whole relay per day, default 500), `AI_OWNER_DEVICES` (install ids with no per-install limit; the app shows its id in Settings › AI once it has used AI).
+
+Updates deploy on their own from GitHub (`.github/workflows/relay.yml`) once the repo has `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` and the `SHOEBOX_KV_ID` variable.
