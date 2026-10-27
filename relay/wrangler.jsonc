@@ -1,0 +1,10 @@
+{
+  // Shoebox relay. Deploy with the button in README.md, or `npx wrangler deploy` from this folder.
+  "name": "shoebox-relay",
+  "main": "perplexity-relay.js",
+  "compatibility_date": "2026-10-01",
+  // Reminders and the notification key pair. Created for you on deploy.
+  "kv_namespaces": [{ "binding": "SHOEBOX" }],
+  // Sends reminders that are due. Free plans allow five Cron Triggers; this uses one.
+  "triggers": { "crons": ["*/15 * * * *"] }
+}

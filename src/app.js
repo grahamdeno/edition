@@ -26,6 +26,7 @@ import {
   setAside, wakeAside, bringBackNow, asideChoices, fromDateInput, toDateInput, shortDate, reminderIcs,
 } from "./model.js";
 import * as db from "./db.js";
+import * as push from "./push.js";
 import { captureText, captureFile, captureTransfer, readClipboard, captureShares } from "./capture.js";
 import { sampleItems, SAMPLES_VERSION } from "./samples.js";
 import * as ai from "./ai.js";
@@ -34,7 +35,7 @@ import { I, LOGO } from "./icons.js";
 import { topicColor, dominantColor, tintInks, focusOf } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "4.7.0";
+export const VERSION = "4.8.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 
@@ -119,6 +120,7 @@ async function boot() {
   if (migrated) toast(`Brought over ${migrated} saved item${migrated === 1 ? "" : "s"} from the old version.`);
   else if (seeded) toast(`Loaded ${seeded} sample items. Remove them in Settings.`);
   hideSplash();
+  if (state.openId) { jumpTo(state.openId); state.openId = null; }
   wireGlobal();
   picturePending();
   enrichPending();
@@ -186,6 +188,13 @@ function avatarHtml(cls = "") {
 function registerWorker() {
   if (!("serviceWorker" in navigator)) return;
   const hadWorker = !!navigator.serviceWorker.controller;
+  // A tapped notification, while Shoebox is already open.
+  navigator.serviceWorker.addEventListener("message", async (e) => {
+    if (e.data?.type !== "open") return;
+    await wakeDue();
+    render();
+    try { const id = new URL(e.data.url).searchParams.get("open"); if (id) jumpTo(id); } catch { /* no item */ }
+  });
   navigator.serviceWorker.addEventListener("controllerchange", () => {
     if (hadWorker) updateBar();
   });
@@ -370,6 +379,7 @@ async function importFromUrl() {
     const list = await captureText(text, "link");
     if (list.length) { state.items = [...list, ...state.items]; n += list.length; }
   }
+  if (p.get("open")) state.openId = p.get("open");
   if ([...p.keys()].length) history.replaceState(null, "", location.pathname);
   return n;
 }
@@ -1156,7 +1166,7 @@ async function onTimelineClick(e) {
   if ((b = hit("[data-act]"))) { runAct(b.dataset.act, b); return; }
   if ((b = hit("[data-backnow]"))) {
     const cur = byId(b.dataset.backnow);
-    if (cur) { await saveItem(bringBackNow(cur)); tick(true); render({ top: false }); toast("It's back, at the top of Today."); }
+    if (cur) { dropReminder(cur); const back = bringBackNow(cur); delete back.reminder; await saveItem(back); tick(true); render({ top: false }); toast("It's back, at the top of Today."); }
     return;
   }
   if ((b = hit("[data-filter]"))) { state.allFilter = +b.dataset.filter; state.allShown = PAGE; render({ top: false }); return; }
@@ -1651,7 +1661,8 @@ function openEdit(id) {
     const cur = byId(id);
     if (!cur) { closeSheet(); return; }
     // The calendar alert goes first, while this is still the tap.
-    if (edUntil && edUntil !== wasUntil && $("#ed-remind", wrap)?.checked) {
+    const remindMe = edUntil && edUntil !== wasUntil && $("#ed-remind", wrap)?.checked;
+    if (remindMe && !push.enabled()) {
       downloadReminder({ title: val("title") || cur.title, why: val("why") ?? cur.why, url: val("url") ?? cur.url, until: edUntil });
     }
     const next = { ...cur, editedAt: Date.now() };
@@ -1692,6 +1703,7 @@ function openEdit(id) {
     const m = Math.round(+val("minutes"));
     next.minutes = Number.isFinite(m) && m > 0 ? Math.min(m, 600) : cur.minutes;
     let done = next, msg = "Saved.";
+    if (edUntil !== wasUntil) { dropReminder(cur); delete next.reminder; }
     if (edUntil && edUntil !== wasUntil) {
       done = setAside(next, edUntil);
       msg = `Set aside until ${shortDate(edUntil)}.`;
@@ -1701,6 +1713,7 @@ function openEdit(id) {
       }
     } else if (!edUntil && wasUntil) { done = bringBackNow(next); msg = "It's back, at the top of Today."; }
     await saveItem(done);
+    if (remindMe && push.enabled()) scheduleReminder(done);
     tick(true);
     closeSheet();
     render();
@@ -1848,6 +1861,7 @@ async function deleteItem(id) {
     if (item.blobId) await db.blobs.remove(item.blobId);
     if (item.thumbId) await db.blobs.remove(item.thumbId);
     if (item.cover && item.cover.blobId) await db.blobs.remove(item.cover.blobId);
+    dropReminder(item);
   };
   toast("Deleted.", {
     onExpire: purge,
@@ -1873,6 +1887,35 @@ async function wakeDue() {
   return woke.length;
 }
 
+/** Show one post: Today if it's there, else All saves. */
+function jumpTo(id) {
+  const item = byId(id);
+  if (!item) return;
+  if (!todayIds().includes(id)) { state.tab = "all"; state.allFilter = ALL_FILTERS.findIndex((f) => f.id === "all"); state.allQuery = item.title || ""; }
+  else state.tab = "today";
+  render();
+  requestAnimationFrame(() => { const el = document.getElementById("p-" + id); if (el) el.scrollIntoView({ block: "start" }); });
+}
+
+/** Ask the relay to notify this phone at 9:00 on the day. Quiet on failure, with a note. */
+async function scheduleReminder(item) {
+  if (!item || !item.until || !push.enabled()) return;
+  try {
+    const at = new Date(item.until).setHours(9, 0, 0, 0);
+    const body = [item.title || headline(item), item.why].filter(Boolean).join(" · ").slice(0, 200);
+    const r = await push.remind({ id: item.id, at, title: "Back in Shoebox", body, url: `${location.origin}${location.pathname}?open=${encodeURIComponent(item.id)}` });
+    const cur = byId(item.id);
+    if (cur) await saveItem({ ...cur, reminder: r });
+  } catch (e) {
+    noteError(e, { quiet: true, where: "reminder" });
+    toast(`Couldn't set the notification: ${e.message}`);
+  }
+}
+
+function dropReminder(item) {
+  if (item && item.reminder) push.cancel(item.reminder);
+}
+
 const remindOn = () => { try { return localStorage.getItem("edition.remind") !== "0"; } catch { return true; } };
 const setRemind = (on) => { try { localStorage.setItem("edition.remind", on ? "1" : "0"); } catch { /* private mode */ } };
 
@@ -1889,7 +1932,7 @@ function asideHtml(prefix, until) {
           <input type="date" id="${prefix}-aside-date" min="${tomorrow}" value="${custom ? toDateInput(until) : ""}" aria-label="Pick a date"></span>
       </div>
       <label class="check remind" ${until ? "" : "hidden"}><input type="checkbox" id="${prefix}-remind" ${remindOn() ? "checked" : ""}>
-        <span>Remind me that morning<small>Adds a 9:00 alert to your Calendar</small></span></label>
+        <span>Remind me that morning<small>${push.enabled() ? "A notification at 9:00" : "Adds a 9:00 alert to your Calendar"}</small></span></label>
     </div>`;
 }
 
@@ -2107,7 +2150,8 @@ async function saveCapture() {
     return;
   }
   const until = state.capForm.until && state.capForm.until > Date.now() ? state.capForm.until : null;
-  if (until && $("#cap-remind")?.checked) {
+  const remindMe = until && $("#cap-remind")?.checked;
+  if (remindMe && !push.enabled()) {
     const first = stagedDrafts()[0] || {};
     downloadReminder({ title: String(state.capForm.title || first.title || text.split("\n")[0] || "").trim(), why: state.capWhy, url: first.url, until });
   }
@@ -2121,6 +2165,7 @@ async function saveCapture() {
   for (let k = 0; k < out.length; k++) out[k] = await applyCapPicture(out[k]);
   await applyCapFields(out);
   if (until) for (let k = 0; k < out.length; k++) if (out[k]) { out[k] = setAside(out[k], until); await db.items.put(out[k]); }
+  if (remindMe && push.enabled()) Promise.resolve().then(async () => { for (const it of out) await scheduleReminder(it); });
   if (state.capPic?.ownUrl) URL.revokeObjectURL(state.capPic.ownUrl);
   state.capText = "";
   state.capFiles = [];
@@ -2254,6 +2299,40 @@ async function applyCapPicture(item) {
 
 /* ================= Settings (sheet) ================= */
 
+function bindPushSettings(wrap) {
+  const say = (el, msg, err) => { el.textContent = msg; el.classList.toggle("err", !!err); };
+  const st = $("#set-push-st", wrap), onBtn = $("#set-push-on", wrap), testBtn = $("#set-push-test", wrap);
+  const paint = () => {
+    const on = push.enabled();
+    onBtn.textContent = on ? "Turn off" : "Turn on";
+    testBtn.disabled = !on;
+    $("#set-push-sv", wrap).textContent = on ? "On" : "Off";
+  };
+  // Have the relay's key ready, so the tap can ask for permission straight away.
+  if (ai.relayBase() && !push.enabled()) push.prefetchKey().catch(() => {});
+  onBtn.addEventListener("click", async () => {
+    st.classList.remove("err");
+    if (push.enabled()) { await push.turnOff(); paint(); say(st, "Notifications are off. Set-aside reminders go to your Calendar instead."); return; }
+    if (!ai.relayBase()) { say(st, "Add your relay address first (Relay, above).", true); return; }
+    say(st, "Asking…");
+    try {
+      await push.turnOn();
+      paint();
+      say(st, "On. Sending a test…");
+      await push.sendTest();
+      say(st, "On. A test notification is on its way.");
+    } catch (e) {
+      noteError(e, { quiet: true, where: "notifications" });
+      paint();
+      say(st, e.message || "Couldn't turn on notifications.", true);
+    }
+  });
+  testBtn.addEventListener("click", async () => {
+    say(st, "Sending…");
+    try { await push.sendTest(); say(st, "Sent. It should arrive in a few seconds."); } catch (e) { say(st, e.message, true); }
+  });
+}
+
 function openSettings() {
   const c = counts(state.items);
   const wrap = sheet(`
@@ -2282,7 +2361,7 @@ function openSettings() {
       <p class="note">Stays on this phone. Each AI action is billed to your account.</p>
     </details>
     <details class="group">
-      <summary><span>Link pictures</span><span class="sv">${ai.relayBase() ? "On" : "Off"}</span></summary>
+      <summary><span>Relay</span><span class="sv">${ai.relayBase() ? "On" : "Off"}</span></summary>
       <div class="field"><label for="set-relay">Relay address</label>
         <input id="set-relay" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://edition-relay.you.workers.dev" value="${esc(ai.settings.relay())}"></div>
       <div class="field"><label for="set-pplx">Perplexity key <span class="hint">(optional, for discovery)</span></label>
@@ -2292,7 +2371,16 @@ function openSettings() {
         <button class="btn" type="button" id="set-pplx-clear">Remove key</button>
       </div>
       <span class="st" id="set-pplx-st" role="status"></span>
-      <p class="note">Your Cloudflare relay. Setup steps are in the repo's relay folder.</p>
+      <p class="note">Your Cloudflare relay: link pictures, Perplexity and notifications. Setup is one button in the repo's relay folder.</p>
+    </details>
+    <details class="group" id="set-push-g">
+      <summary><span>Notifications</span><span class="sv" id="set-push-sv">${push.enabled() ? "On" : "Off"}</span></summary>
+      <div class="two">
+        <button class="btn primary" type="button" id="set-push-on">${push.enabled() ? "Turn off" : "Turn on"}</button>
+        <button class="btn" type="button" id="set-push-test" ${push.enabled() ? "" : "disabled"}>Send a test</button>
+      </div>
+      <span class="st" id="set-push-st" role="status"></span>
+      <p class="note">When something you set aside comes back, at 9:00. Needs the relay${push.needsHomeScreen() ? "; on iPhone, open Shoebox from your Home Screen" : ""}.</p>
     </details>
     <details class="group">
       <summary><span>Today</span></summary>
@@ -2362,6 +2450,7 @@ function openSettings() {
   refreshProblems(wrap);
   $("#set-pr-copy", wrap).addEventListener("click", copyDiagnostics);
   $("#set-pr-clear", wrap).addEventListener("click", () => { clearProblems(); refreshProblems(wrap); });
+  bindPushSettings(wrap);
   const pSt = $("#set-pplx-st", wrap);
   $("#set-pplx-save", wrap).addEventListener("click", async () => {
     ai.settings.setPplxKey($("#set-pplx", wrap).value.trim());

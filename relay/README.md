@@ -1,21 +1,33 @@
 # Shoebox relay
 
-This Cloudflare Worker does two jobs a web page can't do on its own: it forwards Perplexity calls (Perplexity refuses calls made straight from a web page), and it reads a link's page (its pictures, title and text) so posts can show the page's own picture. It's free on Cloudflare's plan for this volume, holds no secrets (your key stays in Shoebox and passes through), and only answers Shoebox's own address.
+A small Cloudflare Worker that does what a web page can't do on its own:
 
-## Deploy (about five minutes, no tools needed)
+- **Link pictures and text.** Reads a link's page for its photos, title and text (`/preview`), and passes pictures through so the phone can find their subject (`/image`).
+- **Perplexity.** Forwards Top stories calls (Perplexity refuses calls made straight from a web page). Your key stays in Shoebox and passes through.
+- **Notifications.** Keeps your set-aside reminders and sends them to your phone at 9:00 on the day (`/push/*`, `/remind`, and a Cron Trigger every 15 minutes).
 
-1. Sign in at dash.cloudflare.com (a free account is fine).
-2. Go to **Workers & Pages**, then **Create**, then **Create Worker** (or **Start with Hello World**). Name it `edition-relay` and select **Deploy**.
-3. Select **Edit code**. Replace everything in the editor with the contents of `perplexity-relay.js`, then select **Deploy**.
-4. Copy the Worker's address, for example `https://edition-relay.yourname.workers.dev`.
-5. In Shoebox, open Settings. Under Discovery (Perplexity API), paste it into **Relay address**, then select **Save and test**.
+It only answers Shoebox's own address, and it's free: a personal app uses a tiny fraction of Cloudflare's free plan (100,000 requests a day; this uses about a hundred).
+
+## Deploy (one button, about three minutes)
+
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/grahamdeno/edition/tree/main/relay)
+
+1. Tap the button. Sign in to Cloudflare (or create a free account) and connect GitHub when asked.
+2. Keep the name `shoebox-relay`. Cloudflare creates the storage for reminders and the 15-minute schedule for you. Select **Create and deploy**.
+3. When it's done, copy the address it shows, like `https://shoebox-relay.yourname.workers.dev`.
+4. In Shoebox: **Settings › Relay**, paste it into **Relay address**, then **Save and test**.
+5. **Settings › Notifications › Turn on**, and allow notifications. A test arrives in a few seconds. On iPhone, do this in Shoebox opened from your Home Screen.
+
+The button copies this folder into a new repository on your GitHub, and Cloudflare redeploys whenever that repository changes.
+
+## Updating
+
+When this folder changes, copy `perplexity-relay.js` over the one in your `shoebox-relay` repository (or ask Claude to). Cloudflare redeploys on its own. The address stays the same.
 
 ## Notes
 
-- `GET /preview?url=` returns the page's title, description and `images`: its preview picture plus the article's own photos (logos and icons skipped), for the picture picker. `&text=1` also returns the page's readable text, which Claude turns into a fuller summary.
-- `GET /photo?q=` (Openverse photo search) is kept for older versions of the app. Shoebox no longer uses it.
-- `POST /v1/agent` is forwarded to Perplexity. `GET /preview?url=` returns a page's preview image, title and description; it only fetches public http(s) pages. Anything else gets a 404.
-- **Updating:** when this file changes, open the Worker in Cloudflare, Edit code, paste the new version and Deploy. The address stays the same.
-- **Shoebox 4.0 changed this file.** Redeploy it to get the picture picker's full list; the old version still works, with one picture per link.
 - Requests from any address other than `https://grahamdeno.github.io` (or localhost while developing) get a 403. If the app moves, change `ALLOWED_ORIGINS`.
-- If your key is ever exposed, rotate it at console.perplexity.ai and paste the new one into Shoebox.
+- Notifications are encrypted for your phone (Web Push, RFC 8291). The relay makes its own key pair the first time and keeps it in its storage; there is nothing to set up.
+- A reminder is kept only until it's sent (or for a week after its time, if the phone can't be reached). Bring back now, a new date, or Delete cancels it.
+- Free plan limits that matter here: 100,000 requests a day, 1,000 storage writes a day (one per reminder), 5 Cron Triggers (this uses one).
+- If your Perplexity key is ever exposed, rotate it at console.perplexity.ai and paste the new one into Shoebox.
