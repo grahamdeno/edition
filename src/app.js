@@ -38,7 +38,7 @@ import { topicColor, dominantColor, tintInks, focusOf } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 
-export const VERSION = "4.24.0";
+export const VERSION = "4.24.1";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -1812,7 +1812,7 @@ function calendarHtml() {
         <div class="meta"><span class="who">Today,</span> <span class="when">${esc(head || new Date().toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" }))}</span></div>
         ${allDay.length ? `<p class="ag-allday">${allDay.map((e) => `<span class="chip">${dot(e)}${esc(cleanEventTitle(e.title))}</span>`).join("")}</p>` : ""}
         ${timed.length ? `<details class="db">
-          <summary aria-label="${esc(label)}"><span class="db-track" aria-hidden="true">${blocks}${nowLine}</span><span class="db-ticks" aria-hidden="true">${ticks.join("")}<span class="db-more"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></span></span></summary>
+          <summary aria-label="${esc(label)}"><span class="db-wrap" aria-hidden="true"><span class="db-track">${blocks}</span>${nowLine}</span><span class="db-ticks" aria-hidden="true">${ticks.join("")}<span class="db-more"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></span></span></summary>
           <ol class="ag-list">${rows}</ol>
         </details>` : ""}
         ${focusHtml}

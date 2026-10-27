@@ -791,8 +791,10 @@ table.usage th { color: var(--muted); font-weight: 600; }
 .db-track { position: relative; display: block; height: 20px; border-radius: 7px; background: var(--soft); overflow: hidden; }
 .db-blk { position: absolute; top: 0; bottom: 0; border-radius: 4px; background: var(--c, var(--sig)); box-shadow: 0 0 0 1px var(--bg); }
 .db-blk.past { opacity: 0.35; }
-.db-now { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; border-radius: 1px; background: #D9485F; }
-.db-ticks { position: relative; display: block; height: 18px; }
+.db-wrap { position: relative; display: block; padding: 5px 0; }
+/* Now: a little bolder than the blocks and taller than the bar, so it reads as the day's progress marker. */
+.db-now { position: absolute; top: 0; bottom: 0; width: 3px; margin-left: -1.5px; border-radius: 2px; background: #D9485F; box-shadow: 0 0 0 1.5px var(--bg); z-index: 1; }
+.db-ticks { position: relative; display: block; height: 18px; margin-top: -2px; }
 .db-tick { position: absolute; top: 3px; transform: translateX(-50%); font-size: 0.6875rem; color: var(--muted); font-variant-numeric: tabular-nums; }
 .daybar .db[open] .ag-list { margin-top: 2px; }
 .ag-row.past .ag-n, .ag-row.past .ag-t { opacity: 0.55; }
