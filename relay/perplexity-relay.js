@@ -37,7 +37,7 @@
  */
 
 /** What this copy of the relay can do; the app checks it to say when an update is needed. */
-export const RELAY_VERSION = 12;
+export const RELAY_VERSION = 13;
 export const RELAY_FEATURES = ["preview", "image", "photo", "agent", "push", "remind", "ical", "nhl", "inbox", "apple", "ai", "stats", "stories"];
 
 const ALLOWED_ORIGINS = ["https://shoebox.tangomike.app", "https://grahamdeno.github.io"];
@@ -103,6 +103,7 @@ const RELAY = {
     if (pathname === "/stats" || pathname === "/stats/report") return statsRoute(request, env, pathname, cors);
     if (pathname.startsWith("/apple/") || pathname === "/song") return appleRoute(request, env, pathname, searchParams, cors);
     if (request.method === "GET" && pathname === "/nhl") return nhl(searchParams.get("date"), cors);
+    if (request.method === "POST" && pathname === "/me/delete") return deleteMe(request, env, cors);
     if (pathname === "/inbox" || pathname === "/inbox/ack" || pathname === "/inbox/file" || pathname === "/inbox/address") return inboxRoute(request, env, pathname, cors);
     if (request.method === "GET" && pathname === "/ical") return ical(searchParams.get("url"), cors);
     if (request.method === "GET" && pathname === "/image") return image(searchParams.get("url"), cors);
@@ -568,6 +569,33 @@ async function personalAddress(env, box, { name = null } = {}) {
   await kv.put(`alias:${slug}`, box);
   await kv.put(`box:${box}`, JSON.stringify({ slug, at: Date.now() }));
   return `${slug}@${mailDomain(env)}`;
+}
+
+/**
+ * Delete what the relay keeps for one phone: its email address and waiting
+ * mail (by its inbox key) and its AI registration (by its device and token).
+ * Reminders are cancelled by the app one by one; the rest expires by itself.
+ */
+async function deleteMe(request, env, cors) {
+  const kv = env.SHOEBOX;
+  if (!kv) return json(501, "No storage.", cors);
+  const out = { mail: 0, ai: false };
+  const key = request.headers.get("x-inbox-key") || "";
+  if (/^[\w-]{24,80}$/.test(key)) {
+    const box = await boxOf(key);
+    const cur = await kv.get(`box:${box}`, "json");
+    if (cur) { await kv.delete(`alias:${cur.slug}`); await kv.delete(`box:${box}`); }
+    for (const prefix of [`m:${box}:`, `a:${box}:`]) {
+      for (const k of (await kv.list({ prefix })).keys) { await kv.delete(k.name); out.mail++; }
+    }
+    if ((await kv.get("inbox-key")) === key) await kv.delete("inbox-key");
+  }
+  const device = request.headers.get("x-shoebox-device") || "", token = request.headers.get("x-shoebox-token") || "";
+  if (/^[a-z0-9]{1,40}$/.test(device)) {
+    const rec = await kv.get(`aid:${device}`, "json");
+    if (rec && rec.hash === await sha256(token)) { await kv.delete(`aid:${device}`); out.ai = true; }
+  }
+  return new Response(JSON.stringify({ ok: true, ...out }), { headers: { ...cors, "content-type": "application/json" } });
 }
 
 async function inboxRoute(request, env, pathname, cors) {
