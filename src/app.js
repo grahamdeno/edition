@@ -38,7 +38,7 @@ import { topicColor, dominantColor, tintInks, focusOf } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 
-export const VERSION = "4.29.0";
+export const VERSION = "4.29.1";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -1391,7 +1391,7 @@ async function dailyBackup() {
   try { if (localStorage.getItem("edition.backupDay") === dayKey()) return; } catch { return; }
   try {
     const r = await nativeAsk("backup", { name: `shoebox-backup-${dayKey()}.json`, data: await db.exportJson() }, 60000);
-    if (r.ok) { localStorage.setItem("edition.backupDay", dayKey()); localStorage.setItem("edition.backupAt", String(Date.now())); }
+    if (r.ok) { localStorage.setItem("edition.backupDay", dayKey()); localStorage.setItem("edition.backupAt", String(Date.now())); localStorage.setItem("edition.backupICloud", r.icloud ? "1" : "0"); }
     else noteError(new Error(r.error || "Backup failed"), { quiet: true, where: "daily backup" });
   } catch (e) { noteError(e, { quiet: true, where: "daily backup" }); }
 }
@@ -3767,7 +3767,7 @@ function openSettings(panel = "", { fromCard = false } = {}) {
         <button class="btn" type="button" id="set-export">Export backup</button>
         <button class="btn" type="button" id="set-import">Import backup</button>
       </div>
-      ${nativeCan("backup") ? `<p class="note"><b>Every day, by itself:</b> a backup goes to Files › On My iPhone › Shoebox › Backups (the last 7 are kept), and it's part of your iPhone's iCloud Backup.${(() => { try { const t = +localStorage.getItem("edition.backupAt"); return t ? ` Last one: ${esc(friendlyWhen(t))}.` : ""; } catch { return ""; } })()}</p>` : ""}
+      ${nativeCan("backup") ? `<p class="note"><b>Every day, by itself:</b> a backup goes to Files › On My iPhone › Shoebox › Backups, with a copy in iCloud Drive › Shoebox › Backups when iCloud Drive is on (the last 7 are kept in each).${(() => { try { return localStorage.getItem("edition.backupICloud") === "0" ? " iCloud Drive looks off for Shoebox: turn it on in the iPhone's Settings › your name › iCloud › Drive." : ""; } catch { return ""; } })()}${(() => { try { const t = +localStorage.getItem("edition.backupAt"); return t ? ` Last one: ${esc(friendlyWhen(t))}.` : ""; } catch { return ""; } })()}</p>` : ""}
       <p class="note">The backup holds everything: items, photos and files, and your settings. Keep it somewhere private. On a new phone, open Shoebox and Import it.</p>
       <input type="file" id="set-import-file" accept="application/json,.json" hidden>
       <span class="st" id="set-bk-st" role="status"></span>
