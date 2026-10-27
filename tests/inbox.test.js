@@ -56,3 +56,16 @@ test("mail waits for the phone that owns the inbox, then is acknowledged away", 
   await call("POST", "/inbox/ack", mine, { ids: [got.mails[0].id] });
   assert.equal((await (await call("GET", "/inbox", mine)).json()).mails.length, 0);
 });
+
+import { readFileSync, readdirSync } from "node:fs";
+
+test("the relay lets the app send every custom header it uses", async () => {
+  const sent = new Set();
+  for (const f of readdirSync(new URL("../src/", import.meta.url))) {
+    for (const m of readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8").matchAll(/"(x-[a-z-]+)"/g)) sent.add(m[1]);
+  }
+  sent.delete("x-api-key"); // sent straight to Anthropic by older versions, never to the relay
+  const pre = await relay.fetch(new Request("https://w.test/inbox", { method: "OPTIONS", headers: { origin: "https://shoebox.tangomike.app" } }), {});
+  const allowed = pre.headers.get("access-control-allow-headers").split(",").map((h) => h.trim());
+  for (const h of sent) assert.ok(allowed.includes(h), `relay must allow ${h}`);
+});
