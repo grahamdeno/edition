@@ -259,3 +259,18 @@ test("finished school posts don't shape top stories", () => {
   assert.deepEqual(tt2(p), ["agile"]);
   assert.deepEqual(p.kept.map((i) => i.id), ["a"]);
 });
+
+import { schoolToday, buildEdition as be2 } from "../src/model.js";
+test("school posts show daily until done, soonest first, and never take one of the six", () => {
+  const now = new Date(2026, 9, 27, 9).getTime();
+  const items = [
+    { id: "s1", status: S2.INBOX, created: 1, school: { date: "2026-10-29" }, tags: [] },
+    { id: "s2", status: S2.QUEUED, created: 2, school: { date: null }, tags: [] },
+    { id: "s3", status: S2.DONE, created: 3, school: { date: "2026-10-28" }, tags: [] },
+    { id: "s4", status: S2.INBOX, created: 4, school: { date: "2026-10-26" }, tags: [] }, // yesterday: gone
+    { id: "s5", status: S2.INBOX, created: 5, school: { date: "2026-10-27" }, tags: [] },
+    { id: "q1", status: S2.QUEUED, created: now - 1000, tags: ["agile"] },
+  ];
+  assert.deepEqual(schoolToday(items, now).map((i) => i.id), ["s5", "s1", "s2"]);
+  assert.deepEqual(be2(items, null, { now }).ids, ["q1"]);
+});
