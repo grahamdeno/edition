@@ -158,7 +158,7 @@ test("a card face that comes back as plain text, not JSON, is still used", async
   globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => ({ content: [{ type: "text", text: "A short read on coastal trails" }] }) });
   assert.equal(await hook({ kind: "link", title: "Trails" }), "A short read on coastal trails");
   globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => ({ content: [{ type: "text", text: "Sorry, I can't tell what this item is about from what you've given me here." }] }) });
-  await assert.rejects(() => hook({ kind: "link", title: "x" }), /no JSON/);
+  assert.equal(await hook({ kind: "link", title: "x" }), ""); // nothing usable: a quiet miss, not a problem
 });
 
 test("an unreachable API is reported with status 0, so the app stops and retries later", async () => {
@@ -269,7 +269,7 @@ test("proxy: register, call with the relay's key, charge the budget, stop at the
 });
 
 test("proxy says plainly when the relay has no key yet", async () => {
-  const res = await relay.fetch(new Request("https://w.test/ai/messages", { method: "POST", headers: { origin: "https://shoebox.tangomike.app" }, body: "{}" }), { SHOEBOX: memKv() });
+  const res = await relay.fetch(new Request("https://w.test/ai/register", { method: "POST", headers: { origin: "https://shoebox.tangomike.app" } }), { SHOEBOX: memKv() });
   assert.equal(res.status, 503);
 });
 
@@ -353,4 +353,42 @@ test("school posts come back labeled Action, Decision or Info", async () => {
   const out = await schoolPosts({ text: "newsletter", about: "8th grade" });
   assert.deepEqual(out.posts.map((p) => p.type), ["action", "decision", "info", "info"]);
   assert.match(promptOf(sent[0]), /"type": "action" \| "decision" \| "info"/);
+});
+
+test("proxy: a web-search call keeps the line open, then sends Claude's answer (or the error) in the body", async () => {
+  const kv = memKv();
+  const env = { SHOEBOX: kv, ANTHROPIC_API_KEY: "sk-relay" };
+  const origin = "https://shoebox.tangomike.app";
+  const { device, token } = await (await relay.fetch(new Request("https://w.test/ai/register", { method: "POST", headers: { origin } }), env)).json();
+  const realFetch = globalThis.fetch;
+  const body = JSON.stringify({ model: "claude-haiku-5-5", max_tokens: 10, messages: [{ role: "user", content: "news" }], tools: [{ type: "web_search_20250305", name: "web_search" }] });
+  const call = () => relay.fetch(new Request("https://w.test/ai/messages", { method: "POST", headers: { origin, "x-shoebox-device": device, "x-shoebox-token": token }, body }), env);
+  try {
+    globalThis.fetch = async () => new Response(JSON.stringify({ content: [{ type: "text", text: "stories" }], usage: { input_tokens: 10, output_tokens: 10 } }), { status: 200 });
+    const ok = await call();
+    assert.equal(ok.status, 200);
+    const text = await ok.text();
+    assert.match(text, /^\s+\{/);
+    assert.equal(JSON.parse(text).content[0].text, "stories");
+    globalThis.fetch = async () => new Response(JSON.stringify({ type: "error", error: { message: "overloaded" } }), { status: 529 });
+    const bad = JSON.parse(await (await call()).text());
+    assert.equal(bad.status, 529);
+    assert.equal(bad.error.message, "overloaded");
+  } finally { globalThis.fetch = realFetch; }
+});
+
+test("the app treats an error inside a streamed answer as an error", async () => {
+  const { hook } = await import("../src/ai.js");
+  const store = { "edition.aiConsent": "1", "edition.aiDevice": "d", "edition.aiToken": "t" };
+  globalThis.localStorage = { getItem: (k) => store[k] ?? null, setItem: (k, v) => { store[k] = v; }, removeItem: (k) => { delete store[k]; } };
+  globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => ({ error: { message: "overloaded" }, status: 529 }) });
+  await assert.rejects(() => hook({ kind: "link", title: "x" }), (e) => e.status === 529 && /overloaded/.test(e.message));
+});
+
+test("the relay answers its own crashes with CORS, so the app can say what went wrong", async () => {
+  const res = await relay.fetch(new Request("https://w.test/ai/register", { method: "POST", headers: { origin: "https://shoebox.tangomike.app" } }),
+    { SHOEBOX: { get: async () => { throw new Error("KV down"); } }, ANTHROPIC_API_KEY: "k" });
+  assert.equal(res.status, 500);
+  assert.equal(res.headers.get("access-control-allow-origin"), "https://shoebox.tangomike.app");
+  assert.match((await res.json()).error.message, /KV down/);
 });

@@ -122,6 +122,8 @@ async function viaRelay(body, retried = false) {
     return viaRelay(body, true);
   }
   if (!res.ok) throw new AiError(data?.error?.message || `AI request failed (${res.status}).`, res.status);
+  // Long calls (web search) arrive as a stream that always starts 200; a failure is in the body.
+  if (data && data.error && !data.content) throw new AiError(data.error.message || "AI request failed.", data.status || 502);
   return data;
 }
 
@@ -359,7 +361,8 @@ export async function hook(item, { context = null } = {}) {
     // The model sometimes answers with just the line, no JSON. A short single line is the hook itself.
     const line = String(text).trim().split("\n").filter(Boolean)[0] || "";
     if (line && line.length <= 70 && !/[{}]/.test(line)) return cleanHook(line);
-    throw e;
+    return ""; // nothing usable this time: counts as a try, not a problem
+
   }
 }
 
