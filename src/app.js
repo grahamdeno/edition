@@ -38,7 +38,7 @@ import { topicColor, dominantColor, tintInks, focusOf } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 
-export const VERSION = "4.28.0";
+export const VERSION = "4.28.1";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -2082,8 +2082,9 @@ function postHtml(item, { compact = false } = {}) {
  */
 function stampHtml(item, v) {
   const isDone = v === VERDICT.DONE || v === VERDICT.READ_NOW;
-  const label = isDone ? (doneLabel(item) === "Done" ? "You marked this done" : "You've read it")
-    : v === VERDICT.LET_GO ? (item.suggested ? "You said not for me" : "You let this go")
+  const st = item.school?.type;
+  const label = isDone ? (st === "info" ? "Got it" : st === "decision" ? "Decided" : doneLabel(item) === "Done" ? "You marked this done" : "You've read it")
+    : v === VERDICT.LET_GO ? (item.suggested ? "You said not for me" : st === "decision" ? "Not for us" : st ? "Not needed" : "You let this go")
     : item.status === STATUS.QUEUED && state.recent.get(item.id)?.stage === "inbox" ? "Kept for a later day" : "Back tomorrow";
   const cls = isDone ? "done" : v === VERDICT.LET_GO ? "go" : "later";
   const action = state.recent.has(item.id)
@@ -2106,9 +2107,12 @@ function actionsHtml(item, open) {
     return `<div class="acts">${love}${reply}<span class="grow"></span>${requeue}</div>`;
   }
   if (item.school) {
+    // The buttons say what finishing means for this kind of post.
+    const t = item.school.type;
+    const [no, yes] = t === "info" ? [null, "Got it"] : t === "decision" ? ["Not for us", "Decided"] : ["Not needed", "Done"];
     return `<div class="acts">${love}<span class="grow"></span>
-    <button class="act" type="button" data-v="${VERDICT.LET_GO}" data-id="${esc(item.id)}">${I.letGo}<span>Not needed</span></button>
-    <button class="act done" type="button" data-v="${VERDICT.DONE}" data-id="${esc(item.id)}">${I.done}<span>Done</span></button>
+    ${no ? `<button class="act" type="button" data-v="${VERDICT.LET_GO}" data-id="${esc(item.id)}">${I.letGo}<span>${no}</span></button>` : ""}
+    <button class="act done" type="button" data-v="${VERDICT.DONE}" data-id="${esc(item.id)}">${I.done}<span>${yes}</span></button>
   </div>`;
   }
   const keep = item.status === STATUS.INBOX || isFaded(item);
