@@ -4,7 +4,7 @@
  * Bump VERSION with each release so phones pick up the new shell.
  */
 
-const VERSION = "4.29.3";
+const VERSION = "4.30.0";
 const CACHE = `edition-${VERSION}`;
 const SHELL = [
   "./",
@@ -25,6 +25,7 @@ const SHELL = [
   "src/feel.js",
   "src/problems.js",
   "src/stats.js",
+  "src/onboard.js",
   "icons/icon-192.png",
   "icons/icon-512.png",
   "icons/apple-touch-icon.png",
