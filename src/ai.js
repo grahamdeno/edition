@@ -113,10 +113,19 @@ const ENRICH_SYSTEM =
   "You file things a person saved into Shoebox, their private app for what they mean to come back to. " +
   "Write plainly. No hype, no exclamation marks, no emoji. Reply with JSON only.";
 
+/**
+ * Their own words say what a save is for, and tags follow that use first.
+ * A pottery class noted as a date idea is a date idea before it is pottery.
+ */
+export const OWN_WORDS_RULE =
+  "their own words (why they saved it, their note, their later thoughts) come first: " +
+  "when those say what it is for, such as a date idea, a gift for someone, a trip or a work project, " +
+  "the first tag names that use, and the subject comes after";
+
 const ENRICH_SHAPE =
   'Return JSON: {"title": string (max 80 chars, plain, no site name unless needed), ' +
   '"summary": string (one sentence, max 140 chars, on why this might be worth their time; for a photo, what it shows and why it might have been kept), ' +
-  '"tags": array of 1-3 lowercase topic words, "minutes": integer time to read or watch, ' +
+  '"tags": array of 1-3 lowercase topic words (' + OWN_WORDS_RULE + '), "minutes": integer time to read or watch, ' +
   '"intent": one of "read", "watch", "listen", "reference", "idea", "task" (what the person most likely saved it for), ' +
   '"points": array of 0-4 short key points (for articles, web pages and documents whose text you have, PDFs, long notes or photos of pages; otherwise []), ' +
   '"extended": string (only when you have the text of an article, web page or document: a fuller summary in 2 or 3 short paragraphs, 120 to 220 words in all, ' +
@@ -272,16 +281,19 @@ async function contentParts(item, blob) {
   return { parts, item };
 }
 
-function describe(item) {
+export function describe(item) {
   return [
     `Kind: ${item.kind}${item.videoId ? " (YouTube)" : ""}`,
     item.title && `Current title: ${item.title}`,
     item.author && `Author or channel: ${item.author}`,
     item.url && `URL: ${item.url}`,
     item.fileName && `File name: ${item.fileName}`,
-    item.why && `Why they saved it: ${item.why}`,
+    item.why && `Why they saved it, in their words: ${item.why}`,
+    item.note && `Their note about it: ${String(item.note).slice(0, 2000)}`,
+    item.kind === "link" && item.text && `Their note about it: ${String(item.text).slice(0, 2000)}`,
+    item.replies?.length && `Their later thoughts on it:\n${item.replies.slice(-6).map((r) => `- ${String(r.text).slice(0, 300)}`).join("\n")}`,
     item.summary && `Summary: ${item.summary}`,
-    item.text && `Text:\n${item.text.slice(0, 12000)}`,
+    item.kind !== "link" && item.text && `Text:\n${item.text.slice(0, 12000)}`,
     item.pageText && `Text of the page:\n${String(item.pageText).slice(0, 12000)}`,
   ].filter(Boolean);
 }
@@ -293,7 +305,8 @@ function describe(item) {
 export async function retag(item, blob, { vocab = [] } = {}) {
   const { parts, item: it } = await contentParts(item, blob);
   parts.push({ type: "text", text: [...describe(it), "", vocabLine(vocab),
-    'Tag this item for the person who saved it. Return JSON: {"tags": array of 1-3 lowercase topic words}'].filter(Boolean).join("\n") });
+    `Tag this item for the person who saved it. Tag it by what it means to them, not only by what it is: ${OWN_WORDS_RULE}.`,
+    'Return JSON: {"tags": array of 1-3 lowercase topic words}'].filter(Boolean).join("\n") });
   const out = parseJson(textOf(await call({ content: parts, system: ENRICH_SYSTEM, maxTokens: 200 })));
   return cleanTags(out.tags);
 }

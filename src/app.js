@@ -33,7 +33,7 @@ import { I, LOGO } from "./icons.js";
 import { topicColor, dominantColor, tintInks } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "4.4.0";
+export const VERSION = "4.4.1";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 
@@ -1620,7 +1620,11 @@ function openEdit(id) {
     st.textContent = "Reading it again for tags…";
     try {
       const blob = cur.blobId && [KIND.PHOTO, KIND.PDF, KIND.TEXT].includes(cur.kind) ? await db.blobs.get(cur.blobId) : null;
-      const tags = tidyTags(await ai.retag(cur, blob, { vocab: vocab() }));
+      // Use what's in the form now, so a note typed a moment ago counts before Save.
+      const draft = { ...cur, why: (val("why") ?? cur.why ?? "").trim() };
+      const note = val("note");
+      if (note !== undefined) { if (cur.kind === KIND.LINK) draft.text = note.trim(); else draft.note = note.trim(); }
+      const tags = tidyTags(await ai.retag(draft, blob, { vocab: vocab() }));
       if (!tags.length) throw new Error("No tags came back. Try again.");
       $("#ed-tags", wrap).value = tags.join(", ");
       st.textContent = "New tags filled in. Save to keep them.";
