@@ -42,12 +42,12 @@ jobs:
           set +e
           AUTH="-allowProvisioningUpdates -authenticationKeyPath $RUNNER_TEMP/asc.p8 -authenticationKeyID ${{ secrets.ASC_KEY_ID }} -authenticationKeyIssuerID ${{ secrets.ASC_ISSUER_ID }}"
           report() { grep -E "error:|Error|failed|No profiles|rovisioning|ertificate|not available|denied" "$1" | sort -u | head -25 | sed 's/^/::error::/'; tail -n 15 "$1"; }
-          # Archive signed ad hoc (keeps the entitlements, needs no registered device);
+          # Archive unsigned (needs no registered device);
           # the export re-signs everything for the App Store with Apple's cloud-managed certificate.
           xcodebuild -project Shoebox.xcodeproj -scheme Shoebox -configuration Release \
             -destination 'generic/platform=iOS' -archivePath "$RUNNER_TEMP/Shoebox.xcarchive" \
             CURRENT_PROJECT_VERSION=${{ github.run_number }} \
-            CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO PROVISIONING_PROFILE_SPECIFIER= \
+            CODE_SIGNING_ALLOWED=NO \
             archive > archive.log 2>&1
           code=$?
           if [ $code -ne 0 ]; then echo "::error::archive failed"; report archive.log; exit $code; fi
