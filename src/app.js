@@ -36,7 +36,7 @@ import { I, LOGO } from "./icons.js";
 import { topicColor, dominantColor, tintInks, focusOf } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "4.11.0";
+export const VERSION = "4.11.1";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 
@@ -595,7 +595,11 @@ function pictureOf(item) {
   const c = item.cover;
   if (c && c.pinned && (c.blobId || c.src)) return c.blobId ? { blobId: c.blobId, from: "mine" } : { src: c.src, from: c.from, credit: c.credit, license: c.license, link: c.link };
   if (item.kind === KIND.PHOTO && item.blobId) return { blobId: item.thumbId || item.blobId, from: "own" };
-  if (item.imageUrl) return { src: item.imageUrl, from: item.kind === KIND.LINK ? "page" : "own" };
+  if (item.imageUrl) {
+    const c = (item.imageCands || []).find((x) => x.src === item.imageUrl);
+    if (c && c.credit) return { src: item.imageUrl, from: "search", credit: c.credit, license: c.license, link: c.link };
+    return { src: item.imageUrl, from: item.kind === KIND.LINK || item.school ? "page" : "own" };
+  }
   // An older version's found stock photo shows only if you chose it yourself.
   if (c && c.blobId) return { blobId: c.blobId, from: "mine" };
   return null;
@@ -1026,8 +1030,8 @@ async function schoolPictures() {
       const upd = { ...cur, school: { ...cur.school, picTries: tries, picDone: done, overlay: overlay || cur.school.overlay } };
       if (pick >= 0) {
         const ch = cands[pick];
-        Object.assign(upd, { coverOff: false, imageAlt: alt || ch.alt || undefined,
-          cover: { src: ch.src, from: ch.search ? "search" : "page", credit: ch.credit, license: ch.license, link: ch.link, pinned: true } });
+        Object.assign(upd, { coverOff: false, cover: null, imageUrl: ch.src, imageAlt: alt || ch.alt || undefined,
+          imageCands: cands.map(({ src, w, h, alt: a, credit, license, link }) => ({ src, w, h, alt: a, credit, license, link })) });
       }
       await saveItem(upd);
       refreshPost(upd.id);
@@ -1042,10 +1046,12 @@ async function schoolPictures() {
 /** A school post's photo, with the line about Gunner over it. */
 function schoolMediaHtml(item) {
   const pic = pictureOf(item);
-  if (!pic || !pic.src) return "";
+  if (!pic) return "";
   const credit = creditLine(pic);
+  const img = pic.blobId ? `<img alt="${esc(item.imageAlt || "")}"${focusAttr(item, pic)} data-blob="${esc(pic.blobId)}">`
+    : `<img alt="${esc(item.imageAlt || "")}"${focusAttr(item, pic)} src="${esc(pic.src)}" referrerpolicy="no-referrer" loading="lazy" onerror="this.closest('.pic')?.remove()">`;
   return `<div class="pic school-pic"><button class="open" type="button" data-open="${esc(item.id)}" aria-label="Open: ${esc(item.title)}">
-      <img alt="${esc(item.imageAlt || "")}"${focusAttr(item, pic)} src="${esc(pic.src)}" referrerpolicy="no-referrer" loading="lazy" onerror="this.closest('.pic')?.remove()">
+      ${img}
       ${item.school.overlay ? `<span class="overlay">${esc(item.school.overlay)}</span>` : ""}</button></div>
     ${credit ? `<p class="credit">${pic.link ? `<a href="${esc(pic.link)}" target="_blank" rel="noopener">${esc(credit)}</a>` : esc(credit)}</p>` : ""}`;
 }
@@ -1891,6 +1897,7 @@ function openEdit(id) {
   const item = byId(id);
   if (!item) return;
   const words = item.kind === KIND.QUOTE || item.kind === KIND.NOTE;
+  const sch = item.school;
   const hasUrl = item.kind === KIND.LINK || item.kind === KIND.VIDEO || Boolean(item.url);
   const f = (key, label, value, { area = false, type = "text", hint = "", ph = "" } = {}) => `<div class="field">
       <label for="ed-${key}">${label}${hint ? ` <span class="hint">${hint}</span>` : ""}</label>
@@ -1900,7 +1907,7 @@ function openEdit(id) {
     </div>`;
   const wrap = sheet(`
     <div class="sheet-head"><h2>Edit</h2><button class="x" type="button" data-close aria-label="Close">${I.close}</button></div>
-    <p class="note">${esc(KIND_LABEL[item.kind] || "Item")} · saved ${esc(ago(item.created))}${item.fileName ? ` · ${esc(item.fileName)}` : ""}</p>
+    <p class="note">${sch ? `From ${esc(sch.name || "school")}` : esc(KIND_LABEL[item.kind] || "Item")} · ${sch ? "" : "saved "}${esc(ago(item.created))}${item.fileName ? ` · ${esc(item.fileName)}` : ""}</p>
     ${item.status === STATUS.DONE || item.status === STATUS.ARCHIVED ? "" : asideHtml("ed", item.status === STATUS.ASIDE ? item.until : null)}
     ${item.kind !== KIND.PHOTO ? `<div class="pic-edit">
       <div class="lbl"><span id="ed-pic-l">Picture</span></div>
@@ -1908,18 +1915,22 @@ function openEdit(id) {
       <span class="note" id="ed-pic-note" role="status"></span>
       <input type="file" id="ed-pic-file" accept="image/*" hidden>
     </div>` : ""}
-    ${words ? f("text", item.kind === KIND.QUOTE ? "Quote" : "Note", item.text, { area: true }) : f("title", "Title", item.title)}
+    ${sch ? `${f("title", "Headline", item.title)}
+      ${f("text", "Post", sch.body || item.text, { area: true })}
+      ${f("overlay", "Line over the photo", sch.overlay, { ph: `${schoolSettings().child}, …` })}
+      ${f("sdate", "Date", sch.date || "", { type: "date" })}`
+    : words ? f("text", item.kind === KIND.QUOTE ? "Quote" : "Note", item.text, { area: true }) : f("title", "Title", item.title)}
     ${item.kind === KIND.QUOTE || item.kind === KIND.VIDEO ? f("author", item.kind === KIND.QUOTE ? "Who said it" : "Channel", item.author) : ""}
     ${item.kind === KIND.PHOTO ? `<label class="check"><input type="checkbox" id="ed-book" ${item.book ? "checked" : ""}><span>This is a book I want to read<small>Done becomes "I've read it", and counts toward what you like rather than as a recent read.</small></span></label>
       ${f("author", "Author", item.book?.author || item.author)}` : ""}
     ${hasUrl ? f("url", "Link", item.url, { type: "url", ph: "https://" }) : ""}
-    ${f("why", "Why you saved it", item.why, { hint: "(shown at the top of the post)", ph: item.hook || "Read this before the roadmap review" })}
-    ${!item.why && item.hook ? `<button class="chip use-guess" type="button" id="ed-guess">Start from ${APP}'s guess</button>` : ""}
+    ${sch ? "" : f("why", "Why you saved it", item.why, { hint: "(shown at the top of the post)", ph: item.hook || "Read this before the roadmap review" })}
+    ${!sch && !item.why && item.hook ? `<button class="chip use-guess" type="button" id="ed-guess">Start from ${APP}'s guess</button>` : ""}
     ${!words ? f("note", "Your note", item.kind === KIND.LINK ? item.text : item.note, { area: true, ph: "Anything you want to remember about it" }) : ""}
-    <div class="two">
+    ${sch ? f("tags", "Tags", (item.tags || []).join(", "), { ph: "band, soccer" }) : `<div class="two">
       ${f("tags", "Tags", (item.tags || []).join(", "), { ph: "scrum, ai" })}
       ${f("minutes", "Minutes", estimateMinutes(item), { type: "number" })}
-    </div>
+    </div>`}
     ${ai.settings.enabled() ? `<button class="btn retag" type="button" id="ed-retag">Re-tag with AI</button>` : ""}
     <span class="st" id="ed-st" role="status"></span>
     <button class="btn primary" type="button" id="ed-save">Save</button>
@@ -1942,7 +1953,12 @@ function openEdit(id) {
       downloadReminder({ title: val("title") || cur.title, why: val("why") ?? cur.why, url: val("url") ?? cur.url, until: edUntil });
     }
     const next = { ...cur, editedAt: Date.now() };
-    if (words) {
+    if (cur.school) {
+      const t = (val("text") || "").trim();
+      next.title = (val("title") || "").trim().slice(0, 140) || cur.title;
+      next.text = t || cur.text;
+      next.school = { ...cur.school, body: t || cur.school.body, overlay: (val("overlay") || "").trim().slice(0, 60), date: /^\d{4}-\d{2}-\d{2}$/.test(val("sdate") || "") ? val("sdate") : null };
+    } else if (words) {
       const t = (val("text") || "").trim();
       if (!t) { $("#ed-st", wrap).textContent = "It can't be empty."; $("#ed-st", wrap).classList.add("err"); return; }
       next.text = t;
