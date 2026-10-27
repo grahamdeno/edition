@@ -765,3 +765,22 @@ table.usage { width: 100%; border-collapse: collapse; font-size: 0.8125rem; font
 table.usage th, table.usage td { text-align: right; padding: 5px 4px; border-bottom: 1px solid var(--line); }
 table.usage th:first-child, table.usage td:first-child { text-align: left; }
 table.usage th { color: var(--muted); font-weight: 600; }
+/* Today's calendar, at a glance */
+.agenda .ag-allday { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 0; }
+.agenda .ag-allday .chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; background: var(--soft); font-size: 0.8125rem; font-weight: 600; color: var(--fg); }
+.ag-focus { position: relative; margin: 8px 0 2px; padding: 12px 14px; border-radius: 14px; background: var(--panel); border: 1px solid var(--line-2); }
+.ag-focus.live { border-color: var(--sig); }
+.ag-when { margin: 0; font-size: 0.8125rem; font-weight: 600; color: var(--sig-ink); }
+.ag-title { margin: 2px 0 0; font: 400 1.25rem/1.25 var(--serif); color: var(--fg); padding-right: 64px; }
+.ag-place { display: flex; gap: 6px; align-items: center; margin: 4px 0 0; color: var(--muted); font-size: 0.875rem; }
+.ag-place .i { width: 15px; height: 15px; flex: none; }
+.ag-go { position: absolute; top: 12px; right: 12px; }
+.ag-list { list-style: none; margin: 6px 0 0; padding: 0; }
+.ag-row { display: flex; align-items: center; gap: 8px; min-height: 30px; font-size: 0.9375rem; }
+.ag-t { flex: none; width: 48px; color: var(--muted); font-weight: 600; font-variant-numeric: tabular-nums; font-size: 0.8125rem; }
+.ag-n { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--fg); }
+.cal-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--c, var(--sig)); }
+.ag-more { margin-top: 4px; }
+.ag-more summary { cursor: pointer; font-size: 0.875rem; font-weight: 600; color: var(--sig-ink); min-height: 30px; display: flex; align-items: center; }
+.ag-done .ag-n, .ag-done .ag-t { opacity: 0.55; }
+.ag-tail { margin: 8px 0 0; font-size: 0.8125rem; color: var(--muted); }

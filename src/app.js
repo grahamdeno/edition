@@ -27,7 +27,7 @@ import {
 } from "./model.js";
 import * as db from "./db.js";
 import * as push from "./push.js";
-import { parseIcs, eventsOn } from "./calendar.js";
+import { parseIcs, eventsOn, calLink, cleanEventTitle, eventPlace } from "./calendar.js";
 import * as daily from "./daily.js";
 import { captureText, captureFile, captureTransfer, readClipboard, captureShares } from "./capture.js";
 import { sampleItems, SAMPLES_VERSION } from "./samples.js";
@@ -38,7 +38,7 @@ import { topicColor, dominantColor, tintInks, focusOf } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 
-export const VERSION = "4.22.0";
+export const VERSION = "4.23.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -1733,41 +1733,66 @@ function eventWhen(e) {
   return `${(am(a) && am(b)) || (pm(a) && pm(b)) ? a.replace(/ [AP]M$/, "") : a} – ${b}`;
 }
 
-/** A link to act on: the event's own, or the first in its notes (a video call, say). */
-function calLink(e) {
-  if (e.url && /^https?:\/\//.test(e.url)) return e.url;
-  return (String(e.notes || "").match(/https?:\/\/[^\s<>"')]+/) || [])[0] || "";
-}
+/** Calendars the person chose not to see on Today (by name). */
+const calHidden = () => { try { return JSON.parse(localStorage.getItem("edition.calHidden") || "[]"); } catch { return []; } };
+const setCalHidden = (list) => { try { localStorage.setItem("edition.calHidden", JSON.stringify(list)); } catch { /* full */ } };
 
-/** Today's events as one card: the day at a glance, a row per event. */
+const shortClock = (ts) => new Date(ts).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }).replace(":00", "").replace(" AM", "a").replace(" PM", "p");
+
+/**
+ * Today's calendar as a glance, not a list: what's on now or next (with
+ * where and a Join button), the rest of the day one line each, and how the
+ * day ends. Finished events fold away; a busy day shows four and a "more".
+ */
 function calendarHtml() {
   const c = calCache();
   if (!c || !c.events.length) return "";
+  const hidden = new Set(calHidden());
+  const evs = c.events.filter((e) => !hidden.has(calName(e.calendar, "Calendar")));
+  if (!evs.length) return "";
   const now = Date.now();
-  const left = c.events.filter((e) => e.allDay || e.end > now).length;
-  const names = [...new Set(c.events.map((e) => calName(e.calendar, "Calendar")))];
-  const rows = c.events.map((e) => {
-    const live = !e.allDay && e.start <= now && e.end > now, past = !e.allDay && (e.end > e.start ? e.end : e.start + 1) <= now;
-    const link = calLink(e);
-    const notes = e.notes ? e.notes.replace(/\s+/g, " ").trim().slice(0, 400) : "";
-    return `<li class="sched-row${past ? " past" : ""}${live ? " live" : ""}">
-      <span class="sched-t">${esc(eventWhen(e))}</span>
-      <div class="sched-w">
-        <p class="sched-title">${esc(e.title || "Busy")}${live ? ' <span class="tag now">Now</span>' : ""}</p>
-        ${e.location ? `<p class="sched-loc">${I.pin}<span>${esc(e.location)}</span></p>` : ""}
-        ${names.length > 1 ? `<p class="sched-cal">${esc(calName(e.calendar, "Calendar"))}</p>` : ""}
-        ${notes ? `<details class="sched-notes"><summary>Notes</summary><p>${esc(notes)}</p></details>` : ""}
-      </div>
-      ${link && !past ? `<a class="btn sm sched-go" href="${esc(link)}" target="_blank" rel="noopener">Open</a>` : ""}
-    </li>`;
-  }).join("");
+  const allDay = evs.filter((e) => e.allDay);
+  const timed = evs.filter((e) => !e.allDay).sort((a, b) => a.start - b.start);
+  const done = timed.filter((e) => (e.end > e.start ? e.end : e.start + 1) <= now);
+  const ahead = timed.filter((e) => (e.end > e.start ? e.end : e.start + 1) > now);
+  const focus = ahead[0];
+  const rest = ahead.slice(1);
+  const names = [...new Set(evs.map((e) => calName(e.calendar, "Calendar")))];
+  // One clearly different color per calendar (work and home side by side should never look alike).
+  const CAL_COLORS = ["#7B3FF2", "#E0A100", "#1F8A70", "#D9485F", "#2F7DD1", "#8A5A2B"];
+  const colorOf = (e) => CAL_COLORS[Math.max(0, names.indexOf(calName(e.calendar, "Calendar"))) % CAL_COLORS.length];
+  const dot = (e) => names.length > 1 ? `<span class="cal-dot" style="--c:${colorOf(e)}" title="${esc(calName(e.calendar, "Calendar"))}"></span>` : "";
+  const line = (e) => `<li class="ag-row">${dot(e)}<span class="ag-t">${esc(shortClock(e.start))}</span><span class="ag-n">${esc(cleanEventTitle(e.title))}</span></li>`;
+
+  let focusHtml = "";
+  if (focus) {
+    const live = focus.start <= now;
+    const mins = Math.round((focus.start - now) / 60e3);
+    const when = live ? `Now, until ${shortClock(focus.end)}` : mins <= 90 ? `In ${mins} min · ${shortClock(focus.start)}` : `Next · ${eventWhen(focus)}`;
+    const place = eventPlace(focus), link = calLink(focus);
+    focusHtml = `<div class="ag-focus${live ? " live" : ""}">
+        <p class="ag-when">${esc(when)}</p>
+        <p class="ag-title">${esc(cleanEventTitle(focus.title))}</p>
+        ${place.text ? `<p class="ag-place">${place.online ? "" : I.pin}<span>${esc(place.text)}</span></p>` : ""}
+        ${link ? `<a class="btn sm primary ag-go" href="${esc(link)}" target="_blank" rel="noopener">${place.online ? "Join" : "Open"}</a>` : ""}
+      </div>`;
+  }
+  const shown = rest.slice(0, 3), more = rest.slice(3);
+  const last = timed.length ? Math.max(...timed.map((e) => e.end)) : 0;
+  const tail = !focus ? (timed.length ? "That's everything today." : "")
+    : last && new Date(last).getHours() < 21 ? `Free after ${shortClock(last)}` : "";
   const day = new Date().toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
-  return sectionHead("On your calendar", left ? `${left} still to come` : "All done") +
-    `<article class="post event sched" aria-label="Today's calendar">
+  const count = `${timed.length} event${timed.length === 1 ? "" : "s"}`;
+  return `<article class="post event agenda" aria-label="Today's calendar">
       <div class="rail"><span class="av av-cal" aria-hidden="true">${I.cal}</span></div>
       <div class="main">
-        <div class="meta"><span class="who">${esc(names.length === 1 ? names[0] : "Your calendars")},</span> <span class="when">${esc(day)}</span></div>
-        <ol class="sched-list">${rows}</ol>
+        <div class="meta"><span class="who">Today,</span> <span class="when">${esc(day)}${timed.length ? ` · ${count}` : ""}</span></div>
+        ${allDay.length ? `<p class="ag-allday">${allDay.map((e) => `<span class="chip">${dot(e)}${esc(cleanEventTitle(e.title))}</span>`).join("")}</p>` : ""}
+        ${focusHtml}
+        ${shown.length ? `<ol class="ag-list">${shown.map(line).join("")}</ol>` : ""}
+        ${more.length ? `<details class="ag-more"><summary>${more.length} more</summary><ol class="ag-list">${more.map(line).join("")}</ol></details>` : ""}
+        ${done.length ? `<details class="ag-more ag-done"><summary>${done.length} earlier today</summary><ol class="ag-list">${done.map(line).join("")}</ol></details>` : ""}
+        ${tail ? `<p class="ag-tail">${esc(tail)}</p>` : ""}
       </div>
     </article>`;
 }
@@ -3505,6 +3530,8 @@ function openSettings(focus = "") {
       <summary><span>Calendar</span><span class="sv">${calOn() ? "On" : "Off"}</span></summary>
       ${nativeCan("calendar") ? `<div class="row"><span class="rk">This iPhone's calendars</span><div class="seg" role="group" aria-label="This iPhone's calendars"><button type="button" data-calnative="1" aria-pressed="${calNative()}">On</button><button type="button" data-calnative="0" aria-pressed="${!calNative()}">Off</button></div></div>
       <p class="note">Everything in the Calendar app: iCloud, Google, Outlook. Events stay on your iPhone.</p>` : ""}
+      ${(() => { const seen = [...new Set((calCache()?.events || []).map((e) => calName(e.calendar, "Calendar")).concat(calHidden()))].sort();
+        return seen.length > 1 ? `<h3 class="sub">Show on Today</h3>${seen.map((n) => `<div class="row"><span class="rk">${esc(n)}</span><div class="seg" role="group" aria-label="${esc(n)}"><button type="button" data-calshow="${esc(n)}:1" aria-pressed="${!calHidden().includes(n)}">Show</button><button type="button" data-calshow="${esc(n)}:0" aria-pressed="${calHidden().includes(n)}">Hide</button></div></div>`).join("")}` : ""; })()}
       <div class="field"><label for="set-cal">${nativeCan("calendar") ? "Or a calendar address" : "Calendar addresses"} <span class="hint">(one per line)</span></label>
         <textarea id="set-cal" rows="3" autocapitalize="off" autocomplete="off" spellcheck="false" placeholder="https://calendar.google.com/calendar/ical/…/basic.ics">${esc(calUrls().join("\n"))}</textarea></div>
       <div class="two">
@@ -3713,6 +3740,14 @@ function openSettings(focus = "") {
       const sv = $("#set-morning .sv", wrap); if (sv) sv.textContent = place.name;
     } catch (e) { say(st2, e.message, true); }
   });
+  wrap.querySelectorAll("[data-calshow]").forEach((b) => b.addEventListener("click", () => {
+    const i = b.dataset.calshow.lastIndexOf(":"), name = b.dataset.calshow.slice(0, i), show = b.dataset.calshow.slice(i + 1) === "1";
+    const list = new Set(calHidden());
+    if (show) list.delete(name); else list.add(name);
+    setCalHidden([...list]);
+    wrap.querySelectorAll(`[data-calshow^="${CSS.escape(name)}:"]`).forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+    render({ top: false });
+  }));
   wrap.querySelectorAll("[data-calnative]").forEach((b) => b.addEventListener("click", async () => {
     const st2 = $("#set-cal-st", wrap);
     if (b.dataset.calnative === "1") {
