@@ -29,8 +29,8 @@ jobs:
         run: |
           cd ios
           set +e
-          xcodebuild -project Shoebox.xcodeproj -scheme Shoebox -sdk iphonesimulator \
-            -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build > build.log 2>&1
+          xcodebuild -project Shoebox.xcodeproj -scheme Shoebox -sdk iphoneos \
+            -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build > build.log 2>&1
           code=$?
           # Surface our own warnings and errors as annotations, so they can be read without the full log.
           grep -E "ios/(App|Share|Widget|Shared)/.*(warning|error):" build.log | sed -E 's#^.*/ios/##' | sort -u | head -40 | sed 's/^/::warning::/'
