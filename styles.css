@@ -661,3 +661,8 @@ details.group[open] { padding-bottom: 14px; }
 .note-pic img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .note-pic + .credit { margin: 6px 0 0; }
 .card + .credit { margin: 6px 0 0; }
+
+/* A sheet's parts keep their size; when they don't fit, the sheet scrolls (iOS would otherwise squeeze them). */
+.sheet > * { flex-shrink: 0; }
+.sheet-wrap { overscroll-behavior: none; }
+.sheet { touch-action: pan-y; }
