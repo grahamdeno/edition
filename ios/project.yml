@@ -33,6 +33,9 @@ targets:
       path: App/Shoebox.entitlements
       properties:
         com.apple.security.application-groups: [group.com.grahamdeno.shoebox]
+        com.apple.developer.icloud-container-identifiers: [iCloud.com.grahamdeno.shoebox]
+        com.apple.developer.ubiquity-container-identifiers: [iCloud.com.grahamdeno.shoebox]
+        com.apple.developer.icloud-services: [CloudDocuments]
     info:
       path: App/Info.plist
       properties:
@@ -49,6 +52,11 @@ targets:
         NSPhotoLibraryUsageDescription: Choose photos to save in Shoebox.
         NSMicrophoneUsageDescription: Record a voice note for Shoebox.
         WKAppBoundDomains: [shoebox.tangomike.app, www.youtube-nocookie.com, www.youtube.com, player.vimeo.com]
+        NSUbiquitousContainers:
+          iCloud.com.grahamdeno.shoebox:
+            NSUbiquitousContainerIsDocumentScopePublic: true
+            NSUbiquitousContainerName: Shoebox
+            NSUbiquitousContainerSupportedFolderLevels: Any
         UIFileSharingEnabled: true
         LSSupportsOpeningDocumentsInPlace: true
         NSCalendarsFullAccessUsageDescription: Shoebox shows today's events at the top of your morning. They stay on your iPhone.

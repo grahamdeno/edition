@@ -199,14 +199,29 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
                 let folder = docs.appendingPathComponent("Backups", isDirectory: true)
                 try fm.createDirectory(at: folder, withIntermediateDirectories: true)
                 try Data(text.utf8).write(to: folder.appendingPathComponent(name), options: .atomic)
-                let old = (try fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil))
-                    .filter { $0.pathExtension == "json" }.sorted { $0.lastPathComponent > $1.lastPathComponent }.dropFirst(7)
-                old.forEach { try? fm.removeItem(at: $0) }
-                self?.reply(id, ["ok": true])
+                Self.keepNewest(7, in: folder)
+                // A copy in iCloud Drive › Shoebox › Backups, when iCloud Drive is on.
+                var icloud = false
+                if let cloud = fm.url(forUbiquityContainerIdentifier: nil) {
+                    let cloudFolder = cloud.appendingPathComponent("Documents/Backups", isDirectory: true)
+                    if (try? fm.createDirectory(at: cloudFolder, withIntermediateDirectories: true)) != nil,
+                       (try? Data(text.utf8).write(to: cloudFolder.appendingPathComponent(name), options: .atomic)) != nil {
+                        Self.keepNewest(7, in: cloudFolder)
+                        icloud = true
+                    }
+                }
+                self?.reply(id, ["ok": true, "icloud": icloud])
             } catch {
                 self?.reply(id, ["ok": false, "error": error.localizedDescription])
             }
         }
+    }
+
+    private static func keepNewest(_ n: Int, in folder: URL) {
+        let fm = FileManager.default
+        let old = ((try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? [])
+            .filter { $0.pathExtension == "json" }.sorted { $0.lastPathComponent > $1.lastPathComponent }.dropFirst(n)
+        old.forEach { try? fm.removeItem(at: $0) }
     }
 
     /// Today's posts, for the widget.

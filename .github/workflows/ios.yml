@@ -34,6 +34,7 @@ jobs:
           cd ios
           # Its own bundle IDs, App Group, name and link scheme, and the web app told it's the personal build.
           sed -i '' 's/com\.grahamdeno\.shoebox/com.grahamdeno.shoebox.me/g' project.yml Shared/Group.swift
+          sed -i '' 's/NSUbiquitousContainerName: Shoebox$/NSUbiquitousContainerName: Shoebox Me/' project.yml
           sed -i '' 's/CFBundleDisplayName: Shoebox$/CFBundleDisplayName: Shoebox Me/; s/CFBundleURLSchemes: \[shoebox\]/CFBundleURLSchemes: [shoeboxme]/' project.yml
           sed -i '' 's|shoebox://|shoeboxme://|g' Widget/ShoeboxWidget.swift
           sed -i '' 's|url.scheme == "shoebox"|url.scheme == "shoeboxme"|' App/ShoeboxApp.swift
