@@ -412,6 +412,8 @@ async function importFromUrl() {
     if (list.length) { state.items = [...list, ...state.items]; n += list.length; }
   }
   if (p.get("open")) state.openId = p.get("open");
+  // Shoebox Me (Graham's private build) opens with ?me=1: personal modules stay on.
+  if (p.get("me") === "1") { try { localStorage.setItem("edition.me", "1"); } catch { /* storage blocked */ } }
   if ([...p.keys()].length) history.replaceState(null, "", location.pathname);
   return n;
 }
