@@ -39,7 +39,7 @@ import { problems, noteError as logError, onFirstProblem, clearProblems, formatP
 import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone } from "./onboard.js";
 
-export const VERSION = "4.34.0";
+export const VERSION = "4.35.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -1427,7 +1427,12 @@ async function checkInbox({ statusEl = null } = {}) {
     const res = await withTimeout(fetch(`${base}/inbox`, { headers: { "x-inbox-key": inboxKey() } }), 15000);
     const data = await res.json().catch(() => ({}));
     if (!res.ok) { say(data?.error?.message || `The relay said ${res.status}.`, true); return 0; }
-    if (data.address) { try { localStorage.setItem("edition.inboxAddress", data.address); } catch { /* full */ } }
+    try {
+      const before = localStorage.getItem("edition.inboxAddress");
+      if (data.address) localStorage.setItem("edition.inboxAddress", data.address); else localStorage.removeItem("edition.inboxAddress");
+      if (data.shared) localStorage.setItem("edition.inboxShared", data.shared); else localStorage.removeItem("edition.inboxShared");
+      if (data.address && before && before !== data.address && /^sb-/.test(data.address)) track("inbox_personal");
+    } catch { /* full */ }
     const done = [];
     for (const m of data.mails || []) {
       const c = schoolSettings();
@@ -4111,7 +4116,17 @@ function openSettings(panel = "", { fromCard = false } = {}) {
       </div>` },
     email: (me || mailOn) && { title: "Email to Shoebox", value: mailOn ? "On" : "Off", body: `
       <div class="group">
-      <p class="note">${(() => { try { const a = localStorage.getItem("edition.inboxAddress"); return a ? `Forward anything to <b>${esc(a)}</b>. Newsletters become posts, with their flyers and PDFs read too; everything else becomes a post of its own.` : "Forward email to your own Shoebox address."; } catch { return ""; } })()}</p>
+      ${(() => {
+        let a = "", shared = "";
+        try { a = localStorage.getItem("edition.inboxAddress") || ""; shared = localStorage.getItem("edition.inboxShared") || ""; } catch { /* blocked */ }
+        if (!a) return `<p class="note">Forward email to your own Shoebox address. It appears here after Shoebox checks for mail.</p>`;
+        const personal = /^sb-/.test(a);
+        return `<p class="note">Your Shoebox address${personal ? ", only for this phone" : ""}:</p>
+          <div class="mail-addr"><b id="set-mail-addr">${esc(a)}</b><button class="btn sm" type="button" id="set-mail-copy">Copy</button></div>
+          <p class="note">Forward anything to it. Newsletters become posts, with their flyers and PDFs read too; everything else becomes a post of its own.</p>
+          ${shared ? `<p class="note">Your old address, <b>${esc(shared)}</b>, still works. To move a Gmail forward: Gmail › Settings › Forwarding › Add a forwarding address, paste the address above, and the confirmation code arrives here in Shoebox as a post.</p>` : ""}
+          ${personal ? `<button class="btn ghost sm" type="button" id="set-mail-new">Get a new address</button>` : ""}`;
+      })()}
       <p class="note">Shoebox checks by itself when you open it and every few minutes while it's open.${(() => { try { const t = +localStorage.getItem("edition.inboxChecked"); return t ? ` Last checked ${esc(clock(t))}.` : ""; } catch { return ""; } })()}</p>
       <button class="btn ghost sm" type="button" id="set-mail-check">Check now</button>
       <span class="st" id="set-mail-st" role="status"></span>
@@ -4299,6 +4314,26 @@ function openSettings(panel = "", { fromCard = false } = {}) {
   }));
   $("#set-usage", wrap)?.addEventListener("toggle", (ev) => { if (ev.currentTarget.open) showUsage($("#set-usage-box", wrap)); });
   $("#set-mail-check", wrap)?.addEventListener("click", () => checkInbox({ statusEl: $("#set-mail-st", wrap) }));
+  $("#set-mail-copy", wrap)?.addEventListener("click", async () => {
+    const a = $("#set-mail-addr", wrap)?.textContent || "";
+    try { await navigator.clipboard.writeText(a); toast("Address copied."); } catch { say($("#set-mail-st", wrap), a); }
+  });
+  $("#set-mail-new", wrap)?.addEventListener("click", async (e) => {
+    const st = $("#set-mail-st", wrap);
+    if (e.target.dataset.sure !== "1") { e.target.dataset.sure = "1"; e.target.textContent = "Tap again: the old address stops working"; return; }
+    e.target.disabled = true;
+    try {
+      const res = await withTimeout(fetch(`${ai.relayBase()}/inbox/address`, { method: "POST", headers: { "x-inbox-key": inboxKey() } }), 15000);
+      const d = await res.json();
+      if (!res.ok || !d.address) throw new Error(d?.error?.message || "No address came back.");
+      localStorage.setItem("edition.inboxAddress", d.address);
+      $("#set-mail-addr", wrap).textContent = d.address;
+      e.target.textContent = "Get a new address"; e.target.dataset.sure = "0";
+      say(st, "New address ready. Update anything that forwards to the old one.");
+      track("inbox_new_address");
+    } catch (err) { say(st, err.message || "Couldn't reach the relay.", true); }
+    e.target.disabled = false;
+  });
   const edSt = $("#set-ed-st", wrap);
   wrap.querySelectorAll("[data-feat]").forEach((b) => b.addEventListener("click", () => showFeature(b.dataset.feat)));
   $("#set-replay", wrap)?.addEventListener("click", () => {

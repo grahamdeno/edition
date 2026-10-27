@@ -939,3 +939,5 @@ details.adv > summary, .group details.adv > summary, .ag-more summary { min-heig
 .cap-try p { margin: 0 0 8px; font-size: 0.875rem; color: var(--fg); }
 .cap-try-b { display: flex; flex-wrap: wrap; gap: 8px; }
 .cap-try-b .btn { min-height: 44px; background: var(--bg); border: 1px solid var(--line-2); color: var(--sig-ink); font-weight: 600; }
+.mail-addr { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 12px; background: var(--sig-soft); margin: 4px 0 8px; }
+.mail-addr b { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 0.9375rem; color: var(--sig-ink); -webkit-user-select: all; user-select: all; }
