@@ -28,6 +28,7 @@ import {
 import * as db from "./db.js";
 import * as push from "./push.js";
 import { parseIcs, eventsOn } from "./calendar.js";
+import * as daily from "./daily.js";
 import { captureText, captureFile, captureTransfer, readClipboard, captureShares } from "./capture.js";
 import { sampleItems, SAMPLES_VERSION } from "./samples.js";
 import * as ai from "./ai.js";
@@ -36,7 +37,7 @@ import { I, LOGO } from "./icons.js";
 import { topicColor, dominantColor, tintInks, focusOf } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "4.13.2";
+export const VERSION = "4.14.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 
@@ -150,6 +151,8 @@ async function boot() {
   schoolPictures();
   registerWorker();
   refreshCalendar();
+  loadMorning();
+  checkInbox();
   setInterval(() => { if (document.visibilityState === "visible") refreshCalendar(); }, 15 * 60e3);
 }
 
@@ -964,12 +967,197 @@ function sectionHead(title, note = "") {
 
 function todayHtml() {
   const s = todaySections();
-  let h = stripHtml(s) + schoolAskHtml() + calendarHtml();
+  let h = stripHtml(s) + morningHtml() + schoolAskHtml() + calendarHtml();
   if (s.school.length) h += sectionHead("From school", `${s.school.filter(isOpen).length || "All"} to do`) + s.school.map((i) => postHtml(i)).join("");
   if (s.fresh.length) h += sectionHead("New", `${s.fresh.filter(isOpen).length || "All"} to sort`) + s.fresh.map((i) => postHtml(i)).join("");
   if (s.six.length) h += sectionHead("Today's six", `${s.six.filter(isOpen).length} of ${s.six.length} left`) + s.six.map((i) => postHtml(i)).join("");
   if (s.sugg.length) h += sectionHead("Top stories") + s.sugg.map((i) => postHtml(i)).join("");
   return h + endHtml(s);
+}
+
+/* ================= This morning =================
+ * The daily set at the top of Today: weather and radar (or your camera),
+ * last night's games, a Jung quote, On this day, and CPMAI practice. Each
+ * can be turned off in Settings › Mornings. Read fresh each day; never saved.
+ */
+const MORNING_KEY = "edition.morning", MORNING_CACHE = "edition.morningCache";
+const MORNING_DEFAULT = { weather: true, zip: "28409", cam: "", hockey: true, teams: ["CAR", "WSH"], jung: true, otd: true, cpmai: true };
+function morningSettings() { try { return { ...MORNING_DEFAULT, ...JSON.parse(localStorage.getItem(MORNING_KEY) || "{}") }; } catch { return { ...MORNING_DEFAULT }; } }
+function setMorningSettings(v) { try { localStorage.setItem(MORNING_KEY, JSON.stringify(v)); } catch { /* private mode */ } }
+function morningCache() {
+  try { const c = JSON.parse(localStorage.getItem(MORNING_CACHE) || "null"); return c && c.day === dayKey() ? c : { day: dayKey() }; } catch { return { day: dayKey() }; }
+}
+function saveMorningCache(c) { try { localStorage.setItem(MORNING_CACHE, JSON.stringify(c)); } catch { /* full */ } }
+const yesterdayKey = () => dayKey(Date.now() - 864e5);
+
+let morningLoading = false;
+async function loadMorning() {
+  if (morningLoading) return;
+  morningLoading = true;
+  const m = morningSettings();
+  let c = morningCache(), changed = false;
+  try {
+    const place = daily.PLACES[m.zip] || daily.PLACES["28409"];
+    if (m.weather && (!c.weather || Date.now() - c.weather.at > 60 * 60e3)) {
+      try { c.weather = await withTimeout(daily.fetchWeather(place), 15000); changed = true; } catch (e) { noteError(e, { quiet: true, where: "weather" }); }
+    }
+    if (m.hockey && ai.relayBase() && (!c.gamesAt || (!c.games?.length && Date.now() - c.gamesAt > 2 * 3600e3))) {
+      try {
+        const res = await withTimeout(fetch(`${ai.relayBase()}/nhl?date=${yesterdayKey()}`), 15000);
+        if (res.ok) { c.games = daily.gamesFor(await res.json(), m.teams); c.gamesAt = Date.now(); changed = true; }
+      } catch (e) { noteError(e, { quiet: true, where: "hockey" }); }
+    }
+    if (m.cpmai && ai.settings.enabled() && !c.cpmai && !c.cpmaiTried) {
+      c.cpmaiTried = true;
+      try {
+        const recent = (() => { try { return JSON.parse(localStorage.getItem("edition.cpmaiRecent") || "[]"); } catch { return []; } })();
+        const questions = await withTimeout(ai.cpmaiQuestions({ count: 3, seed: daily.dayOfYear(), recent }), 60000);
+        if (questions.length) {
+          c.cpmai = { questions, answers: {} };
+          try { localStorage.setItem("edition.cpmaiRecent", JSON.stringify([...questions.map((q) => q.q.slice(0, 80)), ...recent].slice(0, 24))); } catch { /* full */ }
+        }
+      } catch (e) { noteError(e, { quiet: true, where: "CPMAI questions" }); }
+      changed = true;
+    }
+  } finally {
+    morningLoading = false;
+  }
+  if (changed) {
+    c = { ...morningCache(), ...c };
+    saveMorningCache(c);
+    if (state.tab === "today" && !state.reader && !$(".sheet-wrap")) render({ top: false });
+  }
+}
+
+function morningHtml() {
+  const m = morningSettings(), c = morningCache();
+  const cards = [];
+  const place = daily.PLACES[m.zip] || daily.PLACES["28409"];
+  const card = (cls, rail, meta, body) => `<article class="post daily ${cls}"><div class="rail">${rail}</div><div class="main"><div class="meta">${meta}</div>${body}</div></article>`;
+  const hm = (iso) => (iso ? new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) : "");
+  if (m.weather && c.weather) {
+    const w = c.weather;
+    const pic = m.cam || `https://radar.weather.gov/ridge/standard/${place.radar}_0.gif?t=${Math.floor(Date.now() / 6e5)}`;
+    cards.push(card("wx", `<span class="av av-day wx-ic" aria-hidden="true">${I.sun}</span>`,
+      `<span class="who">Weather,</span> <span class="when">${esc(place.name)} ${esc(m.zip)}</span>`,
+      `<p class="wx-now"><span class="deg">${w.now}°</span><span class="wx-word">${esc(w.word)}<small>Feels like ${w.feels}°</small></span></p>
+       <p class="wx-line">High ${w.hi}° · Low ${w.lo}°${w.rain != null ? ` · Rain ${w.rain}%` : ""} · Wind ${esc(w.windFrom)} ${w.wind} mph${w.gusts > w.wind + 5 ? `, gusts ${w.gusts}` : ""}</p>
+       <p class="wx-line">Sunrise ${hm(w.sunrise)} · Sunset ${hm(w.sunset)}</p>
+       ${w.tides?.length ? `<p class="wx-line">Tides: ${w.tides.map((t) => `${t.type} ${hm(t.t.replace(" ", "T"))}`).join(" · ")}</p>` : ""}
+       <figure class="wx-pic"><img alt="${m.cam ? "Camera view" : `Weather radar around ${esc(place.name)}`}" src="${esc(pic)}" referrerpolicy="no-referrer" loading="lazy" onerror="this.closest('figure')?.remove()">
+         <figcaption>${m.cam ? "Your camera" : `Radar, ${esc(place.radar)} ${esc(place.name)} (National Weather Service)`}</figcaption></figure>`));
+  }
+  if (m.hockey) for (const g of c.games || []) {
+    if (!g.done) continue;
+    const res = g.won ? "W" : "L";
+    cards.push(card(`nhl t-${esc(g.team)}`, `<span class="av av-day team" aria-hidden="true">${esc(g.team)}</span>`,
+      `<span class="who">${esc(g.name)},</span> <span class="when">last night</span><span class="tag ${g.won ? "won" : ""}">${res}${g.end ? ` · ${esc(g.end)}` : ""}</span>`,
+      `<p class="score">${esc(g.name)} ${g.us}, ${esc(g.opp)} ${g.them}</p>
+       <p class="wx-line">${g.home ? "At home" : "Away"}${g.scorers.length ? ` · Goals: ${esc(g.scorers.join(", "))}` : ""}</p>
+       ${g.recap || g.center ? `<a class="btn sm hl" href="${esc(g.recap || g.center)}" target="_blank" rel="noopener">${I.play}<span>${g.recap ? "Watch highlights" : "Game recap"}</span></a>` : ""}`));
+  }
+  if (m.jung) {
+    const j = daily.jungFor();
+    cards.push(card("jung", `<span class="av av-day" aria-hidden="true">J</span>`, `<span class="who">Carl Jung</span>`,
+      `<blockquote class="jung-q">${esc(j.q)}</blockquote><p class="wx-line">${esc(j.src)}</p>`));
+  }
+  if (m.otd) {
+    const o = daily.onThisDay(state.items);
+    if (o) {
+      const pic = pictureOf(o.item);
+      const img = pic ? (pic.blobId ? `<img alt="" data-blob="${esc(pic.blobId)}">` : `<img alt="" src="${esc(pic.src)}" referrerpolicy="no-referrer" onerror="this.remove()">`) : "";
+      cards.push(card("otd", avatarHtml(), `<span class="who">On this day,</span> <span class="when">${esc(o.label.toLowerCase())}</span>`,
+        `<button class="otd-card" type="button" data-open="${esc(o.item.id)}">${img ? `<span class="otd-pic">${img}</span>` : ""}
+          <span class="otd-t"><span class="ttl">${esc(o.item.why || o.item.title || "Something you saved")}</span>${o.item.why && o.item.title ? `<span class="site">${esc(o.item.title)}</span>` : ""}</span></button>`));
+    }
+  }
+  if (m.cpmai && c.cpmai?.questions?.length) {
+    const qs = c.cpmai.questions, ans = c.cpmai.answers || {};
+    const right = qs.filter((q, k) => ans[k] && ans[k].length === q.answer.length && ans[k].every((x) => q.answer.includes(x))).length;
+    const doneN = qs.filter((q, k) => ans[k] && ans[k].length === q.answer.length).length;
+    cards.push(card("quiz", `<span class="av av-day" aria-hidden="true">AI</span>`,
+      `<span class="who">CPMAI practice,</span> <span class="when">${doneN === qs.length ? `${right} of ${qs.length} right` : `${qs.length} questions`}</span>`,
+      qs.map((q, k) => {
+        const picked = ans[k] || [], shown = picked.length === q.answer.length;
+        return `<div class="cq${shown ? " shown" : ""}"><p class="cq-q"><b>${k + 1}.</b> ${esc(q.q)}${q.answer.length > 1 && !/choose two/i.test(q.q) ? " <em>(Choose two.)</em>" : ""}</p>
+          <div class="cq-opts">${q.options.map((o, i) => {
+            const st = shown ? (q.answer.includes(i) ? "right" : picked.includes(i) ? "wrong" : "") : picked.includes(i) ? "picked" : "";
+            return `<button class="cq-o ${st}" type="button" data-cq="${k}:${i}" ${shown ? "disabled" : ""}><span class="l">${"ABCDE"[i]}</span><span>${esc(o)}</span></button>`;
+          }).join("")}</div>
+          ${shown ? `<p class="cq-why"><b>${q.answer.length === picked.length && picked.every((x) => q.answer.includes(x)) ? "Right." : `Answer: ${q.answer.map((i) => "ABCDE"[i]).join(", ")}.`}</b> ${esc(q.why)}</p>` : ""}</div>`;
+      }).join("")));
+  }
+  return cards.length ? sectionHead("This morning") + cards.join("") : "";
+}
+
+/** A tap on a CPMAI option: pick it; once enough are picked, show the answer. */
+function answerCpmai(k, i) {
+  const c = morningCache();
+  const q = c.cpmai?.questions?.[k];
+  if (!q) return;
+  const ans = c.cpmai.answers || (c.cpmai.answers = {});
+  const cur = ans[k] || [];
+  if (cur.length >= q.answer.length) return;
+  ans[k] = cur.includes(i) ? cur.filter((x) => x !== i) : [...cur, i];
+  saveMorningCache(c);
+  tick(true);
+  render({ top: false });
+}
+
+/* ================= Your Shoebox email address =================
+ * Mail you forward to your Shoebox address waits at the relay until the app
+ * collects it. School mail becomes school posts (one per piece that matters);
+ * anything else becomes a post of its own, titled by its subject.
+ */
+function inboxKey() {
+  try {
+    let k = localStorage.getItem("edition.inboxKey");
+    if (!k) { k = (crypto.randomUUID ? crypto.randomUUID() + crypto.randomUUID() : Math.random().toString(36).slice(2) + Date.now().toString(36) + Math.random().toString(36).slice(2)).replace(/[^\w-]/g, ""); localStorage.setItem("edition.inboxKey", k); }
+    return k;
+  } catch { return ""; }
+}
+
+let inboxRunning = false;
+async function checkInbox({ statusEl = null } = {}) {
+  const base = ai.relayBase();
+  if (!base || inboxRunning) return 0;
+  inboxRunning = true;
+  const say = (msg, err) => { if (statusEl) { statusEl.textContent = msg; statusEl.classList.toggle("err", !!err); } };
+  let made = 0;
+  try {
+    const res = await withTimeout(fetch(`${base}/inbox`, { headers: { "x-inbox-key": inboxKey() } }), 15000);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) { say(data?.error?.message || `The relay said ${res.status}.`, true); return 0; }
+    if (data.address) { try { localStorage.setItem("edition.inboxAddress", data.address); } catch { /* full */ } }
+    const done = [];
+    for (const m of data.mails || []) {
+      const c = schoolSettings();
+      const school = new RegExp(`nhcs\\.net|${(c.school || "").split(" ").slice(0, 2).join(" ").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "i").test(`${m.from} ${m.fromName} ${m.subject}`);
+      if (school && ai.settings.enabled()) {
+        const before = state.items.length;
+        await pullNewsletter(`${m.subject}\n\n${m.text}`, null);
+        made += state.items.length - before;
+      } else {
+        const link = (m.links || [])[0];
+        const body = String(m.text || "").trim();
+        const item = createItem({ kind: KIND.NOTE, text: body.slice(0, 8000), title: m.subject || body.slice(0, 80) || "Email" }, { id: db.newId(), source: "email" });
+        Object.assign(item, { title: m.subject || item.title, email: { from: m.from, fromName: m.fromName || m.from, at: m.at }, url: link || undefined });
+        await saveItem(item);
+        made++;
+      }
+      done.push(m.id);
+    }
+    if (done.length) await fetch(`${base}/inbox/ack`, { method: "POST", headers: { "x-inbox-key": inboxKey(), "content-type": "application/json" }, body: JSON.stringify({ ids: done }) }).catch(() => {});
+    say(done.length ? `${done.length} email${done.length === 1 ? "" : "s"} collected.` : "No new email.");
+    if (made) { tick(true); render({ top: false }); enrichPending(); picturePending(); }
+    return made;
+  } catch (e) {
+    noteError(e, { quiet: true, where: "inbox" });
+    say("Couldn't reach your relay.", true);
+    return 0;
+  } finally {
+    inboxRunning = false;
+  }
 }
 
 /* ================= School newsletter =================
@@ -1349,6 +1537,7 @@ function tideHtml(waiting) {
 function byline(item) {
   if (item.suggested) return { who: APP, when: friendlyWhen(item.created) };
   if (item.school) return { who: item.school.name || "School", when: friendlyWhen(item.created) };
+  if (item.email) return { who: item.email.fromName || "Email", when: friendlyWhen(item.created) };
   return { who: "You", when: friendlyWhen(item.created) };
 }
 
@@ -1365,6 +1554,7 @@ function postHtml(item, { compact = false } = {}) {
   // The words at the top: your reason, else Shoebox's line about it (marked as a guess), else nothing.
   let say = "";
   if (item.suggested) say = `<p class="body">${esc(item.suggestReason || item.summary || "Picked from what you finish.")}</p>`;
+  else if (item.email) say = `<p class="school-head">${esc(item.title)}</p><p class="body">${esc(String(item.text || "").replace(/\s+/g, " ").slice(0, 280))}${String(item.text || "").length > 280 ? "…" : ""}</p>`;
   else if (item.school) say = `<p class="school-head">${esc(item.title)}</p><p class="body">${esc(item.school.body || "")}</p>`
     + (item.school.date ? `<p class="ev-place">${I.cal}<span>${esc(shortDate(fromDateInput(item.school.date)))}</span></p>` : "");
   else if (item.kind === KIND.NOTE) say = `<p class="say">${esc(item.text || item.title)}</p>`;
@@ -1533,6 +1723,7 @@ async function onTimelineClick(e) {
   const hit = (sel) => t.closest(sel);
   let b;
   if ((b = hit("[data-tab]"))) { selectTab(b.dataset.tab); return; }
+  if ((b = hit("[data-cq]"))) { const [k, i] = b.dataset.cq.split(":").map(Number); answerCpmai(k, i); return; }
   if ((b = hit("[data-school=go]"))) {
     b.disabled = true;
     const ok = await pullNewsletter($("#ask-in")?.value, $("#ask-st"));
@@ -2827,6 +3018,25 @@ function openSettings() {
       <p class="note">When something you set aside comes back, at 9:00. Needs the relay${push.needsHomeScreen() ? "; on iPhone, open Shoebox from your Home Screen" : ""}.</p>
     </details>
     <details class="group">
+      <summary><span>Mornings</span></summary>
+      ${[["weather", "Weather and radar"], ["hockey", "Last night's games"], ["jung", "Jung quote"], ["otd", "On this day"], ["cpmai", "CPMAI practice"]].map(([k, label]) =>
+        `<div class="row"><span class="rk">${label}</span><div class="seg" role="group" aria-label="${label}"><button type="button" data-mo="${k}:1" aria-pressed="${morningSettings()[k]}">On</button><button type="button" data-mo="${k}:0" aria-pressed="${!morningSettings()[k]}">Off</button></div></div>`).join("")}
+      <div class="two">
+        <div class="field"><label for="set-mo-teams">Teams</label><input id="set-mo-teams" type="text" autocomplete="off" autocapitalize="characters" value="${esc(morningSettings().teams.join(", "))}"></div>
+        <div class="field"><label for="set-mo-zip">ZIP</label><input id="set-mo-zip" type="text" inputmode="numeric" autocomplete="off" value="${esc(morningSettings().zip)}" disabled></div>
+      </div>
+      <div class="field"><label for="set-mo-cam">Camera picture <span class="hint">(optional: a webcam image address; blank shows the radar)</span></label>
+        <input id="set-mo-cam" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://…/latest.jpg" value="${esc(morningSettings().cam)}"></div>
+      <button class="btn" type="button" id="set-mo-save">Save</button>
+      <span class="st" id="set-mo-st" role="status"></span>
+    </details>
+    <details class="group">
+      <summary><span>Email in</span><span class="sv">${(() => { try { return localStorage.getItem("edition.inboxAddress") ? "On" : "Off"; } catch { return "Off"; } })()}</span></summary>
+      <p class="note">${(() => { try { const a = localStorage.getItem("edition.inboxAddress"); return a ? `Forward anything to <b>${esc(a)}</b>. School mail becomes school posts; everything else becomes a post of its own.` : "Forward email to your own Shoebox address. Needs a domain on Cloudflare: setup steps are in the repo's relay folder."; } catch { return ""; } })()}</p>
+      <button class="btn" type="button" id="set-mail-check">Check for email now</button>
+      <span class="st" id="set-mail-st" role="status"></span>
+    </details>
+    <details class="group">
       <summary><span>School newsletter</span><span class="sv">${schoolSettings().on ? "Mon, Fri" : "Off"}</span></summary>
       <div class="row"><span class="rk">Ask me</span>
         <div class="seg" role="group" aria-label="Ask me"><button type="button" data-school-on="1" aria-pressed="${schoolSettings().on}">Mon and Fri</button><button type="button" data-school-on="0" aria-pressed="${!schoolSettings().on}">Off</button></div></div>
@@ -2924,6 +3134,23 @@ function openSettings() {
   bindPushSettings(wrap);
   bindCalendarSettings(wrap);
   bindSchoolSettings(wrap);
+  wrap.querySelectorAll("[data-mo]").forEach((b) => b.addEventListener("click", () => {
+    const [k, on] = b.dataset.mo.split(":");
+    setMorningSettings({ ...morningSettings(), [k]: on === "1" });
+    wrap.querySelectorAll(`[data-mo^="${k}:"]`).forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+    render({ top: false });
+    loadMorning();
+  }));
+  $("#set-mo-save", wrap).addEventListener("click", () => {
+    const teams = $("#set-mo-teams", wrap).value.toUpperCase().split(/[\s,]+/).filter((t) => /^[A-Z]{3}$/.test(t)).slice(0, 4);
+    const cam = $("#set-mo-cam", wrap).value.trim();
+    setMorningSettings({ ...morningSettings(), teams: teams.length ? teams : MORNING_DEFAULT.teams, cam: /^https:\/\//.test(cam) ? cam : "" });
+    const c = morningCache(); delete c.gamesAt; delete c.games; saveMorningCache(c);
+    $("#set-mo-st", wrap).textContent = "Saved.";
+    render({ top: false });
+    loadMorning();
+  });
+  $("#set-mail-check", wrap).addEventListener("click", () => checkInbox({ statusEl: $("#set-mail-st", wrap) }));
   const pSt = $("#set-pplx-st", wrap);
   $("#set-pplx-save", wrap).addEventListener("click", async () => {
     ai.settings.setPplxKey($("#set-pplx", wrap).value.trim());
@@ -3473,6 +3700,8 @@ function wireGlobal() {
     await importShares();
     const woke = await wakeDue();
     refreshCalendar();
+    loadMorning();
+    checkInbox();
     await ensureEdition();
     if (woke || state.items.length !== before || (state.edition && state.edition.date !== day)) {
       if (state.edition && state.edition.date !== day) state.recent.clear();

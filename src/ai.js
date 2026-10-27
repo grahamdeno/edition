@@ -53,11 +53,11 @@ export class AiError extends Error {
   constructor(message, status) { super(message); this.status = status; }
 }
 
-async function call({ content, system, maxTokens = 600, tools }) {
+async function call({ content, system, maxTokens = 600, tools, model = null }) {
   const key = settings.key();
   if (!key) throw new AiError("No API key set.");
   const body = {
-    model: settings.model(),
+    model: model || settings.model(),
     max_tokens: maxTokens,
     messages: [{ role: "user", content }],
   };
@@ -732,4 +732,41 @@ export function unwrapLink(raw) {
     s = inner;
   }
   return s;
+}
+
+/* ---- CPMAI practice ----
+ * A few exam-style questions a day for the PMI-CPMAI certification, across
+ * the six CPMAI phases and the course's core ideas. Single answer or
+ * "choose two"; each with why the answer is right.
+ */
+/** Exam questions need to be right more than they need to be cheap. */
+export const QUIZ_MODEL = "claude-sonnet-5-5";
+
+export const CPMAI_TOPICS = [
+  "why AI projects fail and how CPMAI addresses it", "the seven patterns of AI", "AI vs. automation fit", "the five-layer trustworthy AI framework",
+  "adapting agile for data-centric projects", "Phase I Business Understanding: AI Go/No-Go (business, data, technology feasibility)",
+  "Phase I: ROI timing and the proof-of-concept trap vs. pilot/MVP", "the DIKUW pyramid", "probabilistic vs. deterministic systems",
+  "Phase II Data Understanding: data sources, quality, quantity, the four Vs", "Phase III Data Preparation: cleansing, labeling, augmentation, feature engineering",
+  "Phase IV Model Development: algorithm and approach selection, pretrained vs. foundation models, transfer learning",
+  "Phase V Model Evaluation: metrics, overfitting, bias, explainability", "Phase VI Model Operationalization: deployment, monitoring, model drift, iteration",
+  "generative AI risks: hallucination, IP, prompt injection, private-data leakage", "AI team roles: business, data science, data engineering, operationalization",
+];
+
+export async function cpmaiQuestions({ count = 3, seed = 0, recent = [] } = {}) {
+  const topics = [0, 1, 2].map((k) => CPMAI_TOPICS[(seed * 3 + k * 5) % CPMAI_TOPICS.length]);
+  const prompt = [
+    `Write ${count} practice questions for the PMI Certified Professional in Managing AI (PMI-CPMAI) exam, in the style of the real exam: scenario-based, one best answer, plausible distractors.`,
+    `Cover these topics, one question each: ${topics.join("; ")}.`,
+    "Use the CPMAI methodology's own terms and its six phases (Business Understanding, Data Understanding, Data Preparation, Model Development, Model Evaluation, Model Operationalization).",
+    "Make one of them a choose-two question.",
+    recent.length ? `Don't repeat these recent questions: ${recent.slice(0, 12).join(" | ")}` : "",
+    "",
+    'Return JSON: {"questions": [{"topic": string (short), "q": string (max 320 chars), "options": array of 4 or 5 strings (max 140 chars each), "answer": array of the correct option indexes (one, or two for choose-two), "why": string (max 300 chars: why the answer is right and the best distractor is wrong)}]}',
+  ].filter(Boolean).join("\n");
+  const out = parseJson(textOf(await call({ content: prompt, system: "You write accurate certification practice questions. Reply with JSON only.", maxTokens: 2500, model: QUIZ_MODEL })));
+  return (out.questions || []).slice(0, count).map((x) => {
+    const options = (Array.isArray(x.options) ? x.options : []).slice(0, 5).map((o) => clip(o, 160)).filter(Boolean);
+    const answer = (Array.isArray(x.answer) ? x.answer : [x.answer]).map(Number).filter((n) => Number.isInteger(n) && n >= 0 && n < options.length);
+    return { topic: clip(x.topic, 60), q: clip(x.q, 360), options, answer: [...new Set(answer)], why: clip(x.why, 340) };
+  }).filter((x) => x.q && x.options.length >= 3 && x.answer.length);
 }
