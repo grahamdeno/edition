@@ -36,7 +36,7 @@ import { I, LOGO } from "./icons.js";
 import { topicColor, dominantColor, tintInks, focusOf } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "4.13.1";
+export const VERSION = "4.13.2";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 
@@ -2397,7 +2397,7 @@ function openAdd() {
       <span class="st" id="cap-st" role="status"></span>
       <button class="btn primary save" type="button" id="cap-save">Save</button>
     </div>
-    <input type="file" id="in-any" multiple hidden>`, { label: "Add", guard: capHasDraft });
+    <input type="file" id="in-any" multiple hidden>`, { tall: true, label: "Add", guard: capHasDraft });
   wrap.classList.add("adding");
   const ta = $("#cap-text", wrap);
   const grow = (el, max) => { el.style.height = "auto"; el.style.height = `${Math.min(el.scrollHeight + 2, max)}px`; };
@@ -3343,6 +3343,7 @@ function bindPull({ scroller, target, host, label, onBack, guard = null }) {
     target.style.transform = "";
   };
   scroller.addEventListener("touchstart", (e) => {
+    if (y0 == null && target.style.transform) { target.style.transition = "transform 0.2s ease"; target.style.transform = ""; }
     if (scroller.scrollTop > 0 || e.touches.length !== 1) return;
     if (e.target.closest("input, textarea, iframe, video, audio, .chips, .tray, .picks")) return;
     if (drag) {
