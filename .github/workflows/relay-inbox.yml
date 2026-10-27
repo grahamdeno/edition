@@ -24,3 +24,7 @@ jobs:
             for (const t of times) console.log(`::notice::arrived ${new Date(t).toISOString()}`);
           '
           if npx -y wrangler@4 kv key get inbox-key --namespace-id "$KV" --remote >/dev/null 2>&1; then echo "::notice::An app has claimed the inbox"; else echo "::notice::No app has claimed the inbox yet"; fi
+          # Song of the day: only whether it's set up and when the last song arrived (never the song).
+          if npx -y wrangler@4 kv key get song-key --namespace-id "$KV" --remote >/dev/null 2>&1; then echo "::notice::Song key: set"; else echo "::notice::Song key: not made yet (Shoebox makes it when Settings shows it)"; fi
+          npx -y wrangler@4 kv key get song --namespace-id "$KV" --remote > song.json 2>/dev/null || echo '{}' > song.json
+          node -e 'const s = JSON.parse(require("fs").readFileSync("song.json", "utf8") || "{}"); console.log(s.at ? `::notice::Last song arrived ${new Date(s.at).toISOString()} (matched in Apple Music: ${s.match ? "yes" : "no"})` : "::notice::No song has arrived from the Shortcut yet");'
