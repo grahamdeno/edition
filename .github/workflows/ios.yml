@@ -13,6 +13,11 @@ concurrency:
 jobs:
   build:
     runs-on: macos-26
+    strategy:
+      fail-fast: false
+      matrix:
+        # public: Shoebox (App Store). me: Shoebox Me, Graham's private TestFlight-only build.
+        variant: [public, me]
     env:
       HAS_KEY: ${{ secrets.ASC_KEY_P8 != '' }}
     steps:
@@ -23,6 +28,18 @@ jobs:
           X="$(ls -d /Applications/Xcode_*.app | grep -vi beta | sort -V | tail -1)"
           sudo xcode-select -s "$X"
           xcodebuild -version | head -1 | sed 's/^/::notice::Using /'
+      - name: Shoebox Me settings
+        if: matrix.variant == 'me'
+        run: |
+          cd ios
+          # Its own bundle IDs, App Group, name and link scheme, and the web app told it's the personal build.
+          sed -i '' 's/com\.grahamdeno\.shoebox/com.grahamdeno.shoebox.me/g' project.yml Shared/Group.swift
+          sed -i '' 's/CFBundleDisplayName: Shoebox$/CFBundleDisplayName: Shoebox Me/; s/CFBundleURLSchemes: \[shoebox\]/CFBundleURLSchemes: [shoeboxme]/' project.yml
+          sed -i '' 's|shoebox://|shoeboxme://|g' Widget/ShoeboxWidget.swift
+          sed -i '' 's|url.scheme == "shoebox"|url.scheme == "shoeboxme"|' App/ShoeboxApp.swift
+          sed -i '' 's|?native=1"|?native=1\&me=1"|' App/WebViewController.swift
+          sed -i '' 's/"com.grahamdeno.shoebox" => "Shoebox", "com.grahamdeno.shoebox.share" => "Shoebox Share", "com.grahamdeno.shoebox.widget" => "Shoebox Widget"/"com.grahamdeno.shoebox.me" => "Shoebox Me", "com.grahamdeno.shoebox.me.share" => "Shoebox Me Share", "com.grahamdeno.shoebox.me.widget" => "Shoebox Me Widget"/' register-device.rb
+          grep -n "shoebox.me\|Shoebox Me\|shoeboxme\|me=1" project.yml Shared/Group.swift App/WebViewController.swift App/ShoeboxApp.swift Widget/ShoeboxWidget.swift register-device.rb | head -20
       - name: Make the Xcode project
         run: brew install xcodegen && cd ios && xcodegen generate
       - name: Compile (simulator, unsigned)
@@ -78,4 +95,4 @@ jobs:
           xcrun altool --upload-app -f *.ipa -t ios --apiKey ${{ secrets.ASC_KEY_ID }} --apiIssuer ${{ secrets.ASC_ISSUER_ID }} > upload.log 2>&1
           code=$?
           if [ $code -ne 0 ]; then echo "::error::upload failed"; report upload.log; exit $code; fi
-          echo "::notice::Uploaded build ${{ github.run_number }} to TestFlight"
+          echo "::notice::Uploaded ${{ matrix.variant }} build ${{ github.run_number }} to TestFlight"
