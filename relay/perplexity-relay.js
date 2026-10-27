@@ -37,7 +37,7 @@
  */
 
 /** What this copy of the relay can do; the app checks it to say when an update is needed. */
-export const RELAY_VERSION = 9;
+export const RELAY_VERSION = 10;
 export const RELAY_FEATURES = ["preview", "image", "photo", "agent", "push", "remind", "ical", "nhl", "inbox", "apple", "ai", "stats"];
 
 const ALLOWED_ORIGINS = ["https://shoebox.tangomike.app", "https://grahamdeno.github.io"];
@@ -63,7 +63,7 @@ function json(status, message, headers) {
   return new Response(JSON.stringify({ error: { message } }), { status, headers: { ...headers, "content-type": "application/json" } });
 }
 
-export default {
+const RELAY = {
   /** Mail sent to your Shoebox address (Cloudflare Email Routing). Kept until the app picks it up. */
   async email(message, env) {
     if (!env.SHOEBOX) { message.setReject("Shoebox isn't set up to receive mail."); return; }
@@ -79,7 +79,13 @@ export default {
   async scheduled(event, env, ctx) {
     ctx.waitUntil(sendDue(env));
   },
-  async fetch(request, env = {}) {
+  /** Every answer carries CORS headers, errors too, so the app sees what went wrong instead of "couldn't reach". */
+  async fetch(request, env = {}, ctx = null) {
+    try { return await RELAY.handle(request, env, ctx); } catch (e) {
+      return json(500, `The relay hit a problem: ${String(e && e.message || e).slice(0, 200)}`, corsHeaders(request.headers.get("origin") || ""));
+    }
+  },
+  async handle(request, env = {}, ctx = null) {
     const origin = request.headers.get("origin") || "";
     const cors = corsHeaders(origin);
     // The one caller without a web address: your iPhone Shortcut posting the song of the day (it carries the song key).
@@ -89,7 +95,7 @@ export default {
     const { pathname, searchParams } = new URL(request.url);
     if (request.method === "GET" && pathname === "/preview") return preview(searchParams.get("url"), cors, searchParams.get("text") === "1");
     if (request.method === "GET" && pathname === "/version") return new Response(JSON.stringify({ version: RELAY_VERSION, features: RELAY_FEATURES, push: Boolean(env.SHOEBOX), email: env.EMAIL_ADDRESS || null, apple: Boolean(env.APPLE_P8), weatherkit: Boolean(env.APPLE_P8 && env.APPLE_WEATHER_SERVICE_ID), ai: Boolean(env.ANTHROPIC_API_KEY && env.SHOEBOX) }), { headers: { ...cors, "content-type": "application/json" } });
-    if (pathname.startsWith("/ai/")) return aiRoute(request, env, pathname, cors);
+    if (pathname.startsWith("/ai/")) return aiRoute(request, env, pathname, cors, ctx);
     if (pathname === "/stats" || pathname === "/stats/report") return statsRoute(request, env, pathname, cors);
     if (pathname.startsWith("/apple/") || pathname === "/song") return appleRoute(request, env, pathname, searchParams, cors);
     if (request.method === "GET" && pathname === "/nhl") return nhl(searchParams.get("date"), cors);
@@ -119,6 +125,8 @@ export default {
     return new Response(upstream.body, { status: upstream.status, headers });
   },
 };
+
+export default RELAY;
 
 /* ---- Link previews ----
  * Fetch the page (first 400 KB is plenty for the <head>), read its Open Graph
@@ -279,6 +287,7 @@ async function photo(q, cors) {
     res = await fetch(`https://api.openverse.org/v1/images/?q=${encodeURIComponent(query)}&page_size=20&mature=false`, {
       headers: { "user-agent": "EditionRelay/1.0 (personal reading app)", accept: "application/json" },
       cf: { cacheTtl: 86400, cacheEverything: true },
+      signal: AbortSignal.timeout(8000), // a slow photo service shouldn't hold the app up
     });
   } catch {
     return out(200, { photos: [] });
@@ -792,7 +801,7 @@ const aiJson = (status, body, cors) => new Response(JSON.stringify(body), { stat
 
 async function spent(kv, key) { return parseInt(await kv.get(key), 10) || 0; }
 
-async function aiRoute(request, env, pathname, cors) {
+async function aiRoute(request, env, pathname, cors, ctx = null) {
   const kv = env.SHOEBOX;
   if (!env.ANTHROPIC_API_KEY || !kv) return aiJson(503, { error: { message: "AI isn't set up on the relay yet." } }, cors);
   const today = dayOf();
@@ -833,27 +842,55 @@ async function aiRoute(request, env, pathname, cors) {
   const bad = checkAiBody(body);
   if (bad) return aiJson(400, { error: { message: bad } }, cors);
 
-  let res;
-  try {
-    res = await fetch(ANTHROPIC_URL, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
-      body: JSON.stringify(body),
-    });
-  } catch {
-    return aiJson(502, { error: { message: "The relay couldn't reach Claude." } }, cors);
+  // Ask Claude and charge the budget; the answer as [status, body].
+  const ask = async () => {
+    let res;
+    try {
+      res = await fetch(ANTHROPIC_URL, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
+        body: JSON.stringify(body),
+      });
+    } catch {
+      return [502, { error: { message: "The relay couldn't reach Claude." } }];
+    }
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) {
+      const cost = aiCost(body.model, data.usage);
+      await Promise.all([
+        kv.put(dk, String(mine + cost), { expirationTtl: 3 * 86400 }),
+        kv.put(ak, String(all + cost), { expirationTtl: 3 * 86400 }),
+      ]);
+      return [200, data];
+    }
+    if (res.status === 401 || res.status === 403) return [502, { error: { message: "The relay's Anthropic key was rejected." } }];
+    return [res.status, data];
+  };
+
+  // A web search can take over a minute, longer than a phone waits for a silent connection.
+  // So those answers start at once and send a space every 10 seconds (JSON ignores leading
+  // spaces) until Claude's answer follows; an error comes as {"error":…,"status":…}.
+  if (Array.isArray(body.tools) && body.tools.length) {
+    const { readable, writable } = new TransformStream();
+    const w = writable.getWriter(), enc = new TextEncoder();
+    const beat = setInterval(() => { w.write(enc.encode(" ")).catch(() => {}); }, 10000);
+    const work = (async () => {
+      try {
+        const [status, data] = await ask();
+        await w.write(enc.encode(JSON.stringify(status === 200 ? data : { ...data, status })));
+      } catch (e) {
+        await w.write(enc.encode(JSON.stringify({ error: { message: "The relay hit a problem." }, status: 500 }))).catch(() => {});
+      } finally {
+        clearInterval(beat);
+        await w.close().catch(() => {});
+      }
+    })();
+    if (ctx && ctx.waitUntil) ctx.waitUntil(work);
+    w.write(enc.encode(" ")).catch(() => {});
+    return new Response(readable, { status: 200, headers: { ...cors, "content-type": "application/json", "cache-control": "no-store" } });
   }
-  const data = await res.json().catch(() => ({}));
-  if (res.ok) {
-    const cost = aiCost(body.model, data.usage);
-    await Promise.all([
-      kv.put(dk, String(mine + cost), { expirationTtl: 3 * 86400 }),
-      kv.put(ak, String(all + cost), { expirationTtl: 3 * 86400 }),
-    ]);
-  } else if (res.status === 401 || res.status === 403) {
-    return aiJson(502, { error: { message: "The relay's Anthropic key was rejected." } }, cors);
-  }
-  return aiJson(res.status, data, cors);
+  const [status, data] = await ask();
+  return aiJson(status, data, cors);
 }
 
 /* ---- Anonymous usage stats ----

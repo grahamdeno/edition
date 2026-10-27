@@ -38,7 +38,7 @@ import { topicColor, dominantColor, tintInks, focusOf } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 
-export const VERSION = "4.29.2";
+export const VERSION = "4.29.3";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -1679,6 +1679,7 @@ async function pullNewsletter(raw, statusEl, { files = [] } = {}) {
  * shown large over the photo. One post at a time, in the background.
  */
 let schoolPicRunning = false;
+let photoSearchDown = 0;
 async function schoolPictures() {
   if (schoolPicRunning) return;
   schoolPicRunning = true;
@@ -1690,12 +1691,16 @@ async function schoolPictures() {
       const relay = ai.relayBase();
       let cands = [...(next.school.pageImgs || [])].slice(0, 2);
       const query = next.school.query || firstWords(next.title || "", 4);
-      if (relay && query) {
+      if (relay && query && Date.now() - photoSearchDown > 10 * 60e3) {
         try {
-          const res = await withTimeout(fetch(`${relay}/photo?q=${encodeURIComponent(query)}`), 15000);
+          const res = await withTimeout(fetch(`${relay}/photo?q=${encodeURIComponent(query)}`), 20000);
           const data = res.ok ? await res.json() : {};
           cands.push(...(data.photos || []).slice(0, 4).map((p) => ({ src: p.src, credit: p.credit, license: p.license, link: p.link, search: true })));
-        } catch (e) { noteError(e, { quiet: true, where: "school: photo search" }); }
+        } catch (e) {
+          // One slow answer means the photo service is struggling: stop asking for ten minutes.
+          photoSearchDown = Date.now();
+          noteError(e, { quiet: true, where: "school: photo search" });
+        }
       }
       cands = await usableImages(cands, { timeout: 6000 });
       const c = schoolSettings();
