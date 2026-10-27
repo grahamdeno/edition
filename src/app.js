@@ -36,7 +36,7 @@ import { I, LOGO } from "./icons.js";
 import { topicColor, dominantColor, tintInks, focusOf } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "4.11.3";
+export const VERSION = "4.12.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 
@@ -466,6 +466,7 @@ async function enrichPending() {
             hookV: out.hook ? ai.HOOK_VERSION : cur.hookV,
             extended: out.extended || cur.extended,
             imageAlt: cur.imageAlt || (cur.kind === KIND.PHOTO ? out.alt : "") || undefined,
+            photoQuery: out.photoQuery || cur.photoQuery,
             focus: cur.kind === KIND.PHOTO && cur.blobId && out.focus ? { key: cur.blobId, ...out.focus, by: "ai" } : cur.focus,
             extTries: (cur.extTries || 0) + 1,
             enrichedAt: Date.now(),
@@ -499,6 +500,7 @@ async function enrichPending() {
   } finally {
     enrichRunning = false;
   }
+  findPhotos();
   focusPending();
 }
 
@@ -603,6 +605,13 @@ function pictureOf(item) {
   // An older version's found stock photo shows only if you chose it yourself.
   if (c && c.blobId) return { blobId: c.blobId, from: "mine" };
   return null;
+}
+
+/** The credit under a found photo, linked to where it came from. */
+function creditHtml(pic) {
+  const credit = creditLine(pic);
+  if (!credit) return "";
+  return `<p class="credit">${pic.link ? `<a href="${esc(pic.link)}" target="_blank" rel="noopener">${esc(credit)}</a>` : esc(credit)}</p>`;
 }
 
 /** Credit line for a found photo, as its licence asks. */
@@ -711,6 +720,61 @@ async function picturePending() {
     }
   } finally {
     pictureRunning = false;
+  }
+  findPhotos();
+  focusPending();
+}
+
+/* ---- A photo for posts with none ----
+ * A save with no picture of its own (a note, a file, a link whose page had
+ * none worth using) gets one: openly licensed photos for its subject, found
+ * through the relay (Openverse), with Claude picking the best and describing
+ * it. Credited under the photo. Never for a post where you chose No picture.
+ */
+let findPhotoRunning = false;
+async function findPhotos() {
+  if (findPhotoRunning || !ai.relayBase()) return;
+  findPhotoRunning = true;
+  try {
+    const open = (i) => i.status === STATUS.INBOX || i.status === STATUS.QUEUED || state.edition?.ids.includes(i.id);
+    for (;;) {
+      const next = state.items.find((i) => open(i) && !i.school && !i.sample && i.kind !== KIND.PHOTO && !pictureOf(i)
+        && !i.coverOff && !i.picPicked && !i.photoSearched
+        && (i.enrichedAt || (i.enrichTries || 0) >= 2 || !ai.settings.enabled())
+        && (i.kind !== KIND.LINK || i.picSettled || !i.url));
+      if (!next) break;
+      const query = next.photoQuery || (next.tags || []).slice(0, 2).join(" ") || firstWords(next.title || "", 4);
+      let cands = [];
+      try {
+        const res = await withTimeout(fetch(`${ai.relayBase()}/photo?q=${encodeURIComponent(query)}`), 15000);
+        const data = res.ok ? await res.json() : {};
+        cands = (data.photos || []).slice(0, 4).map((p) => ({ src: p.src, credit: p.credit, license: p.license, link: p.link }));
+      } catch (e) {
+        noteError(e, { quiet: true, where: "find a photo" });
+        if (e.message === "Failed to fetch" || e.message === "Timed out") break; // relay unreachable: try again another time
+      }
+      cands = await usableImages(cands, { timeout: 6000 });
+      let pick = cands.length ? 0 : -1, alt = "", focus = null;
+      if (cands.length && ai.settings.enabled()) {
+        try { const r = await withTimeout(ai.pickPicture(next, cands), 20000); pick = r.index; alt = r.alt; focus = r.focus; } catch (e) {
+          noteError(e, { quiet: true, where: "find a photo: pick" });
+          if (e && [0, 429, 529].includes(e.status)) break;
+        }
+      }
+      const cur = byId(next.id);
+      if (!cur) continue;
+      const upd = { ...cur, photoSearched: true };
+      if (pick >= 0 && !pictureOf(cur)) {
+        const c = cands[pick];
+        Object.assign(upd, { imageUrl: c.src, imageAlt: alt || cur.imageAlt || undefined, picSettled: Date.now(), tint: undefined,
+          imageCands: [...(cur.imageCands || []), ...cands.map(({ src, w, h, credit, license, link }) => ({ src, w, h, credit, license, link }))],
+          ...(focus ? { focus: { key: c.src, ...focus, by: "ai" } } : {}) });
+      }
+      await saveItem(upd);
+      refreshPost(upd.id);
+    }
+  } finally {
+    findPhotoRunning = false;
   }
   focusPending();
 }
@@ -1368,13 +1432,13 @@ function mediaHtml(item, compact) {
         ${openBtn(`<span class="lk"><span class="site">${esc(siteLine(item))}</span><span class="ttl">${esc(item.title)}</span></span>`, `Open ${item.title}`)}</div>`;
     case KIND.LINK:
       return `<div class="card">${pic ? `<div class="pic wide">${openBtn(imgTag(), `Open ${item.title}`)}</div>` : ""}
-        ${openBtn(`${pic ? "" : `<span class="fav" style="--c:${topicColor(item)}" aria-hidden="true">${esc((item.site || host(item.url) || "?").charAt(0).toUpperCase())}</span>`}<span class="lk"><span class="site">${esc(siteLine(item))}</span><span class="ttl">${esc(item.title)}</span></span>`, `Open ${item.title}`)}</div>`;
+        ${openBtn(`${pic ? "" : `<span class="fav" style="--c:${topicColor(item)}" aria-hidden="true">${esc((item.site || host(item.url) || "?").charAt(0).toUpperCase())}</span>`}<span class="lk"><span class="site">${esc(siteLine(item))}</span><span class="ttl">${esc(item.title)}</span></span>`, `Open ${item.title}`)}</div>${pic ? creditHtml(pic) : ""}`;
     case KIND.QUOTE:
     case KIND.NOTE:
-      return "";
+      return pic ? `<div class="pic wide note-pic">${openBtn(imgTag(), `Open: ${item.title || "note"}`)}</div>${creditHtml(pic)}` : "";
     default: {
       const name = item.fileName || item.title;
-      return `<div class="card file">${openBtn(`<span class="ext" style="--c:${topicColor(item)}">${esc(ext(item.fileName))}</span><span class="lk"><span class="ttl">${esc(item.title)}</span><span class="site">${esc([KIND_LABEL[item.kind], item.size ? size(item.size) : "", `${estimateMinutes(item)} min`].filter(Boolean).join(" · "))}</span></span>`, `Open ${name}`)}</div>`;
+      return `${pic ? `<div class="pic wide note-pic">${openBtn(imgTag(), `Open ${name}`)}</div>${creditHtml(pic)}` : ""}<div class="card file">${openBtn(`<span class="ext" style="--c:${topicColor(item)}">${esc(ext(item.fileName))}</span><span class="lk"><span class="ttl">${esc(item.title)}</span><span class="site">${esc([KIND_LABEL[item.kind], item.size ? size(item.size) : "", `${estimateMinutes(item)} min`].filter(Boolean).join(" · "))}</span></span>`, `Open ${name}`)}</div>`;
     }
   }
 }
