@@ -39,7 +39,7 @@ import { problems, noteError as logError, onFirstProblem, clearProblems, formatP
 import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone, mixStories, followOrder } from "./onboard.js";
 
-export const VERSION = "4.38.0";
+export const VERSION = "4.39.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -4000,7 +4000,7 @@ function bindSchoolSettings(wrap) {
     wrap.querySelectorAll("[data-school-on]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
     render({ top: false });
   }));
-  $("#set-sc-save", wrap).addEventListener("click", () => { setSchoolSettings(read()); st.textContent = "Saved."; render({ top: false }); });
+  $("#set-sc-save", wrap).addEventListener("click", () => { setSchoolSettings(read()); affirm(st, "Saved. School email is read with these details."); render({ top: false }); });
   $("#set-sc-now", wrap).addEventListener("click", () => {
     setSchoolSettings(read());
     state.schoolForce = true;
@@ -4013,7 +4013,7 @@ function bindSchoolSettings(wrap) {
 
 function bindCalendarSettings(wrap) {
   const st = $("#set-cal-st", wrap);
-  const say = (msg, err) => { st.textContent = msg; st.classList.toggle("err", !!err); };
+  const say = (msg, err) => affirm(st, msg, err);
   $("#set-cal-save", wrap).addEventListener("click", async () => {
     const urls = [...new Set($("#set-cal", wrap).value.split(/\s+/).map((u) => u.trim()).filter(Boolean)
       .map((u) => u.replace(/^webcals?:\/\//i, "https://")))].filter((u) => /^https:\/\//i.test(u)).slice(0, 6);
@@ -4037,7 +4037,7 @@ function bindCalendarSettings(wrap) {
 }
 
 function bindPushSettings(wrap) {
-  const say = (el, msg, err) => { el.textContent = msg; el.classList.toggle("err", !!err); };
+  const say = (el, msg, err) => affirm(el, msg, err);
   const st = $("#set-push-st", wrap), onBtn = $("#set-push-on", wrap), testBtn = $("#set-push-test", wrap);
   const paint = () => {
     const on = push.enabled();
@@ -4299,7 +4299,7 @@ function openSettings(panel = "", { fromCard = false } = {}) {
   if (panel === "usage") showUsage($("#set-usage-box", wrap));
 
   const st = $("#set-st", wrap);
-  const say = (el, msg, err) => { if (!el) return; el.textContent = msg; el.classList.toggle("err", !!err); };
+  const say = (el, msg, err) => affirm(el, msg, err);
   wrap.querySelectorAll("[data-ai]").forEach((b) => b.addEventListener("click", () => {
     const on = b.dataset.ai === "1";
     setAi(on);
@@ -4482,6 +4482,7 @@ function openSettings(panel = "", { fromCard = false } = {}) {
     a.href = URL.createObjectURL(blob);
     a.download = `shoebox-backup-${dayKey()}.json`;
     a.click();
+    affirm($("#set-bk-st", wrap), NATIVE ? "Backup made. Choose where to keep it." : "Backup saved to your downloads.");
     setTimeout(() => URL.revokeObjectURL(a.href), 5000);
   });
   const importInput = $("#set-import-file", wrap);
@@ -4884,6 +4885,39 @@ function expireToast(el = $(".toast")) {
   const f = el._onExpire;
   el._onExpire = null;
   if (f) f();
+}
+
+/*
+ * Every change in a sheet answers back: the status line under it lights up
+ * with a check, the button that did it reads "Saved" for a moment, and the
+ * phone gives a light tap. Errors stay red with no tap; "…" means working.
+ */
+let lastSheetButton = null;
+document.addEventListener("click", (e) => {
+  const b = e.target.closest?.(".sheet button");
+  if (!b) return;
+  lastSheetButton = b;
+  if (b.closest(".seg") && b.getAttribute("aria-pressed") !== "true") { buzz(5); toNative({ type: "haptic" }); } // a switch moved: a light tap
+}, true);
+function affirm(el, msg, err = false) {
+  if (!el) return;
+  el.textContent = msg;
+  el.classList.toggle("err", !!err);
+  el.classList.remove("ok");
+  if (err || /…$/.test(msg)) return;
+  void el.offsetWidth;
+  el.classList.add("ok");
+  buzz(8);
+  toNative({ type: "haptic" });
+  const b = lastSheetButton;
+  if (b && b.isConnected && b.closest(".sheet") === el.closest(".sheet") && !b.closest(".seg") && !b._flash) {
+    const html = b.innerHTML;
+    b._flash = true;
+    b.classList.add("flash");
+    b.innerHTML = `${I.done}<span>${/save/i.test(b.textContent) ? "Saved" : "Done"}</span>`;
+    setTimeout(() => { if (b.isConnected) { b.innerHTML = html; b.classList.remove("flash"); } b._flash = false; }, 1600);
+  }
+  el.scrollIntoView?.({ block: "nearest", behavior: reduced() ? "auto" : "smooth" });
 }
 
 function toast(msg, { action, onAction, onExpire, high = false, sticky = false } = {}) {
