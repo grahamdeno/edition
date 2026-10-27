@@ -23,7 +23,8 @@ targets:
     sources:
       - App
       - Shared
-      - path: Privacy
+      - path: Privacy/PrivacyInfo.xcprivacy
+        type: file
         buildPhase: resources
     dependencies:
       - target: ShoeboxShare
