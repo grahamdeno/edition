@@ -41,14 +41,28 @@ jobs:
           cd ios
           set +e
           AUTH="-allowProvisioningUpdates -authenticationKeyPath $RUNNER_TEMP/asc.p8 -authenticationKeyID ${{ secrets.ASC_KEY_ID }} -authenticationKeyIssuerID ${{ secrets.ASC_ISSUER_ID }}"
-          report() { grep -E "error:|Error|failed|No profiles|Provisioning|certificate|requires a provisioning|not available|denied" "$1" | grep -v "^\s*$" | sort -u | head -25 | sed 's/^/::error::/'; tail -n 15 "$1"; }
+          report() { grep -E "error:|Error|failed|No profiles|rovisioning|ertificate|not available|denied" "$1" | sort -u | head -25 | sed 's/^/::error::/'; tail -n 15 "$1"; }
+          # Archive signed ad hoc (keeps the entitlements, needs no registered device);
+          # the export re-signs everything for the App Store with Apple's cloud-managed certificate.
           xcodebuild -project Shoebox.xcodeproj -scheme Shoebox -configuration Release \
             -destination 'generic/platform=iOS' -archivePath "$RUNNER_TEMP/Shoebox.xcarchive" \
-            CURRENT_PROJECT_VERSION=${{ github.run_number }} $AUTH archive > archive.log 2>&1
+            CURRENT_PROJECT_VERSION=${{ github.run_number }} \
+            CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO PROVISIONING_PROFILE_SPECIFIER= \
+            archive > archive.log 2>&1
           code=$?
           if [ $code -ne 0 ]; then echo "::error::archive failed"; report archive.log; exit $code; fi
           xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/Shoebox.xcarchive" \
             -exportOptionsPlist ExportOptions.plist -exportPath "$RUNNER_TEMP/out" $AUTH > export.log 2>&1
           code=$?
-          if [ $code -ne 0 ]; then echo "::error::export/upload failed"; report export.log; exit $code; fi
+          if [ $code -ne 0 ]; then echo "::error::export failed"; report export.log; exit $code; fi
+          # Check the signed app and extensions still carry the shared App Group.
+          cd "$RUNNER_TEMP/out" && unzip -q -o *.ipa -d ipa
+          for b in ipa/Payload/*.app ipa/Payload/*.app/PlugIns/*.appex; do
+            g=$(codesign -d --entitlements - --xml "$b" 2>/dev/null | grep -o "group.com.grahamdeno.shoebox" | head -1)
+            echo "::notice::$(basename "$b"): ${g:-NO APP GROUP}"
+          done
+          mkdir -p ~/.appstoreconnect/private_keys && cp "$RUNNER_TEMP/asc.p8" ~/.appstoreconnect/private_keys/AuthKey_${{ secrets.ASC_KEY_ID }}.p8
+          xcrun altool --upload-app -f *.ipa -t ios --apiKey ${{ secrets.ASC_KEY_ID }} --apiIssuer ${{ secrets.ASC_ISSUER_ID }} > upload.log 2>&1
+          code=$?
+          if [ $code -ne 0 ]; then echo "::error::upload failed"; report upload.log; exit $code; fi
           echo "::notice::Uploaded build ${{ github.run_number }} to TestFlight"
