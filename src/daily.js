@@ -236,3 +236,17 @@ export async function fetchTides(station) {
   const td = tr.ok ? await tr.json() : {};
   return (td.predictions || []).map((p) => ({ t: p.t, type: p.type === "H" ? "High" : "Low" }));
 }
+
+/** Which picture fits the weather: sun, moon, partly, cloud, rain, storm, snow, fog or wind. */
+export function weatherKind(w, now = Date.now()) {
+  const word = String(w?.word || "").toLowerCase();
+  const night = w?.sunrise && w?.sunset && (now < Date.parse(w.sunrise) || now > Date.parse(w.sunset));
+  if (/thunder|storm/.test(word)) return "storm";
+  if (/snow|sleet|flurr|ice|freezing|hail|blizzard/.test(word)) return "snow";
+  if (/rain|drizzle|shower/.test(word)) return "rain";
+  if (/fog|haze|mist|smoke|dust/.test(word)) return "fog";
+  if (/wind|breez/.test(word) || (w?.wind || 0) >= 20) return "wind";
+  if (/overcast|^cloudy|mostly cloudy/.test(word)) return "cloud";
+  if (/partly|mostly clear|mostly sunny/.test(word)) return night ? "moon" : "partly";
+  return night ? "moon" : "sun";
+}

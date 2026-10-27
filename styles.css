@@ -603,7 +603,9 @@ details.group[open] { padding-bottom: 14px; }
 .tag.back { background: var(--gold); color: var(--on-gold); }
 
 /* Keyboard up (iOS): a sheet sits in the visible part, above the keys, and scrolls inside */
-.kb .sheet-wrap { top: var(--vv-top, 0); bottom: auto; height: var(--vv-h, 100%); padding-top: 8px; }
+.kb .sheet-wrap { top: var(--vv-top, 0); bottom: auto; height: var(--vv-h, 100%); padding-top: calc(var(--safe-t) + 6px); }
+/* Under the keyboard's own toolbar (see-through on newer iPhones) show the sheet's color, not the page behind it. */
+.kb .sheet-wrap::after { content: ""; position: fixed; left: 0; right: 0; top: calc(var(--vv-top, 0px) + var(--vv-h, 100%)); height: 100vh; background: var(--bg); pointer-events: none; }
 .kb .sheet-body { padding-bottom: 12px; }
 .kb .sheet-foot { padding-bottom: 10px; }
 .sheet .field > *, .aside-pick > * { min-width: 0; max-width: 100%; }
@@ -821,3 +823,21 @@ table.usage th { color: var(--muted); font-weight: 600; }
 .set-all { align-self: center; }
 .help-links .row .i { width: 16px; height: 16px; color: var(--faint); margin-left: auto; }
 .ask-top .more { margin: -6px -6px 0 auto; flex: none; color: var(--faint); }
+/* Weather, small: the picture and the temperature */
+.wx-small { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 12px; cursor: pointer; margin: 6px var(--gutter-r) 6px var(--gutter-l); padding: 8px 14px 8px 8px; min-height: 56px; border-radius: 999px; background: var(--panel); border: 1px solid var(--line-2); width: max-content; }
+.wx-small:focus-visible { outline: 2px solid var(--sig); outline-offset: 2px; }
+.wx-small .deg { font: 400 2rem/1 var(--serif); color: var(--fg); }
+.wx-ico { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; background: #F6CF4E; color: #22123B; }
+.wx-ico svg { width: 24px; height: 24px; }
+.wx-moon, .wx-cloud, .wx-fog { background: #DCD6E8; }
+.wx-rain, .wx-storm { background: #BFD7F2; }
+.wx-snow { background: #E8F0FA; }
+.wx-wind { background: #D5EEE6; }
+.meta .wx-min { margin-left: auto; }
+.meta .wx-min + .more { margin-left: 0; }
+/* All saves: what you'd reach for, then what kind it was */
+.chip .n { margin-left: 4px; font-weight: 500; color: var(--muted); font-variant-numeric: tabular-nums; }
+.chip[aria-pressed="true"] .n { color: inherit; opacity: 0.8; }
+.chips.kinds { margin-top: -4px; }
+.chips.kinds .chip { min-height: 32px; padding: 0 12px; font-size: 0.8125rem; background: transparent; border: 1px solid var(--line-2); }
+.chips.kinds .chip[aria-pressed="true"] { background: var(--soft); border-color: var(--sig); color: var(--sig-ink); }
