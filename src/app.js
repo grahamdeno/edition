@@ -37,8 +37,9 @@ import { I, LOGO } from "./icons.js";
 import { topicColor, dominantColor, tintInks, focusOf } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
+import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep } from "./onboard.js";
 
-export const VERSION = "4.29.3";
+export const VERSION = "4.30.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -155,8 +156,10 @@ async function boot() {
   await migratePictures();
   // No sample items any more: a new phone gets the welcome steps instead. Anyone with saves is past them.
   const seeded = 0;
-  if (state.items.some((i) => !i.sample) || migrated) setFlag(ONBOARDED, true);
-  await importShares();
+  if (state.items.some((i) => !i.sample) || migrated) { setFlag(ONBOARDED, true); setFlag(FIRST_SAVE, true); }
+  if (state.items.some((i) => i.source === "share")) setFlag(SHARED, true);
+  const sharedIn = await importShares();
+  if (sharedIn) setFlag(SHARED, true);
   await importFromUrl();
   await wakeDue();
   await ensureEdition();
@@ -166,6 +169,8 @@ async function boot() {
   else if (seeded) toast(`Loaded ${seeded} sample items. Remove them in Settings.`);
   hideSplash();
   if (state.openId) { jumpTo(state.openId); state.openId = null; }
+  if (sharedIn) celebrateSave(state.items.slice(0, sharedIn));
+  if (!navigator.onLine && flag(ONBOARDED) && coach.take("offline")) toast("You're offline. Everything you've saved still works.");
   wireGlobal();
   picturePending();
   enrichPending();
@@ -409,9 +414,11 @@ async function afterCapture(list, until = null) {
   list = list.filter(Boolean);
   if (!list.length) return;
   list.forEach((it) => { state.items = [it, ...state.items.filter((i) => i.id !== it.id)]; });
+  if (list.some((i) => i.source === "share")) setFlag(SHARED, true);
   tick(true);
   state.tab = "today";
   render({ top: true });
+  celebrateSave(list);
   picturePending();
   toast(until ? `Set aside until ${shortDate(until)}. It'll be at the top of Today that morning.`
     : `Saved ${list.length === 1 ? "1 item" : list.length + " items"} to ${APP}.`, {
@@ -572,7 +579,8 @@ async function findNew(statusEl) {
   set("Finding today's top stories…");
   try {
     const known = new Set(state.items.map((i) => i.url).filter(Boolean));
-    const picks = await ai.discover(interestProfile(discoveryItems(state.items)), { known, guide: suggestionGuide(state.suggest), vocab: vocab(), blocked: state.suggest?.blocked || [] });
+    const profile = withFollows(interestProfile(discoveryItems(state.items)), state.suggest, { place: placeOf(morningSettings())?.name || "" });
+    const picks = await ai.discover(profile, { known, guide: suggestionGuide(state.suggest), vocab: vocab(), blocked: state.suggest?.blocked || [] });
     const fresh = await tagPicks(screenSuggestions(picks.filter((p) => !known.has(p.url)), state.suggest));
     for (const p of fresh) {
       const item = createItem(
@@ -980,6 +988,8 @@ function render({ top = false } = {}) {
   hydrate(tl);
   bindTimeline(tl);
   tintVisible(tl);
+  if (state.reveal) $("#panel", tl)?.classList.add("reveal");
+  coachPass(tl);
   updateWidget();
 }
 
@@ -1009,6 +1019,7 @@ function todayHtml() {
   if (s.fresh.length) h += sectionHead("New", `${s.fresh.filter(isOpen).length || "All"} to sort`) + s.fresh.map((i) => postHtml(i)).join("");
   if (s.six.length) h += sectionHead("Today's six", `${s.six.filter(isOpen).length} of ${s.six.length} left`) + s.six.map((i) => postHtml(i)).join("");
   if (s.sugg.length) h += sectionHead("Top stories") + s.sugg.map((i) => postHtml(i)).join("");
+  else if (state.storiesLoading) h += sectionHead("Top stories") + `<p class="finding" role="status"><span class="spin" aria-hidden="true"></span>Finding today's top stories${followedTopics(state.suggest).length ? ` on ${esc(followedTopics(state.suggest).slice(0, 3).join(", "))}` : ""}…</p>`;
   return h + endHtml(s);
 }
 
@@ -1515,73 +1526,238 @@ async function showUsage(box) {
 }
 
 /* ================= Welcome =================
- * A new phone starts empty, with four steps done for real in the app: save
- * one thing (with the same + everyone uses), set up the morning, choose
- * about AI, and learn to save from other apps. Each ticks off as it's done.
+ * A new phone starts empty. One button builds their morning for real
+ * (topics, weather, calendar, AI); then a card teaches saving from other
+ * apps by doing it, and coach marks teach the rest when it first applies.
  */
 const ONBOARDED = "edition.onboarded";
 const flag = (k) => { try { return localStorage.getItem(k) === "1"; } catch { return true; } };
 const setFlag = (k, on) => { try { localStorage.setItem(k, on ? "1" : "0"); } catch { /* storage blocked */ } };
 
-function welcomeSteps() {
-  const m = morningSettings();
-  return [
-    { key: "save", done: state.items.some((i) => !i.sample), title: "Save your first thing",
-      body: "Something you mean to come back to: a link you haven't read, a photo, an idea. Tap + any time to add more.",
-      acts: `<button class="btn primary" type="button" data-welcome="add">${I.plus || ""}<span>Add it</span></button>` },
-    { key: "morning", done: flag("edition.welcomeMorning"), title: "Set up your morning",
-      body: "Your weather and today's calendar sit at the top of Today.",
-      acts: `${placeOf(m) ? `<span class="wel-ok">✓ Weather for ${esc(placeOf(m).name)}</span>`
-          : `${canLocate() ? `<button class="btn primary" type="button" data-welcome="loc">Use my location</button>` : ""}
-             <button class="btn" type="button" data-welcome="zip">Enter a ZIP code</button>`}
-        ${nativeCan("calendar") ? (calNative() ? `<span class="wel-ok">✓ Your calendar</span>` : `<button class="btn" type="button" data-welcome="cal">Show my calendar</button>`) : ""}
-        <button class="btn ${placeOf(m) || calNative() ? "primary" : "ghost"}" type="button" data-welcome="morning-skip">${placeOf(m) || calNative() ? "Done" : "Later"}</button>` },
-    { key: "ai", done: ai.settings.asked(), title: "Turn on AI?",
-      body: AI_DISCLOSURE,
-      acts: `<button class="btn primary" type="button" data-ai-ask="1">Turn on AI</button><button class="btn" type="button" data-ai-ask="0">Not now</button>` },
-    { key: "share", done: flag("edition.welcomeShare"), title: "Save from anywhere",
-      body: NATIVE ? "In Safari or any app, tap Share, then Shoebox. It lands here, ready for tomorrow morning."
-        : "On iPhone, tap Share, then Add to Home Screen, so Shoebox opens like an app. Links shared to it land here.",
-      acts: `<button class="btn primary" type="button" data-welcome="share">Got it</button>` },
-  ];
-}
+/* Flags for the welcome: a first save, a first share from another app, Shoebox pinned in the share row. */
+const FIRST_SAVE = "edition.firstSave", SHARED = "edition.shared", PINNED = "edition.sharePinned", SHARE_OFF = "edition.shareGuideOff";
+const isStandalone = () => matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+const SHARE_ICON = `<svg class="sg-ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M8 7l4-4 4 4"/><path d="M6 11v9h12v-9"/></svg>`;
 
+/** Today's top card for someone new: one button. After that, the "save from anywhere" guide. */
 function welcomeHtml() {
-  if (flag(ONBOARDED)) return "";
-  const steps = welcomeSteps();
-  const cur = steps.findIndex((x) => !x.done);
-  if (cur === -1) { setFlag(ONBOARDED, true); track("welcome_done"); setTimeout(() => toast("You're set. Your first edition is below."), 300); return ""; }
-  const done = steps.filter((x) => x.done).length;
-  return `<section class="ask welcome" aria-labelledby="wel-h">
-      <div class="ask-top">
-        <div><h2 id="wel-h">${done ? "Next" : "Welcome to Shoebox"}</h2><p>${done ? `${done} of ${steps.length} done` : "Save what you mean to come back to. Each morning, Shoebox hands a few things back, finished."}</p></div></div>
-      <ol class="wel-steps">${steps.map((x, k) => `<li class="${x.done ? "done" : k === cur ? "now" : ""}">
-          <span class="wel-n" aria-hidden="true">${x.done ? "✓" : k + 1}</span>
-          <div class="wel-b"><p class="wel-t">${esc(x.title)}${x.done ? '<span class="sr-only"> (done)</span>' : ""}</p>
-            ${k === cur ? `<p class="wel-d">${esc(x.body)}</p><div class="ask-acts">${x.acts}</div><span class="st" id="wel-st" role="status"></span>` : ""}</div></li>`).join("")}</ol>
-      <button class="btn ghost sm wel-skip" type="button" data-welcome="skip">Skip setup</button>
+  if (!flag(ONBOARDED)) {
+    return `<section class="ask welcome hero" aria-labelledby="wel-h">
+      <div class="ask-top"><span class="av av-sb" aria-hidden="true">${LOGO}</span>
+        <div><h2 id="wel-h">Welcome to Shoebox</h2>
+        <p>A calm morning: your day, your weather, and a few things worth reading. Nothing to scroll.</p></div></div>
+      <div class="ask-acts"><button class="btn primary" type="button" data-welcome="start">Build my morning</button></div>
+      <button class="btn ghost sm wel-skip" type="button" data-welcome="skip">Skip</button>
     </section>`;
+  }
+  return shareGuideHtml();
 }
 
-async function welcomeAction(what, btn) {
+function shareGuideHtml() {
+  const step = shareStep({ native: NATIVE, standalone: isStandalone(), shared: flag(SHARED), pinned: flag(PINNED),
+    dismissed: flag(SHARE_OFF), saves: state.items.length });
+  if (!step) return "";
+  const card = (h, p, body, acts, skip = true) => `<section class="ask guide" aria-labelledby="sg-h">
+      <div class="ask-top"><span class="av av-sb" aria-hidden="true">${LOGO}</span><div><h2 id="sg-h">${h}</h2><p>${p}</p></div></div>
+      ${body}<div class="ask-acts">${acts}</div>
+      ${skip ? `<button class="btn ghost sm wel-skip" type="button" data-welcome="share-off">Not now</button>` : ""}
+    </section>`;
+  if (step === "share") return card("Save something from Safari", "This is how anything gets into Shoebox. Try it once now.",
+    `<ol class="sg-steps"><li>In Safari, tap <b>Share</b> ${SHARE_ICON}</li>
+      <li>In the row of apps, tap <b>Shoebox</b>. Not there? Swipe the row to the end and tap <b>More</b>.</li>
+      <li>Come back here. It'll be waiting.</li></ol>`,
+    `<a class="btn primary" href="https://en.wikipedia.org/wiki/Special:Random" target="_blank" rel="noopener" data-welcome="safari">Try it on a random article</a>
+     <button class="btn" type="button" data-welcome="add">Paste a link</button>`);
+  if (step === "pin") return card("Put Shoebox first in the share row", "One minute now saves a swipe every time.",
+    `<ol class="sg-steps"><li>Next time you tap <b>Share</b> ${SHARE_ICON}, swipe the row of apps to the end and tap <b>More</b>.</li>
+      <li>Tap <b>Edit</b>, then the green <b>+</b> next to Shoebox.</li><li>Tap <b>Done</b>. Shoebox stays at the front.</li></ol>`,
+    `<button class="btn primary" type="button" data-welcome="pinned">Done</button>`, false);
+  if (step === "home") return card("Keep Shoebox on your Home Screen", "It opens like an app and works offline.",
+    `<ol class="sg-steps"><li>In Safari, tap <b>Share</b> ${SHARE_ICON}</li><li>Tap <b>Add to Home Screen</b>, then <b>Add</b>.</li></ol>`,
+    `<button class="btn primary" type="button" data-welcome="share-off">Done</button>
+     <button class="btn" type="button" data-welcome="add">Save a link</button>`, false);
+  return card("Save your first thing", "Copy a link and tap +, or paste it anywhere on this screen.", "",
+    `<button class="btn primary" type="button" data-welcome="add">${I.plus || ""}<span>Save something</span></button>`);
+}
+
+async function welcomeAction(what) {
   track(`welcome_${what.replace(/-/g, "_")}`);
-  const st = $("#wel-st");
-  const say = (msg, err) => { if (st) { st.textContent = msg; st.classList.toggle("err", !!err); } };
+  if (what === "start") { openBuild(); return; }
   if (what === "add") { openAdd(); return; }
-  if (what === "zip") { openSettings("weather", { fromCard: true }); return; }
-  if (what === "morning-skip") setFlag("edition.welcomeMorning", true);
-  else if (what === "share") setFlag("edition.welcomeShare", true);
-  else if (what === "skip") setFlag(ONBOARDED, true);
+  if (what === "safari") return; // the link opens Safari by itself
+  if (what === "skip") { setFlag(ONBOARDED, true); coach.see("build"); }
+  else if (what === "share-off") setFlag(SHARE_OFF, true);
+  else if (what === "pinned") { setFlag(PINNED, true); toast("Done. Shoebox is first in line."); }
+  render({ top: false });
+}
+
+/*
+ * Build my morning: three short steps in one sheet (topics, your day, AI),
+ * then Today assembles in front of them with their own weather, calendar
+ * and top stories.
+ */
+function openBuild(step = 1) {
+  state.build = state.build || { topics: new Set(followedTopics(state.suggest)), study: "" };
+  const b = state.build, m = morningSettings();
+  const head = (h) => `<div class="sheet-head"><h2>${h}</h2><button class="x" type="button" data-close aria-label="Close">${I.close}</button></div>
+    <p class="bm-n">Step ${step} of 3</p>`;
+  let html;
+  if (step === 1) {
+    html = `${head("What do you like to read about?")}
+      <p class="note">Pick a few. Each morning Shoebox finds the day's top stories on them.</p>
+      <div class="bm-chips" role="group" aria-label="Topics">${TOPICS.map((t) => `<button type="button" class="bm-chip" data-bm-topic="${t}" aria-pressed="${b.topics.has(t)}">${t}</button>`).join("")}</div>
+      <label class="bm-l" for="bm-study">Studying for something? <span>Optional. Three practice questions a day.</span></label>
+      <input id="bm-study" type="text" autocomplete="off" placeholder="AWS Solutions Architect, Spanish verbs" value="${esc(b.study || (m.study ? m.studyTopic : ""))}">
+      <div class="sheet-foot"><button class="btn primary wide" type="button" data-bm="2">Next</button></div>`;
+  } else if (step === 2) {
+    const place = placeOf(m);
+    html = `${head("Your day")}
+      <p class="note">Your weather and today's calendar sit at the top of Today.</p>
+      <div class="bm-row"><div><b>Weather</b><span id="bm-wx">${place ? `For ${esc(place.name)}` : "Where are you?"}</span></div>
+        ${canLocate() ? `<button class="btn${place ? "" : " primary"}" type="button" data-bm="loc">${place ? "Update" : "Use my location"}</button>` : ""}</div>
+      <div class="bm-zip"><label class="sr-only" for="bm-zip">ZIP code or city</label><input id="bm-zip" type="text" autocomplete="postal-code" placeholder="Or a ZIP code" inputmode="numeric">
+        <button class="btn" type="button" data-bm="zip">Set</button></div>
+      ${nativeCan("calendar") ? `<div class="bm-row"><div><b>Calendar</b><span id="bm-cal">${calNative() ? "On" : "Your day at a glance, with free time"}</span></div>
+        ${calNative() ? "" : `<button class="btn primary" type="button" data-bm="cal">Show my calendar</button>`}</div>` : ""}
+      <span class="st" id="bm-st" role="status"></span>
+      <div class="sheet-foot"><button class="btn primary wide" type="button" data-bm="3">Next</button></div>`;
+  } else {
+    html = `${head("Let AI pick your top stories?")}
+      <p class="note">With AI on, Shoebox finds the day's top stories on your topics, writes a line about each thing you save, and finds pictures. With it off, everything else still works.</p>
+      <p class="note">The text of what you save is sent to Anthropic's Claude through Shoebox's server for this. Anthropic doesn't train on it.</p>
+      <details class="bm-more"><summary>Exactly what's sent</summary><p>${esc(AI_DISCLOSURE)}</p></details>
+      <div class="sheet-foot two"><button class="btn" type="button" data-bm="ai-0">Not now</button><button class="btn primary" type="button" data-bm="ai-1">Turn on AI</button></div>`;
+  }
+  const wrap = sheet(html, { label: "Build my morning" });
+  wrap.addEventListener("click", (e) => buildClick(e, step, wrap));
+}
+
+async function buildClick(e, step, wrap) {
+  const b = state.build;
+  const t = e.target.closest("[data-bm-topic]");
+  if (t) {
+    const k = t.dataset.bmTopic;
+    if (b.topics.has(k)) b.topics.delete(k); else b.topics.add(k);
+    t.setAttribute("aria-pressed", String(b.topics.has(k)));
+    tick();
+    return;
+  }
+  const btn = e.target.closest("[data-bm]");
+  if (!btn) return;
+  const what = btn.dataset.bm;
+  const st = $("#bm-st", wrap);
+  const say = (msg, err) => { if (st) { st.textContent = msg; st.classList.toggle("err", !!err); } };
+  if (what === "2") {
+    b.study = $("#bm-study", wrap)?.value.trim() || "";
+    state.suggest = followTopics(state.suggest, [...b.topics]);
+    await db.meta.set("suggest", state.suggest);
+    if (b.study) setMorningSettings({ ...morningSettings(), study: true, studyTopic: b.study.slice(0, 80) });
+    track("onboard_topics");
+    openBuild(2);
+  } else if (what === "3") openBuild(3);
   else if (what === "loc") {
     btn.disabled = true; say("Finding where you are…");
-    try { const p = await useMyLocation(); toast(`Weather for ${p.name}.`); } catch (e) { btn.disabled = false; say(e.message, true); return; }
+    try { const p = await useMyLocation(); $("#bm-wx", wrap).textContent = `For ${p.name}`; btn.textContent = "Update"; btn.classList.remove("primary"); say(""); }
+    catch (err) { say(err.message, true); }
+    btn.disabled = false;
+  } else if (what === "zip") {
+    const q = $("#bm-zip", wrap).value.trim();
+    if (!q) { say("Type a ZIP code or a city.", true); return; }
+    btn.disabled = true; say("Finding that place…");
+    try {
+      const place = await withTimeout(daily.lookupPlace(q), 15000);
+      if (!place) say("Couldn't find that place. Try a 5-digit ZIP code.", true);
+      else {
+        setMorningSettings({ ...morningSettings(), zip: place.zip || "", place, weather: true, useLocation: false });
+        const c = morningCache(); delete c.weather; saveMorningCache(c);
+        loadMorning();
+        $("#bm-wx", wrap).textContent = `For ${place.name}`; say("");
+      }
+    } catch (err) { noteError(err, { quiet: true, where: "place lookup" }); say("Couldn't look that up right now.", true); }
+    btn.disabled = false;
   } else if (what === "cal") {
     btn.disabled = true; say("Asking for your calendars…");
     const r = await turnOnNativeCalendar();
     if (!r.ok) { btn.disabled = false; say(r.msg, true); return; }
-    toast(r.msg);
+    $("#bm-cal", wrap).textContent = r.msg; btn.remove(); say("");
+  } else if (what === "ai-1" || what === "ai-0") finishBuild(what === "ai-1");
+}
+
+/** The reveal: close the sheet and let Today fill in, card by card. Top stories follow when AI is on. */
+async function finishBuild(aiOn) {
+  setAi(aiOn);
+  setFlag(ONBOARDED, true);
+  coach.see("build");
+  track("onboard_done");
+  state.build = null;
+  closeSheet();
+  state.reveal = true;
+  state.tab = "today";
+  const stories = aiOn && storiesAuto();
+  if (stories) { state.storiesLoading = true; try { localStorage.setItem("edition.storiesDay", dayKey()); } catch { /* full */ } }
+  render({ top: true });
+  setTimeout(() => { state.reveal = false; }, 2500);
+  if (!stories) return;
+  const n = await findNew(null).catch(() => 0);
+  state.storiesLoading = false;
+  if (!$(".sheet-wrap")) render({ top: false });
+  if (n) { buzz(8); toNative({ type: "haptic" }); }
+}
+
+/*
+ * The first save ever drops into a little shoebox, once. Every share after
+ * that gets the quiet confirmation: a toast and a light tap.
+ */
+function celebrateSave(list) {
+  const shared = list.some((i) => i && i.source === "share");
+  if (shared) { buzz(8); toNative({ type: "haptic" }); }
+  if (flag(FIRST_SAVE)) return;
+  setFlag(FIRST_SAVE, true);
+  track("first_save");
+  toNative({ type: "haptic" });
+  live("Your first save is in the box.");
+  if (reduced()) return;
+  const el = document.createElement("div");
+  el.className = "celebrate";
+  el.setAttribute("aria-hidden", "true");
+  el.innerHTML = `<div class="cb-stage"><span class="cb-item"></span><span class="cb-lid"></span><span class="cb-box"></span>
+    ${[[-34, -26], [34, -26], [-20, -46], [20, -46], [0, -54]].map(([x, y]) => `<span class="cb-dot" style="--x:${x}px;--y:${y}px"></span>`).join("")}</div>
+    <p class="cb-msg">Your first save is in the box.</p>`;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 3500);
+}
+
+/*
+ * Coach marks: one sentence the first time a feature is on screen, one per
+ * session, under the card it's about. It stays put through re-renders until
+ * "Got it" or until the feature is used.
+ */
+const coachStore = { getItem: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, setItem: (k, v) => { try { localStorage.setItem(k, v); } catch { /* blocked */ } } };
+const coach = makeCoach(coachStore);
+const COACH = [
+  { key: "dbl", sel: "[data-dbl]", text: "Double-tap a photo to love it." },
+  { key: "stories", sel: ".post .av-sb", text: "Top stories come from the topics you follow. Tap Not for me and say why, and tomorrow's picks change." },
+  { key: "daybar", sel: ".daybar details.db", text: "Tap the bar to see each event. Online meetings get a Join button." },
+  { key: "more", sel: ".daily .more[data-panel], .daybar .more[data-panel]", text: "Tap ••• on any card to change it right where you see it." },
+];
+function coachPass(tl) {
+  if (state.tab !== "today" || !flag(ONBOARDED) || state.reveal) return;
+  if (!state.coachNow) {
+    const c = COACH.find((x) => coach.can(x.key) && $(`#panel ${x.sel}`, tl));
+    if (!c || !coach.take(c.key)) return;
+    state.coachNow = c;
+    track(`coach_${c.key}`);
   }
-  render({ top: false });
+  const c = state.coachNow;
+  const target = $(`#panel ${c.sel}`, tl);
+  const host = target?.closest(".post, section");
+  if (!host) return;
+  host.insertAdjacentHTML("afterend", `<div class="coach" role="note"><span>${esc(c.text)}</span><button class="btn sm" type="button" data-coach-ok>Got it</button></div>`);
+}
+/** A feature was used: its tip never needs to show, and goes if it's showing. */
+function coachUsed(key) {
+  coach.see(key);
+  if (state.coachNow?.key === key) { state.coachNow = null; $(".coach")?.remove(); }
 }
 
 /* Apple's rule 5.1.2(i): say plainly what goes to which AI company, and ask first. */
@@ -1605,7 +1781,7 @@ function setAi(on) {
   if (on) {
     state.items = state.items.map((i) => ({ ...i, enrichTries: 0 }));
     enrichPending();
-    toast("AI is on. Reading your saves now.");
+    if (state.items.length) toast("AI is on. Reading your saves now.");
   }
 }
 
@@ -1991,9 +2167,11 @@ function endHtml(s) {
   }
   const first = state.wonDay !== dayKey();
   if (first) { state.wonDay = dayKey(); db.meta.set("wonDay", state.wonDay); track("edition_finished"); }
+  if (!coach.seen("cleared")) { coach.see("cleared"); state.firstWinDay = dayKey(); }
+  const firstEver = state.firstWinDay === dayKey();
   return `<section class="end win ${first ? "first" : ""}" aria-label="Today is done">
     <h2>You cleared today.</h2>
-    <p>Nothing more until tomorrow morning.</p>
+    <p>${firstEver ? "That's the whole idea: a few things, finished. Read one more if you like, or see you tomorrow morning." : "Nothing more until tomorrow morning."}</p>
     <div class="collage" aria-hidden="true">${all.slice(0, 6).map((i, k) => `<div class="tile" style="--k:${k}">${tileHtml(i)}</div>`).join("")}</div>
     <div class="tally"><div><b>${tally.done}</b>done</div><div><b>${tally.later}</b>later</div><div><b>${tally.go}</b>let go</div></div>
     <div class="end-acts">${more}</div><p class="st" id="end-st" role="status"></p>
@@ -2225,6 +2403,7 @@ function bindScreen() {
     if (lastTap.id === box.dataset.dbl && now - lastTap.at < 320) {
       lastTap = { id: "", at: 0 };
       dblLoved = now;
+      coachUsed("dbl");
       setLove(box.dataset.dbl, true);
     } else lastTap = { id: box.dataset.dbl, at: now };
   });
@@ -2262,8 +2441,9 @@ async function onTimelineClick(e) {
     if (ok) { tick(true); render({ top: true }); toast(`${state.schoolCount} post${state.schoolCount === 1 ? "" : "s"} from school, under From school on Today.`); }
     return;
   }
-  if ((b = hit("[data-panel]"))) { openSettings(b.dataset.panel, { fromCard: true }); return; }
-  if ((b = hit("[data-welcome]"))) { await welcomeAction(b.dataset.welcome, b); return; }
+  if ((b = hit("[data-panel]"))) { coachUsed("more"); openSettings(b.dataset.panel, { fromCard: true }); return; }
+  if ((b = hit("[data-welcome]"))) { await welcomeAction(b.dataset.welcome); return; }
+  if ((b = hit("[data-coach-ok]"))) { state.coachNow = null; b.closest(".coach")?.remove(); return; }
   if ((b = hit("[data-ai-ask]"))) { setAi(b.dataset.aiAsk === "1"); render({ top: false }); return; }
   if ((b = hit("[data-school=skip]"))) { markSchoolAsked(); state.schoolDraft = ""; state.schoolForce = false; render({ top: false }); return; }
   if ((b = hit("[data-act]"))) { runAct(b.dataset.act, b); return; }
@@ -2346,7 +2526,8 @@ async function timelineVerdict(id, verdict) {
   const nowLeft = leftToday();
   const words = {
     [VERDICT.LET_GO]: rec.whyNot ? `Let go. ${{ topic: "Fewer like it.", known: "Deeper ones next time.", long: "Shorter ones next time.", site: "That site is blocked." }[rec.whyNot]}` : "Let go.",
-    [VERDICT.LATER]: rec.stage === "inbox" ? "Kept. It'll come back in a later day's six." : rec.after.fadedAt ? "Moved later eight times. It's waiting under Fading." : "Back tomorrow.",
+    [VERDICT.LATER]: rec.stage === "inbox" ? "Kept. It'll come back in a later day's six." : rec.after.fadedAt ? "Moved later eight times. It's waiting under Fading."
+      : coach.can("later") && coach.take("later") ? "Back tomorrow. Put something off eight times and it fades away, so nothing nags." : "Back tomorrow.",
     [VERDICT.DONE]: doneToast(before),
   };
   if (wasLeft > 0 && nowLeft === 0 && state.tab === "today") {
@@ -3806,6 +3987,7 @@ function openSettings(panel = "", { fromCard = false } = {}) {
         <button class="btn" type="button" id="set-pr-clear">Clear</button>
       </div>
       <button class="btn" type="button" id="set-rebuild">Rebuild today</button>
+      <button class="btn" type="button" id="set-replay">Show me around again</button>
       <span class="st" id="set-ed-st" role="status"></span>
       </div>` },
     usage: me && { title: "Usage (owner)", value: "", body: `<div class="group"><div id="set-usage-box"><p class="note">Loading…</p></div></div>` },
@@ -3921,6 +4103,15 @@ function openSettings(panel = "", { fromCard = false } = {}) {
   $("#set-usage", wrap)?.addEventListener("toggle", (ev) => { if (ev.currentTarget.open) showUsage($("#set-usage-box", wrap)); });
   $("#set-mail-check", wrap)?.addEventListener("click", () => checkInbox({ statusEl: $("#set-mail-st", wrap) }));
   const edSt = $("#set-ed-st", wrap);
+  $("#set-replay", wrap)?.addEventListener("click", () => {
+    [ONBOARDED, SHARE_OFF, PINNED].forEach((k) => setFlag(k, false));
+    coach.reset();
+    state.coachNow = null;
+    track("onboard_replay");
+    closeSheet();
+    state.tab = "today";
+    render({ top: true });
+  });
   $("#set-rebuild", wrap)?.addEventListener("click", async () => {
     say(edSt, ai.settings.enabled() ? "Ranking your queue…" : "Rebuilding…");
     try {
