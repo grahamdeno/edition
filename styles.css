@@ -903,3 +903,9 @@ input.time { font: 600 1rem var(--sans); color: var(--fg); background: var(--sof
 @keyframes cb-pop { 0% { opacity: 1; transform: none; } 100% { opacity: 0; transform: translate(var(--x), var(--y)); } }
 @keyframes cb-fade { 0% { opacity: 0; } 15% { opacity: 1; } 75% { opacity: 1; } 100% { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .reveal > *, .coach { animation: none; } }
+.ask.tip { border-style: dashed; }
+.tip-k { margin: 0 0 2px !important; font-size: 0.75rem !important; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--sig-ink) !important; }
+.feat { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.feat > div { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.feat span { font-size: 0.875rem; color: var(--muted); }
+.feat .btn { flex: none; }

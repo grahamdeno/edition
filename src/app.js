@@ -37,9 +37,9 @@ import { I, LOGO } from "./icons.js";
 import { topicColor, dominantColor, tintInks, focusOf } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
-import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep } from "./onboard.js";
+import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone } from "./onboard.js";
 
-export const VERSION = "4.30.0";
+export const VERSION = "4.31.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -58,6 +58,15 @@ const ALL_FILTERS = [
   { label: "Finished", id: STATUS.DONE, test: (i) => i.status === STATUS.DONE },
   { label: "Let go", id: STATUS.ARCHIVED, test: (i) => i.status === STATUS.ARCHIVED },
 ];
+/** What each All saves list is for, said where it's empty. */
+const EMPTY_ALL = {
+  all: "Everything you save lives here. Tap + or share from any app to start.",
+  toread: "Nothing waiting. Tap + or share from any app, and it comes back on Today.",
+  loved: "Double-tap a photo or tap the heart on anything. Loved things are kept here for good.",
+  [STATUS.ASIDE]: "Set something aside until a day you choose. It waits here, then tops Today that morning.",
+  [STATUS.DONE]: "What you finish lands here, so you can find it again.",
+  [STATUS.ARCHIVED]: "What you let go waits here for a while. Open any of it to bring it back.",
+};
 const isVideoLink = (i) => i.kind === KIND.LINK && /youtube\.com|youtu\.be|vimeo\.com|tiktok\.com/i.test(i.url || "");
 const ALL_KINDS = [
   { label: "Articles", id: "articles", test: (i) => i.kind === KIND.LINK && !isVideoLink(i) && !i.school && !i.email },
@@ -1020,7 +1029,7 @@ function todayHtml() {
   if (s.six.length) h += sectionHead("Today's six", `${s.six.filter(isOpen).length} of ${s.six.length} left`) + s.six.map((i) => postHtml(i)).join("");
   if (s.sugg.length) h += sectionHead("Top stories") + s.sugg.map((i) => postHtml(i)).join("");
   else if (state.storiesLoading) h += sectionHead("Top stories") + `<p class="finding" role="status"><span class="spin" aria-hidden="true"></span>Finding today's top stories${followedTopics(state.suggest).length ? ` on ${esc(followedTopics(state.suggest).slice(0, 3).join(", "))}` : ""}…</p>`;
-  return h + endHtml(s);
+  return h + dayTipHtml() + endHtml(s);
 }
 
 /* ================= This morning =================
@@ -1580,12 +1589,15 @@ function shareGuideHtml() {
     `<button class="btn primary" type="button" data-welcome="add">${I.plus || ""}<span>Save something</span></button>`);
 }
 
+/** The day onboarding ended: the first-week tips count from it. A replay starts the week over. */
+function markStart() { try { localStorage.setItem(START_DAY, dayKey()); localStorage.removeItem(TIP_LOG); } catch { /* blocked */ } }
+
 async function welcomeAction(what) {
   track(`welcome_${what.replace(/-/g, "_")}`);
   if (what === "start") { openBuild(); return; }
   if (what === "add") { openAdd(); return; }
   if (what === "safari") return; // the link opens Safari by itself
-  if (what === "skip") { setFlag(ONBOARDED, true); coach.see("build"); }
+  if (what === "skip") { setFlag(ONBOARDED, true); coach.see("build"); markStart(); }
   else if (what === "share-off") setFlag(SHARE_OFF, true);
   else if (what === "pinned") { setFlag(PINNED, true); toast("Done. Shoebox is first in line."); }
   render({ top: false });
@@ -1688,6 +1700,7 @@ async function finishBuild(aiOn) {
   setAi(aiOn);
   setFlag(ONBOARDED, true);
   coach.see("build");
+  markStart();
   track("onboard_done");
   state.build = null;
   closeSheet();
@@ -1758,6 +1771,108 @@ function coachPass(tl) {
 function coachUsed(key) {
   coach.see(key);
   if (state.coachNow?.key === key) { state.coachNow = null; $(".coach")?.remove(); }
+}
+
+/* ===== The first week: one "Did you know" card a morning ===== */
+const START_DAY = "edition.onboardedDay", TIP_LOG = "edition.dayTips";
+/* Built when used: NATIVE is set further down the file. */
+const dayTips = () => ({
+  email: { h: "Email anything to Shoebox", p: "Forward a newsletter, a receipt or a note to your own Shoebox address and it lands here.", go: "Set it up", act: () => openSettings("email") },
+  more: { h: "Change a card where you see it", p: "Tap ••• on the weather or calendar card to change just that card, without hunting through Settings.", go: "Try it on weather", act: () => openSettings("weather", { fromCard: true }) },
+  newsletters: { h: "School email becomes short posts", p: "Forward school email and newsletters. Shoebox pulls out each thing to do, decide or know, with the dates.", go: "Set it up", act: () => openSettings("newsletters") },
+  later: { h: "Pick when things come back", p: "Set something aside until a day you choose. It waits under Coming back, then tops Today that morning, with a reminder if you like.", go: "Pick a reminder time", act: () => openSettings("reminders") },
+  find: { h: "Find anything you saved", p: "All saves has Loved, Coming back and Finished, and search looks through everything, even your notes on a save. Untouched saves fade after a few weeks, so the list stays light.", go: "Open All saves", act: () => selectTab("all") },
+  backup: NATIVE
+    ? { h: "Your saves are backed up every day", p: "A copy goes to Files and your iCloud Drive each day, and Shoebox works without a connection.", go: "See backups", act: () => openSettings("backup") }
+    : { h: "Keep a copy of your saves", p: "Everything lives on this device. Save a backup now and then from Settings › Backup.", go: "Back up now", act: () => openSettings("backup") },
+});
+function tipsUsed() {
+  const used = new Set();
+  const got = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
+  if (got("edition.inboxAddress") || state.items.some((i) => i.source === "email")) used.add("email");
+  if (coach.seen("more")) used.add("more");
+  if (schoolSettings().on || !ai.settings.enabled()) used.add("newsletters");
+  if (got("edition.remindTime") || state.items.some((i) => i.status === STATUS.ASIDE)) used.add("later");
+  if (flag("edition.searched")) used.add("find");
+  return used;
+}
+function tipLog() { try { return JSON.parse(localStorage.getItem(TIP_LOG) || "{}") || {}; } catch { return {}; } }
+function saveTipLog(v) { try { localStorage.setItem(TIP_LOG, JSON.stringify(v)); } catch { /* full */ } }
+function dayTipHtml() {
+  let start = "";
+  try { start = localStorage.getItem(START_DAY) || ""; } catch { /* blocked */ }
+  const before = tipLog();
+  const { key, log } = pickTip({ today: dayKey(), startDay: start, used: tipsUsed(), log: before });
+  if (log !== before) { saveTipLog(log); if (key) track(`tip_${key}`); }
+  const t = dayTips()[key];
+  if (!t) return "";
+  return `<section class="ask tip" aria-labelledby="tip-h">
+      <div class="ask-top"><span class="av av-sb" aria-hidden="true">${LOGO}</span>
+        <div><p class="tip-k">Did you know</p><h2 id="tip-h">${esc(t.h)}</h2><p>${esc(t.p)}</p></div></div>
+      <div class="ask-acts"><button class="btn primary" type="button" data-tip="go:${key}">${esc(t.go)}</button><button class="btn ghost" type="button" data-tip="off:${key}">Got it</button></div>
+    </section>`;
+}
+function tipAction(v) {
+  const [what, key] = v.split(":");
+  saveTipLog(tipDone(tipLog(), key));
+  track(`tip_${what}`);
+  render({ top: false });
+  if (what === "go") dayTips()[key]?.act();
+}
+
+/* ===== Help › Things Shoebox can do: every feature, one line each, with Show me where it can ===== */
+const features = () => [
+  ["Getting things in", [
+    ["Save from any app", "In Safari or any app, tap Share, then Shoebox.", "share"],
+    ["Email to Shoebox", "Forward anything to your own address and it lands here.", "email"],
+    ["Tap + or paste", "Links, photos, files and notes. Paste anywhere on Today, too.", "add"],
+    ["School email and newsletters", "Each thing to do, decide or know becomes its own short post.", "newsletters"],
+  ]],
+  ["Your morning", [
+    ["Weather", "Tap the small weather line to open the full card. ••• changes the place.", ""],
+    ["Day bar", "Your day at a glance with free time. Tap it for each event and Join.", "daybar"],
+    ["Top stories", "Picked each morning from the topics you follow. Say why you let one go and the picks change.", "stories"],
+    ["Study deck", "Three practice questions a day on whatever you're studying.", "study"],
+    ["••• on a card", "Changes that card right where you see it.", "more"],
+    ["Read one more", "After you clear Today, one more from your saves if you want it.", ""],
+  ]],
+  ["Deciding", [
+    ["Love", "Double-tap a photo, or tap the heart. Loved things are kept for good.", "dbl"],
+    ["Done, Later, Let go", "Later brings it back tomorrow. Put off eight times, it fades so nothing nags.", ""],
+    ["Set aside until a day", "It waits under Coming back, then tops Today that morning.", "reminders"],
+    ["Undo and bring back", "Every choice has Undo. Let go things wait under All saves › Let go.", ""],
+    ["Reply to yourself", "Add a thought to any save. It's searchable later.", ""],
+  ]],
+  ["Finding and keeping", [
+    ["All saves and search", "Filters for Loved, Coming back and Finished. Search looks through everything.", "find"],
+    ["Fading", "Saves untouched for weeks fade, so the list stays light. Keep any to bring it back.", ""],
+    ["Works offline", "Everything saved opens without a connection.", ""],
+    ["Daily backup", NATIVE ? "A copy goes to Files and iCloud Drive each day." : "Save a copy from Settings › Backup.", "backup"],
+  ]],
+];
+function featuresBody() {
+  return features().map(([h, rows]) => `<div class="group"><h3 class="sub">${esc(h)}</h3>
+    ${rows.map(([t, d, k]) => `<div class="feat"><div><b>${esc(t)}</b><span>${esc(d)}</span></div>${k ? `<button class="btn sm" type="button" data-feat="${k}">Show me</button>` : ""}</div>`).join("")}
+  </div>`).join("") + `<div class="group"><button class="btn" type="button" id="set-replay">Show me around again</button></div>`;
+}
+function showFeature(k) {
+  track(`feature_${k}`);
+  const panels = { email: "email", newsletters: "newsletters", study: "study", reminders: "reminders", backup: "backup" };
+  if (panels[k]) { openSettings(panels[k]); return; }
+  closeSheet();
+  if (k === "add") { openAdd(); return; }
+  if (k === "find") { selectTab("all"); $("#all-q")?.focus(); return; }
+  state.tab = "today";
+  if (k === "share") { setFlag(SHARE_OFF, false); setFlag(PINNED, false); render({ top: true }); return; }
+  const c = COACH.find((x) => x.key === k);
+  if (!c) return;
+  render({ top: false });
+  const target = $(`#panel ${c.sel}`);
+  if (!target) { coach.forget(k); toast("Nothing like that on Today right now. The tip shows when one comes up."); return; }
+  coach.see(k);
+  state.coachNow = c;
+  render({ top: false });
+  $(".coach")?.scrollIntoView({ behavior: reduced() ? "auto" : "smooth", block: "center" });
 }
 
 /* Apple's rule 5.1.2(i): say plainly what goes to which AI company, and ask first. */
@@ -2218,7 +2333,7 @@ function allHtml() {
     </div>` : ""}
     ${waiting.length ? `${sectionHead("Fading", `Untouched ${FADE_DAYS / 7} weeks fades`)}<div class="tide">${tideHtml(waiting)}</div>` : ""}
     ${sectionHead(title, `${rows.length} item${rows.length === 1 ? "" : "s"}`)}
-    ${shown.length ? shown.map((i) => postHtml(i, { compact: true })).join("") : `<p class="empty">${q ? "Nothing matches. Try fewer words." : "Nothing here yet."}</p>`}
+    ${shown.length ? shown.map((i) => postHtml(i, { compact: true })).join("") : `<p class="empty">${q ? "Nothing matches. Try fewer words." : kind ? `No ${esc(kind.label.toLowerCase())} here yet.` : EMPTY_ALL[f.id] || "Nothing here yet."}</p>`}
     ${rows.length > shown.length ? `<button class="btn more" type="button" data-act="show-more">Show ${Math.min(PAGE, rows.length - shown.length)} more</button>` : ""}`;
 }
 
@@ -2415,6 +2530,7 @@ function bindTimeline(tl) {
   $("#ask-in", tl)?.addEventListener("input", (e) => { state.schoolDraft = e.target.value; });
   if (q) q.addEventListener("input", () => {
     state.allQuery = q.value; state.allShown = PAGE;
+    if (q.value.trim()) setFlag("edition.searched", true);
     clearTimeout(q._t);
     q._t = setTimeout(() => { render(); const n = $("#all-q"); if (n) { n.focus(); n.setSelectionRange(n.value.length, n.value.length); } }, 250);
   });
@@ -2443,6 +2559,7 @@ async function onTimelineClick(e) {
   }
   if ((b = hit("[data-panel]"))) { coachUsed("more"); openSettings(b.dataset.panel, { fromCard: true }); return; }
   if ((b = hit("[data-welcome]"))) { await welcomeAction(b.dataset.welcome); return; }
+  if ((b = hit("[data-tip]"))) { tipAction(b.dataset.tip); return; }
   if ((b = hit("[data-coach-ok]"))) { state.coachNow = null; b.closest(".coach")?.remove(); return; }
   if ((b = hit("[data-ai-ask]"))) { setAi(b.dataset.aiAsk === "1"); render({ top: false }); return; }
   if ((b = hit("[data-school=skip]"))) { markSchoolAsked(); state.schoolDraft = ""; state.schoolForce = false; render({ top: false }); return; }
@@ -3818,7 +3935,7 @@ const SETTINGS_ORDER = [
   ["Your Today", ["calendar", "weather", "study", "cards", "newsletters"]],
   ["Saving and reminders", ["email", "reminders", "ai"]],
   ["Your data", ["backup", "learned", "privacy"]],
-  ["", ["help", "usage"]],
+  ["", ["features", "help", "usage"]],
 ];
 
 function openSettings(panel = "", { fromCard = false } = {}) {
@@ -3974,6 +4091,7 @@ function openSettings(panel = "", { fromCard = false } = {}) {
       <p class="note">Once a day: counts only (how many saves, finished mornings, kinds of problem), never what you saved. It helps make Shoebox better.</p>
       </div>
       <div class="group help-links"><a class="row" href="privacy" target="_blank" rel="noopener"><span class="rk">Read the privacy policy</span>${I.next}</a></div>` },
+    features: { title: "Things Shoebox can do", value: "", body: featuresBody() },
     help: { title: "Help and feedback", value: problems.length ? `${problems.length} logged` : "", body: `
       <div class="group help-links">
         <a class="row" href="${supportMail()}"><span class="rk">Email support</span><span class="sv">support@tangomike.app</span></a>
@@ -3987,7 +4105,6 @@ function openSettings(panel = "", { fromCard = false } = {}) {
         <button class="btn" type="button" id="set-pr-clear">Clear</button>
       </div>
       <button class="btn" type="button" id="set-rebuild">Rebuild today</button>
-      <button class="btn" type="button" id="set-replay">Show me around again</button>
       <span class="st" id="set-ed-st" role="status"></span>
       </div>` },
     usage: me && { title: "Usage (owner)", value: "", body: `<div class="group"><div id="set-usage-box"><p class="note">Loading…</p></div></div>` },
@@ -4103,8 +4220,9 @@ function openSettings(panel = "", { fromCard = false } = {}) {
   $("#set-usage", wrap)?.addEventListener("toggle", (ev) => { if (ev.currentTarget.open) showUsage($("#set-usage-box", wrap)); });
   $("#set-mail-check", wrap)?.addEventListener("click", () => checkInbox({ statusEl: $("#set-mail-st", wrap) }));
   const edSt = $("#set-ed-st", wrap);
+  wrap.querySelectorAll("[data-feat]").forEach((b) => b.addEventListener("click", () => showFeature(b.dataset.feat)));
   $("#set-replay", wrap)?.addEventListener("click", () => {
-    [ONBOARDED, SHARE_OFF, PINNED].forEach((k) => setFlag(k, false));
+    [ONBOARDED, SHARE_OFF, PINNED, "edition.searched"].forEach((k) => setFlag(k, false));
     coach.reset();
     state.coachNow = null;
     track("onboard_replay");

@@ -72,6 +72,8 @@ export function makeCoach(store) {
       this.see(k, now);
       return true;
     },
+    /** Let one tip show again (Help › Things Shoebox can do › Show me). */
+    forget(k) { const v = read(); delete v[k]; write(v); },
     reset() { shownThisSession = false; write({}); },
   };
 }
@@ -85,4 +87,22 @@ export function shareStep({ native = false, standalone = false, shared = false, 
   if (native) return !shared ? "share" : !pinned ? "pin" : "";
   if (!standalone) return "home";
   return saves ? "" : "first";
+}
+
+/*
+ * The first week: one "Did you know" card a morning, from day 2, in order of
+ * value. A tip for something already in use is skipped; each shows for one
+ * day, or until acted on or dismissed. Days are "YYYY-MM-DD" keys.
+ */
+export const DAY_TIPS = ["email", "more", "newsletters", "later", "find", "backup"];
+export function pickTip({ today, startDay = "", used = new Set(), log = {} } = {}) {
+  if (!startDay || !today || today <= startDay) return { key: "", log };
+  const done = { ...(log.done || {}) };
+  if (log.day === today) return { key: log.key && !done[log.key] ? log.key : "", log };
+  if (log.key) done[log.key] = 1; // yesterday's tip had its day
+  const key = DAY_TIPS.find((k) => !done[k] && !used.has(k)) || "";
+  return { key, log: { done, day: today, key } };
+}
+export function tipDone(log, key) {
+  return { ...log, done: { ...(log?.done || {}), [key]: 1 } };
 }
