@@ -856,3 +856,6 @@ details.adv > summary::-webkit-details-marker { display: none; }
 .group details.adv[open] > summary::after { transform: rotate(90deg); margin: 0; }
 details.adv[open] { display: flex; flex-direction: column; gap: 10px; }
 input.time { font: 600 1rem var(--sans); color: var(--fg); background: var(--soft); border: 0; border-radius: 10px; padding: 8px 10px; min-height: 40px; }
+/* The small weather card shows it opens: the same chevron as on the full card, turned down. */
+.wx-small .wx-open { display: grid; place-items: center; width: 28px; height: 28px; margin-left: 2px; border-radius: 50%; background: var(--soft); color: var(--sig-ink); }
+.wx-small .wx-open .i { width: 16px; height: 16px; transform: rotate(180deg); }
