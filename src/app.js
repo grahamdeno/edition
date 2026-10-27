@@ -37,7 +37,7 @@ import { I, LOGO } from "./icons.js";
 import { topicColor, dominantColor, tintInks, focusOf } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "4.14.0";
+export const VERSION = "4.14.1";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 
@@ -123,6 +123,7 @@ function fitKeyboard() {
 }
 window.visualViewport?.addEventListener("resize", fitKeyboard);
 window.visualViewport?.addEventListener("scroll", fitKeyboard);
+document.addEventListener("focusin", () => { setTimeout(fitKeyboard, 50); setTimeout(fitKeyboard, 400); });
 document.addEventListener("focusout", () => setTimeout(() => { if (!document.documentElement.classList.contains("kb")) window.scrollTo(0, 0); }, 250));
 
 async function boot() {
@@ -2584,7 +2585,7 @@ function openAdd() {
     ${field("why", "Why you're saving it", { area: true, hint: "(top of the post)", ph: "Read this before the roadmap review", attrs: 'maxlength="140"' })}
     ${field("note", "Your note", { area: true, ph: "Anything you want to remember about it" })}
     <div data-f="aside" hidden>${asideHtml("cap", F.until || null)}</div>
-    <div class="cap-foot">
+    <div class="cap-foot sheet-foot">
       <span class="st" id="cap-st" role="status"></span>
       <button class="btn primary save" type="button" id="cap-save">Save</button>
     </div>
@@ -3497,7 +3498,9 @@ function sheet(html, { tall = false, label = "", guard = null } = {}) {
   lastFocus = document.activeElement;
   const wrap = document.createElement("div");
   wrap.className = "sheet-wrap";
-  wrap.innerHTML = `<div class="sheet ${tall ? "tall" : ""}" role="dialog" aria-modal="true" aria-label="${esc(label)}"><span class="grab" aria-hidden="true"></span>${html}</div>`;
+  // Three parts: the grab handle, a body that scrolls on its own, and an optional footer
+  // (anything marked .sheet-foot) that stays put below it. The sheet is sized to what's visible.
+  wrap.innerHTML = `<div class="sheet ${tall ? "tall" : ""}" role="dialog" aria-modal="true" aria-label="${esc(label)}"><span class="grab" aria-hidden="true"></span><div class="sheet-body">${html}</div></div>`;
   // A sheet with something typed in it (guard) doesn't close on a stray tap outside it.
   wrap.addEventListener("click", (e) => {
     if (e.target !== wrap) return;
@@ -3505,26 +3508,28 @@ function sheet(html, { tall = false, label = "", guard = null } = {}) {
     closeSheet();
   });
   wrap.querySelectorAll("[data-close]").forEach((b) => b.addEventListener("click", closeSheet));
+  const panel = $(".sheet", wrap), body = $(".sheet-body", panel);
+  const foot = $(".sheet-foot", body);
+  if (foot) panel.appendChild(foot);
   document.body.appendChild(wrap);
-  const panel = $(".sheet", wrap);
-  // A swipe on a sheet never scrolls the page behind it: outside the sheet, or when the sheet has nothing
-  // more to scroll that way, iOS would hand the swipe to the page, so it's stopped here.
+  // A swipe never scrolls the page behind: outside the body, or past its top or end, iOS would hand
+  // the swipe to the page, so it's stopped here. The body itself scrolls normally.
   let sy = 0;
   wrap.addEventListener("touchstart", (e) => { sy = e.touches[0].clientY; }, { passive: true });
   wrap.addEventListener("touchmove", (e) => {
     if (!e.cancelable) return;
-    if (!panel.contains(e.target)) { e.preventDefault(); return; }
+    if (!body.contains(e.target)) { if (!panel.contains(e.target) || !panel.style.transform) e.preventDefault(); return; }
     if (e.target.closest(".picks, .chips, .tray")) return; // rows that scroll sideways
     const box = e.target.closest("textarea");
-    if (box && box.scrollHeight > box.clientHeight) return; // a long field scrolls itself
+    if (box && box.scrollHeight > box.clientHeight + 1) return; // a long field scrolls itself
     const dy = e.touches[0].clientY - sy;
-    const atTop = panel.scrollTop <= 0, atEnd = panel.scrollTop + panel.clientHeight >= panel.scrollHeight - 1;
-    if (panel.scrollHeight <= panel.clientHeight || (dy < 0 && atEnd)) e.preventDefault();
-    else if (dy > 0 && atTop && !panel.style.transform) e.preventDefault(); // the pull to close moves the sheet itself
+    const atTop = body.scrollTop <= 0, atEnd = body.scrollTop + body.clientHeight >= body.scrollHeight - 1;
+    if (body.scrollHeight <= body.clientHeight + 1 || (dy < 0 && atEnd)) e.preventDefault();
+    else if (dy > 0 && atTop) e.preventDefault(); // at the top, a pull moves the sheet (to close), not the page
   }, { passive: false });
-  // Never sideways: if iOS nudges the sheet left or right (a wide field, a focus jump), put it back.
-  panel.addEventListener("scroll", () => { if (panel.scrollLeft) panel.scrollLeft = 0; }, { passive: true });
-  bindPull({ scroller: panel, target: panel, host: wrap, onBack: closeSheet, guard });
+  // Never sideways: if iOS nudges the body left or right (a wide field, a focus jump), put it back.
+  body.addEventListener("scroll", () => { if (body.scrollLeft) body.scrollLeft = 0; }, { passive: true });
+  bindPull({ scroller: panel, target: panel, host: wrap, onBack: closeSheet, guard, pos: body });
   $("#app")?.setAttribute("inert", "");
   $(".reader")?.setAttribute("inert", "");
   requestAnimationFrame(() => { if (!wrap.contains(document.activeElement)) (panel.querySelector("[data-close]") || panel).focus(); });
@@ -3552,7 +3557,8 @@ function closeSheet() {
  * one to one and closes past 110px or on a quick flick, like any phone sheet.
  */
 const PULL = 90, DRAG_CLOSE = 110;
-function bindPull({ scroller, target, host, label, onBack, guard = null }) {
+function bindPull({ scroller, target, host, label, onBack, guard = null, pos = null }) {
+  const at = pos || scroller; // the element whose scroll position decides whether a pull starts
   const drag = !label; // a sheet: plain drag to close
   const tip = document.createElement("div");
   if (!drag) {
@@ -3571,7 +3577,7 @@ function bindPull({ scroller, target, host, label, onBack, guard = null }) {
   };
   scroller.addEventListener("touchstart", (e) => {
     if (y0 == null && target.style.transform) { target.style.transition = "transform 0.2s ease"; target.style.transform = ""; }
-    if (scroller.scrollTop > 0 || e.touches.length !== 1) return;
+    if (at.scrollTop > 0 || e.touches.length !== 1) return;
     if (e.target.closest("input, textarea, iframe, video, audio, .chips, .tray, .picks")) return;
     if (drag) {
       // While typing, a pull down only puts the keyboard away. With a draft, only the handle and title bar close it.
@@ -3584,7 +3590,7 @@ function bindPull({ scroller, target, host, label, onBack, guard = null }) {
     if (y0 == null) return;
     const dx = e.touches[0].clientX - x0;
     dy = e.touches[0].clientY - y0;
-    if (dy <= 0 || scroller.scrollTop > 0 || Math.abs(dx) > dy) { if (dy < -4 || Math.abs(dx) > Math.max(dy, 12)) reset(); return; }
+    if (dy <= 0 || at.scrollTop > 0 || Math.abs(dx) > dy) { if (dy < -4 || Math.abs(dx) > Math.max(dy, 12)) reset(); return; }
     // A few pixels of give first: a scroll that starts with a wobble stays a scroll.
     if (dy < 6 && !target.style.transform) return;
     if (drag && typing) { if (dy > 24) { document.activeElement?.blur?.(); y0 = null; } return; }

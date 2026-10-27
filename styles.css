@@ -386,16 +386,25 @@ a { color: inherit; text-decoration: none; }
 
 /* ================= Sheets ================= */
 .sheet-wrap {
-  position: fixed; top: 0; left: 0; right: 0; height: var(--app-h, 100%); z-index: 30; background: var(--scrim);
+  /* Pinned to the visible screen on all four sides, so nothing can sit below the bottom edge. */
+  position: fixed; inset: 0; z-index: 30; background: var(--scrim); overscroll-behavior: none;
   display: flex; align-items: flex-end; justify-content: center; padding-top: calc(var(--safe-t) + var(--fade) + 12px);
 }
 .sheet {
-  width: 100%; max-width: 600px; max-height: 100%; overflow-y: auto; overscroll-behavior: contain;
-  background: var(--bg); border-radius: 22px 22px 0 0;
-  padding: 10px var(--gutter-r) calc(var(--safe-b) + 20px) var(--gutter-l);
-  display: flex; flex-direction: column; gap: 14px; outline: none;
+  width: 100%; max-width: 600px; max-height: 100%; display: flex; flex-direction: column; overflow: hidden;
+  background: var(--bg); border-radius: 22px 22px 0 0; outline: none;
 }
 .sheet.tall { height: 100%; }
+.sheet > .grab { flex: none; margin: 8px auto 4px; }
+/* The body scrolls, up and down only; its parts keep their size. */
+.sheet-body {
+  flex: 1 1 auto; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; touch-action: pan-y;
+  padding: 4px var(--gutter-r) calc(var(--safe-b) + 20px) var(--gutter-l); display: flex; flex-direction: column; gap: 14px;
+}
+.sheet-body > * { flex-shrink: 0; min-width: 0; max-width: 100%; }
+/* The footer stays put under the body, above the home bar. */
+.sheet-foot { flex: none; display: flex; flex-direction: column; gap: 6px; padding: 10px var(--gutter-r) calc(max(var(--safe-b), 12px) + 10px) var(--gutter-l); background: var(--bg); border-top: 1px solid var(--line); }
+.sheet:has(> .sheet-foot) .sheet-body { padding-bottom: 16px; }
 .grab { width: 36px; height: 5px; border-radius: 3px; background: var(--line-2); align-self: center; }
 .sheet-head { display: flex; align-items: center; justify-content: space-between; }
 .sheet-head h2 { margin: 0; font: 400 1.85rem/1 var(--serif); }
@@ -468,13 +477,6 @@ details.group[open] { padding-bottom: 14px; }
 .detect li .i { width: 14px; height: 14px; color: var(--sig); flex: none; }
 .detect .what { color: var(--fg); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .detect .d { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cap-foot {
-  position: sticky; bottom: 0; z-index: 2; display: flex; flex-direction: column; gap: 6px;
-  margin: auto calc(-1 * var(--gutter-r)) 0 calc(-1 * var(--gutter-l));
-  padding: 10px var(--gutter-r) calc(var(--safe-b) + 12px) var(--gutter-l);
-  background: var(--bg); border-top: 1px solid var(--line);
-}
-.adding .sheet { padding-bottom: 0; }
 .cap-foot .st:empty { display: none; }
 .cap-foot .save { width: 100%; min-height: 52px; border-radius: 26px; font-size: 1rem; }
 .cap-foot .save:disabled { background: var(--soft); color: var(--muted); border-color: transparent; }
@@ -601,11 +603,10 @@ details.group[open] { padding-bottom: 14px; }
 .tag.back { background: var(--gold); color: var(--on-gold); }
 
 /* Keyboard up (iOS): a sheet sits in the visible part, above the keys, and scrolls inside */
-.kb .sheet-wrap { top: var(--vv-top, 0); height: var(--vv-h, 100%); padding-top: 8px; }
-.kb .sheet { padding-bottom: 8px; }
-.kb .adding .sheet { padding-bottom: 0; }
-.kb .cap-foot { padding-bottom: 10px; }
-.sheet { -webkit-overflow-scrolling: touch; }
+.kb .sheet-wrap { top: var(--vv-top, 0); bottom: auto; height: var(--vv-h, 100%); padding-top: 8px; }
+.kb .sheet-body { padding-bottom: 12px; }
+.kb .sheet-foot { padding-bottom: 10px; }
+.sheet .field > *, .aside-pick > * { min-width: 0; max-width: 100%; }
 
 /* Today's calendar: pages that come and go with the day */
 .post.event { padding-bottom: 16px; }
@@ -647,14 +648,12 @@ details.group[open] { padding-bottom: 14px; }
 /* Sheets scroll up and down only. Nothing inside may be wider than the sheet
    (iOS gives date fields a minimum width), and sideways drags only move the
    rows built to scroll sideways. */
-.sheet { overflow-x: hidden; touch-action: pan-y; overscroll-behavior: contain; }
 .sheet .picks, .sheet .chips, .sheet .tray { touch-action: pan-x pan-y; }
 .sheet .field, .sheet .two > * { min-width: 0; }
 .field input, .field textarea { min-width: 0; max-width: 100%; }
 .field input[type="date"], .field input[type="number"] { -webkit-appearance: none; appearance: none; display: block; text-align: left; }
 .field input[type="date"]::-webkit-date-and-time-value { text-align: left; }
 .sheet img, .sheet svg { max-width: 100%; }
-.sheet > *, .sheet .field > *, .aside-pick > * { min-width: 0; max-width: 100%; }
 .sheet .note, .sheet .st { overflow-wrap: anywhere; }
 .note-pic { margin-top: 12px; border-radius: 16px; overflow: hidden; aspect-ratio: 16 / 10; }
 .note-pic .open { display: block; width: 100%; height: 100%; padding: 0; }
@@ -663,13 +662,8 @@ details.group[open] { padding-bottom: 14px; }
 .card + .credit { margin: 6px 0 0; }
 
 /* A sheet's parts keep their size; when they don't fit, the sheet scrolls (iOS would otherwise squeeze them). */
-.sheet > * { flex-shrink: 0; }
-.sheet-wrap { overscroll-behavior: none; }
-.sheet { touch-action: pan-y; }
 
 /* The Save bar runs edge to edge (it's meant to be wider than the sheet's padding) and sits above the home bar. */
-.sheet > .cap-foot { max-width: none; }
-.cap-foot { padding-bottom: calc(max(var(--safe-b), 12px) + 14px); }
 /* This morning: weather, games, Jung, On this day, CPMAI */
 .post.daily { padding-bottom: 16px; }
 .av-day { display: grid; place-items: center; background: var(--sig-soft); color: var(--sig-ink); font: 600 0.9rem var(--sans); box-shadow: none; }
