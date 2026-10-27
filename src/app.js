@@ -39,7 +39,7 @@ import { problems, noteError as logError, onFirstProblem, clearProblems, formatP
 import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone, mixStories, followOrder } from "./onboard.js";
 
-export const VERSION = "4.40.0";
+export const VERSION = "4.41.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -1701,7 +1701,7 @@ function openBuild(step = 1) {
   } else {
     html = `${head("Let AI pick your top stories?")}
       <p class="note">With AI on, Shoebox finds the day's top stories on your topics, writes a line about each thing you save, and finds pictures. With it off, everything else still works.</p>
-      <p class="note">The text of what you save is sent to Anthropic's Claude through Shoebox's server for this. Anthropic doesn't train on it.</p>
+      <p class="note">To do that, the text of what you save goes to an outside AI service through Shoebox's server. It isn't used to train AI.</p>
       <details class="bm-more"><summary>Exactly what's sent</summary><p>${esc(AI_DISCLOSURE)}</p></details>
       <div class="sheet-foot two"><button class="btn" type="button" data-bm="ai-0">Not now</button><button class="btn primary" type="button" data-bm="ai-1">Turn on AI</button></div>`;
   }
@@ -2013,7 +2013,12 @@ function showFeature(k) {
   spotlight({ sel: `#${t.id}`, text: c.text, key: k });
 }
 
-/* Apple's rule 5.1.2(i): say plainly what goes to which AI company, and ask first. */
+/*
+ * Apple's rule 5.1.2(i): say plainly that personal data goes to an outside AI,
+ * and ask first. The short line (AI_SHORT) says what happens without a brand;
+ * the full text (AI_DISCLOSURE), one tap away and in the privacy policy, names it.
+ */
+export const AI_SHORT = "Shoebox's AI picks your top stories, summarizes your saves and finds pictures. To do that, the text of what you save goes to an outside AI service through Shoebox's server. It isn't used to train AI, and you can turn it off any time.";
 export const AI_DISCLOSURE = "Shoebox uses Claude, an AI model made by Anthropic, to read, tag and rank what you save, find pictures, and turn newsletters into posts. "
   + "When AI is on, the text of your saves, your notes and photos you add are sent to Anthropic through Shoebox's server for that. "
   + "Anthropic doesn't use them to train its models, and Shoebox's server doesn't keep them. You can turn AI off any time in Settings.";
@@ -2022,7 +2027,8 @@ function aiAskHtml() {
   if (ai.settings.asked() || !flag(ONBOARDED)) return "";
   return `<section class="ask" aria-labelledby="ai-ask-h">
       <div class="ask-top"><span class="av av-school av-ai" aria-hidden="true">AI</span>
-        <div><h2 id="ai-ask-h">Turn on AI?</h2><p>${esc(AI_DISCLOSURE)}</p></div></div>
+        <div><h2 id="ai-ask-h">Turn on AI?</h2><p>${esc(AI_SHORT)}</p></div></div>
+      <details class="bm-more"><summary>Exactly what's sent</summary><p class="note">${esc(AI_DISCLOSURE)}</p></details>
       <div class="ask-acts"><button class="btn primary" type="button" data-ai-ask="1">Turn on AI</button>
         <button class="btn" type="button" data-ai-ask="0">Not now</button></div>
     </section>`;
@@ -4234,8 +4240,8 @@ function openSettings(panel = "", { fromCard = false } = {}) {
       <div class="row"><span class="rk">Use AI</span>
         <div class="seg" role="group" aria-label="Use AI">
           <button type="button" data-ai="1" aria-pressed="${ai.settings.consented()}">On</button><button type="button" data-ai="0" aria-pressed="${!ai.settings.consented()}">Off</button></div></div>
-      <p class="note">Claude, by Anthropic, reads what you save to tag it, rank it, find pictures and turn newsletters into posts.</p>
-      <details class="adv"><summary>What's sent, and what isn't</summary><p class="note">${esc(AI_DISCLOSURE)}</p></details>
+      <p class="note">An outside AI service reads what you save to tag it, rank it, find pictures and turn newsletters into posts.</p>
+      <details class="adv"><summary>Exactly what's sent</summary><p class="note">${esc(AI_DISCLOSURE)}</p></details>
       <div class="row"><span class="rk">Top stories each morning</span>
         <div class="seg" role="group" aria-label="Top stories each morning"><button type="button" data-stories="1" aria-pressed="${storiesAuto()}">On</button><button type="button" data-stories="0" aria-pressed="${!storiesAuto()}">Off</button></div></div>
       <p class="note">A few of the biggest stories in what you follow, picked once a day.</p>
