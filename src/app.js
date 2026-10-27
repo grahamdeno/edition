@@ -37,7 +37,7 @@ import { I, LOGO } from "./icons.js";
 import { topicColor, dominantColor, tintInks, focusOf } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "4.17.0";
+export const VERSION = "4.17.1";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 
@@ -1222,6 +1222,19 @@ function inboxKey() {
   } catch { return ""; }
 }
 
+/**
+ * Is this mail from school? The sender or subject says so, or (for a newsletter
+ * you forwarded yourself) the opening of the email does: the district's
+ * address, the school's name, or a word you set (the mascot, say "Ducks").
+ */
+function isSchoolMail(m, c = schoolSettings()) {
+  const words = ["nhcs.net", c.school, ...(c.words || ["Ducks", "Duck Weekly"])].filter(Boolean)
+    .map((w) => String(w).trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).filter((w) => w.length > 2);
+  if (!words.length) return false;
+  const re = new RegExp(words.join("|"), "i");
+  return re.test(`${m.from} ${m.fromName} ${m.subject}`) || re.test(String(m.text || "").slice(0, 4000));
+}
+
 let inboxRunning = false;
 async function checkInbox({ statusEl = null } = {}) {
   const base = ai.relayBase();
@@ -1237,7 +1250,7 @@ async function checkInbox({ statusEl = null } = {}) {
     const done = [];
     for (const m of data.mails || []) {
       const c = schoolSettings();
-      const school = new RegExp(`nhcs\\.net|${(c.school || "").split(" ").slice(0, 2).join(" ").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "i").test(`${m.from} ${m.fromName} ${m.subject}`);
+      const school = isSchoolMail(m, c);
       if (school && ai.settings.enabled()) {
         const before = state.items.length;
         await pullNewsletter(`${m.subject}\n\n${m.text}`, null);
@@ -2327,6 +2340,7 @@ function openEdit(id) {
     </div>`}
     ${ai.settings.enabled() ? `<button class="btn retag" type="button" id="ed-retag">Re-tag with AI</button>` : ""}
     <span class="st" id="ed-st" role="status"></span>
+    ${item.email ? `<button class="btn" type="button" id="ed-to-school">Turn into school posts</button>` : ""}
     <button class="btn primary" type="button" id="ed-save">Save</button>
     <div class="danger">
       <button class="btn ghost-danger" type="button" id="ed-delete">${I.trash}Delete for good</button>
@@ -2437,6 +2451,23 @@ function openEdit(id) {
     } finally { btn.disabled = false; }
   });
   $("#ed-delete", wrap).addEventListener("click", () => { closeSheet(); deleteItem(id); });
+  // An email that was really a school newsletter: one post per piece that matters, then the email goes.
+  $("#ed-to-school", wrap)?.addEventListener("click", async (e) => {
+    const cur = byId(id);
+    if (!cur) return;
+    e.currentTarget.disabled = true;
+    const st = $("#ed-st", wrap);
+    const before = state.items.length;
+    const ok = await pullNewsletter(`${cur.title || ""}\n\n${cur.text || ""}`, st);
+    if (!ok) { e.currentTarget.disabled = false; return; }
+    const n = state.items.length - before;
+    await db.items.remove(id);
+    state.items = state.items.filter((i) => i.id !== id);
+    closeSheet();
+    tick(true);
+    render({ top: true });
+    toast(`${n} post${n === 1 ? "" : "s"} from school, under From school.`);
+  });
 }
 
 /* The Picture section of Edit: changes apply at once and show on the post behind the sheet. */
