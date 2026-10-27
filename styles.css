@@ -808,3 +808,16 @@ table.usage th { color: var(--muted); font-weight: 600; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .db-free { background: #173A30; color: #A9E5CF; } }
 .db-more { position: absolute; right: 0; top: 2px; color: var(--sig-ink); display: flex; transition: transform 0.2s; }
 .daybar .db[open] .db-more { transform: rotate(180deg); }
+/* Settings: one list with values, a page for each */
+.set-list { padding: 0; gap: 0; overflow: hidden; }
+.set-row { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 8px; width: 100%; min-height: 50px; padding: 0 12px 0 14px; cursor: pointer; font-weight: 600; }
+.set-row + .set-row { border-top: 1px solid var(--line); }
+.set-row:active { background: var(--soft); }
+.set-row:focus-visible { outline: 2px solid var(--sig); outline-offset: -2px; }
+.set-row .sv { margin-left: auto; font-weight: 500; color: var(--muted); font-size: 0.875rem; max-width: 55%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.set-row .i { width: 16px; height: 16px; flex: none; color: var(--faint); }
+.set-head { gap: 6px; }
+.set-head h2 { flex: 1; }
+.set-all { align-self: center; }
+.help-links .row .i { width: 16px; height: 16px; color: var(--faint); margin-left: auto; }
+.ask-top .more { margin: -6px -6px 0 auto; flex: none; color: var(--faint); }

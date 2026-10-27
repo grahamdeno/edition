@@ -38,7 +38,7 @@ import { topicColor, dominantColor, tintInks, focusOf } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 
-export const VERSION = "4.24.3";
+export const VERSION = "4.25.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -1038,6 +1038,9 @@ async function turnOnNativeCalendar() {
   } catch (e) { return { ok: false, msg: e.message }; }
 }
 
+/** The ••• on a card: opens that card's settings right there. */
+const cardMore = (panel, label) => `<button class="act icon more" type="button" data-panel="${panel}" aria-label="${esc(label)} settings">${I.menu}</button>`;
+
 /** Where the weather is for: the built-in place for a known ZIP, or one looked up in Settings. */
 const placeOf = (m) => daily.PLACES[m.zip] || m.place || null;
 const studyLabel = (m) => String(m.studyTopic || "Study").slice(0, 40);
@@ -1151,7 +1154,7 @@ function morningHtml() {
       : pic ? `<figure class="wx-pic"><img alt="${m.cam ? "Camera view" : `Weather radar around ${esc(place.name)}`}" src="${esc(pic)}" referrerpolicy="no-referrer" loading="lazy" onerror="this.closest('figure')?.remove()">
          <figcaption>${m.cam ? "Your camera" : `Radar, ${esc(place.radar)} ${esc(place.name)} (National Weather Service)`}</figcaption></figure>` : "";
     cards.push(card("wx", `<span class="av av-day wx-ic" aria-hidden="true">${I.sun}</span>`,
-      `<span class="who">Weather,</span> <span class="when">${esc(place.name)}${m.zip ? ` ${esc(m.zip)}` : ""}</span><button class="act icon more" type="button" data-day="wx-hide" aria-label="Shrink the weather for today">${I.close}</button>`,
+      `<span class="who">Weather,</span> <span class="when">${esc(place.name)}${m.zip ? ` ${esc(m.zip)}` : ""}</span>${cardMore("weather", "Weather")}`,
       `<p class="wx-now"><span class="deg">${w.now}°</span><span class="wx-word">${esc(w.word)}<small>Feels like ${w.feels}°</small></span></p>
        <p class="wx-line">High ${w.hi}° · Low ${w.lo}°${w.rain != null ? ` · Rain ${w.rain}%` : ""} · Wind ${esc(w.windFrom)} ${w.wind} mph${w.gusts > w.wind + 5 ? `, gusts ${w.gusts}` : ""}</p>
        ${w.nextHour ? `<p class="wx-line wx-next">${esc(w.nextHour)}</p>` : ""}
@@ -1163,7 +1166,7 @@ function morningHtml() {
   if (m.song && c.song) {
     const sg = c.song, mt = sg.match || {};
     const last = sg.lastPlayed ? (() => { const t = Date.parse(sg.lastPlayed); return Number.isFinite(t) ? `last played ${friendlyWhen(t)}` : ""; })() : "";
-    cards.push(card("song", `<span class="av av-day" aria-hidden="true">${I.music}</span>`, `<span class="who">Song of the day</span>`,
+    cards.push(card("song", `<span class="av av-day" aria-hidden="true">${I.music}</span>`, `<span class="who">Song of the day</span>${cardMore("cards", "Daily cards")}`,
       `<div class="song">${mt.artwork ? `<img class="art" alt="" src="${esc(mt.artwork)}" referrerpolicy="no-referrer" onerror="this.remove()">` : ""}
         <div class="song-t"><p class="ttl">${esc(mt.name || sg.title)}</p><p class="wx-line">${esc(mt.artist || sg.artist || "")}${mt.year ? ` · ${esc(mt.year)}` : ""}</p>${last ? `<p class="wx-line">You ${esc(last)}</p>` : ""}</div></div>
        <div class="song-acts">${mt.preview ? `<button class="btn sm" type="button" data-preview="${esc(mt.preview)}">${I.play}<span>Preview</span></button>` : ""}
@@ -1173,7 +1176,7 @@ function morningHtml() {
     if (!g.done) continue;
     const res = g.won ? "W" : "L";
     cards.push(card(`nhl t-${esc(g.team)}`, `<span class="av av-day team" aria-hidden="true">${esc(g.team)}</span>`,
-      `<span class="who">${esc(g.name)},</span> <span class="when">last night</span><span class="tag ${g.won ? "won" : ""}">${res}${g.end ? ` · ${esc(g.end)}` : ""}</span>`,
+      `<span class="who">${esc(g.name)},</span> <span class="when">last night</span><span class="tag ${g.won ? "won" : ""}">${res}${g.end ? ` · ${esc(g.end)}` : ""}</span>${cardMore("cards", "Daily cards")}`,
       `<p class="score">${esc(g.name)} ${g.us}, ${esc(g.opp)} ${g.them}</p>
        <p class="wx-line">${g.home ? "At home" : "Away"}${g.scorers.length ? ` · Goals: ${esc(g.scorers.join(", "))}` : ""}</p>
        ${g.recap || g.center ? `<a class="btn sm hl" href="${esc(g.recap || g.center)}" target="_blank" rel="noopener">${I.play}<span>${g.recap ? "Watch highlights" : "Game recap"}</span></a>` : ""}`));
@@ -1182,7 +1185,7 @@ function morningHtml() {
     const j = daily.jungFor(Date.now(), jungRetired());
     if (j && c.jungDone !== j.index) {
       const kept = state.items.some((i) => i.jung === j.index);
-      cards.push(card("jung", `<span class="av av-day" aria-hidden="true">J</span>`, `<span class="who">Carl Jung</span>`,
+      cards.push(card("jung", `<span class="av av-day" aria-hidden="true">J</span>`, `<span class="who">Carl Jung</span>${cardMore("cards", "Daily cards")}`,
         `<blockquote class="jung-q">${esc(j.q)}</blockquote><p class="wx-line">${esc(j.src)}</p>
          <div class="acts day-acts"><span class="grow"></span>
            <button class="act" type="button" data-day="jung-no:${j.index}">${I.letGo}<span>Not for me</span></button>
@@ -1196,7 +1199,7 @@ function morningHtml() {
     if (o) {
       const pic = pictureOf(o.item);
       const img = pic ? (pic.blobId ? `<img alt="" data-blob="${esc(pic.blobId)}">` : `<img alt="" src="${esc(pic.src)}" referrerpolicy="no-referrer" onerror="this.remove()">`) : "";
-      cards.push(card("otd", avatarHtml(), `<span class="who">On this day,</span> <span class="when">${esc(o.label.toLowerCase())}</span>`,
+      cards.push(card("otd", avatarHtml(), `<span class="who">On this day,</span> <span class="when">${esc(o.label.toLowerCase())}</span>${cardMore("cards", "Daily cards")}`,
         `<button class="otd-card" type="button" data-open="${esc(o.item.id)}">${img ? `<span class="otd-pic">${img}</span>` : ""}
           <span class="otd-t"><span class="ttl">${esc(o.item.why || o.item.title || "Something you saved")}</span>${o.item.why && o.item.title ? `<span class="site">${esc(o.item.title)}</span>` : ""}</span></button>`));
     }
@@ -1210,7 +1213,7 @@ function morningHtml() {
     const right = qs.filter((q, k) => ans[k] && ans[k].length === q.answer.length && ans[k].every((x) => q.answer.includes(x))).length;
     const doneN = qs.filter((q, k) => ans[k] && ans[k].length === q.answer.length).length;
     cards.push(card("quiz", `<span class="av av-day" aria-hidden="true">Q</span>`,
-      `<span class="who">${esc(studyLabel(m))} practice,</span> <span class="when">${doneN === qs.length ? `${right} of ${qs.length} right` : `${qs.length} questions`}</span>`,
+      `<span class="who">${esc(studyLabel(m))} practice,</span> <span class="when">${doneN === qs.length ? `${right} of ${qs.length} right` : `${qs.length} questions`}</span>${cardMore("study", "Study deck")}`,
       qs.map((q, k) => {
         const picked = ans[k] || [], shown = picked.length === q.answer.length;
         return `<div class="cq${shown ? " shown" : ""}"><p class="cq-q"><b>${k + 1}.</b> ${esc(q.q)}${q.answer.length > 1 && !/choose two/i.test(q.q) ? " <em>(Choose two.)</em>" : ""}</p>
@@ -1238,7 +1241,7 @@ function cpmaiScore(now = Date.now()) {
 async function dayAction(what) {
   const [act, arg] = what.split(":");
   const c = morningCache();
-  if (act === "wx-setup") { openSettings("set-morning"); return; }
+  if (act === "wx-setup") { openSettings("weather", { fromCard: true }); return; }
   if (act === "wx-hide") c.wxHidden = true;
   else if (act === "wx-show") c.wxHidden = false;
   else if (act === "cq-done" && c.cpmai) {
@@ -1470,7 +1473,7 @@ async function welcomeAction(what, btn) {
   const st = $("#wel-st");
   const say = (msg, err) => { if (st) { st.textContent = msg; st.classList.toggle("err", !!err); } };
   if (what === "add") { openAdd(); return; }
-  if (what === "zip") { openSettings("set-morning"); return; }
+  if (what === "zip") { openSettings("weather", { fromCard: true }); return; }
   if (what === "morning-skip") setFlag("edition.welcomeMorning", true);
   else if (what === "share") setFlag("edition.welcomeShare", true);
   else if (what === "skip") setFlag(ONBOARDED, true);
@@ -1516,7 +1519,7 @@ function schoolAskHtml() {
   if (!state.schoolForce && (!c.on || !c.days.includes(new Date().getDay()) || schoolAsked())) return "";
   return `<section class="ask" aria-labelledby="ask-h">
       <div class="ask-top"><span class="av av-school" aria-hidden="true">${esc((c.school || "S").charAt(0))}</span>
-        <div><h2 id="ask-h">Newsletter from ${esc(c.school || "school")}?</h2><p>Paste the link or the text. Each thing that matters${c.child ? ` for ${esc(c.child)}` : ""} becomes its own post.</p></div></div>
+        <div><h2 id="ask-h">Newsletter from ${esc(c.school || "school")}?</h2><p>Paste the link or the text. Each thing that matters${c.child ? ` for ${esc(c.child)}` : ""} becomes its own post.</p></div>${cardMore("newsletters", "Newsletters")}</div>
       <label class="sr-only" for="ask-in">Newsletter link or text</label>
       <textarea id="ask-in" rows="2" placeholder="Paste the link or the newsletter">${esc(state.schoolDraft || "")}</textarea>
       <div class="ask-acts"><button class="btn primary" type="button" data-school="go">Pull what matters</button>
@@ -1811,7 +1814,7 @@ function calendarHtml() {
   return `<article class="post event daybar" aria-label="Today's calendar">
       <div class="rail"><span class="av av-cal" aria-hidden="true">${I.cal}</span></div>
       <div class="main">
-        <div class="meta"><span class="who">${esc(new Date().toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" }))}</span>${head ? ` <span class="when">· ${esc(head)}</span>` : ""}</div>
+        <div class="meta"><span class="who">${esc(new Date().toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" }))}</span>${head ? ` <span class="when">· ${esc(head)}</span>` : ""}${cardMore("calendar", "Calendar")}</div>
         ${allDay.length ? `<p class="ag-allday">${allDay.map((e) => `<span class="chip">${dot(e)}${esc(cleanEventTitle(e.title))}</span>`).join("")}</p>` : ""}
         ${timed.length ? `<details class="db">
           <summary aria-label="${esc(label)}"><span class="db-wrap" aria-hidden="true"><span class="db-track">${blocks}</span>${nowLine}</span><span class="db-ticks" aria-hidden="true">${ticks.join("")}<span class="db-more"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></span></span></summary>
@@ -2144,6 +2147,7 @@ async function onTimelineClick(e) {
     if (ok) { tick(true); render({ top: true }); toast(`${state.schoolCount} post${state.schoolCount === 1 ? "" : "s"} from school, under From school on Today.`); }
     return;
   }
+  if ((b = hit("[data-panel]"))) { openSettings(b.dataset.panel, { fromCard: true }); return; }
   if ((b = hit("[data-welcome]"))) { await welcomeAction(b.dataset.welcome, b); return; }
   if ((b = hit("[data-ai-ask]"))) { setAi(b.dataset.aiAsk === "1"); render({ top: false }); return; }
   if ((b = hit("[data-school=skip]"))) { markSchoolAsked(); state.schoolDraft = ""; state.schoolForce = false; render({ top: false }); return; }
@@ -3469,7 +3473,7 @@ function bindPushSettings(wrap) {
     const on = push.enabled();
     onBtn.textContent = on ? "Turn off" : "Turn on";
     testBtn.disabled = !on;
-    $("#set-push-sv", wrap).textContent = on ? "On" : "Off";
+    const sv = $("#set-push-sv", wrap); if (sv) sv.textContent = on ? "On" : "Off";
   };
   // Have the relay's key ready, so the tap can ask for permission straight away.
   if (ai.relayBase() && !push.enabled()) push.prefetchKey().catch(() => {});
@@ -3496,29 +3500,57 @@ function bindPushSettings(wrap) {
   });
 }
 
-function openSettings(focus = "") {
+/*
+ * Settings: one list with each thing's current value ("Weather — Wilmington ›"),
+ * and a page for each. Every card on Today opens its own page from its •••
+ * button too, so the usual changes happen where you see them.
+ */
+const SETTINGS_ORDER = [
+  ["", ["you"]],
+  ["Your Today", ["calendar", "weather", "study", "cards", "newsletters"]],
+  ["Saving and reminders", ["email", "reminders", "ai"]],
+  ["Your data", ["backup", "learned", "privacy"]],
+  ["", ["help", "usage"]],
+];
+
+function openSettings(panel = "", { fromCard = false } = {}) {
   const c = counts(state.items);
   const m = morningSettings(), sc = schoolSettings(), me = personal();
   const onOff = (key, label, on) => `<div class="row"><span class="rk">${label}</span><div class="seg" role="group" aria-label="${label}"><button type="button" data-mo="${key}:1" aria-pressed="${on}">On</button><button type="button" data-mo="${key}:0" aria-pressed="${!on}">Off</button></div></div>`;
   const mailOn = (() => { try { return Boolean(localStorage.getItem("edition.inboxAddress")); } catch { return false; } })();
-  const wrap = sheet(`
-    <div class="sheet-head"><h2>Settings</h2><button class="x" type="button" data-close aria-label="Close">${I.close}</button></div>
-    <div class="group">
-      <div class="row"><span class="rk">Your photo</span>
-        <span class="me-row"><span id="set-me">${avatarHtml("sm")}</span>
-          <button class="btn sm" type="button" id="set-me-choose">${state.avatar ? "Change" : "Choose"}</button>
-          <button class="btn sm ghost" type="button" id="set-me-clear" ${state.avatar ? "" : "disabled"}>Remove</button></span>
-        <input type="file" id="set-me-file" accept="image/*" hidden></div>
-      <div class="row"><span class="rk">Appearance</span>
-        <div class="seg" role="group" aria-label="Appearance">${["system", "light", "dark"].map((t) => `<button type="button" data-look="${t}" aria-pressed="${themeChoice() === t}">${{ system: "Phone", light: "Light", dark: "Dark" }[t]}</button>`).join("")}</div></div>
-      <div class="row"><span class="rk">Sounds</span>
-        <div class="seg" role="group" aria-label="Sounds">
-          <button type="button" data-sound="1" aria-pressed="${soundOn()}">On</button><button type="button" data-sound="0" aria-pressed="${!soundOn()}">Off</button></div></div>
-    </div>
-
-    <h3 class="set-h">Your morning</h3>
-    <details class="group" id="set-morning">
-      <summary><span>Weather</span><span class="sv">${m.weather ? esc(placeOf(m)?.name || "Add a place") : "Off"}</span></summary>
+  const calShown = [...new Set((calCache()?.events || []).map((e) => calName(e.calendar, "Calendar")))].filter((n) => !calHidden().includes(n));
+  const cardsOn = ["otd", ...(me ? ["song", "hockey", "jung"] : [])].filter((k) => m[k]).length;
+  const P = {
+    you: { title: "You", value: { system: "Phone look", light: "Light", dark: "Dark" }[themeChoice()], body: `
+      <div class="group">
+        <div class="row"><span class="rk">Your photo</span>
+          <span class="me-row"><span id="set-me">${avatarHtml("sm")}</span>
+            <button class="btn sm" type="button" id="set-me-choose">${state.avatar ? "Change" : "Choose"}</button>
+            <button class="btn sm ghost" type="button" id="set-me-clear" ${state.avatar ? "" : "disabled"}>Remove</button></span>
+          <input type="file" id="set-me-file" accept="image/*" hidden></div>
+        <div class="row"><span class="rk">Look</span>
+          <div class="seg" role="group" aria-label="Look">${["system", "light", "dark"].map((t) => `<button type="button" data-look="${t}" aria-pressed="${themeChoice() === t}">${{ system: "Phone", light: "Light", dark: "Dark" }[t]}</button>`).join("")}</div></div>
+        <div class="row"><span class="rk">Sounds</span>
+          <div class="seg" role="group" aria-label="Sounds">
+            <button type="button" data-sound="1" aria-pressed="${soundOn()}">On</button><button type="button" data-sound="0" aria-pressed="${!soundOn()}">Off</button></div></div>
+      </div>` },
+    calendar: { title: "Calendar", value: calOn() ? (calShown.length ? calShown.slice(0, 2).join(", ") + (calShown.length > 2 ? "…" : "") : "On") : "Off", body: `
+      <div class="group">
+      ${nativeCan("calendar") ? `<div class="row"><span class="rk">This iPhone's calendars</span><div class="seg" role="group" aria-label="This iPhone's calendars"><button type="button" data-calnative="1" aria-pressed="${calNative()}">On</button><button type="button" data-calnative="0" aria-pressed="${!calNative()}">Off</button></div></div>
+      <p class="note">Everything in the Calendar app: iCloud, Google, Outlook. Events stay on your iPhone.</p>` : ""}
+      ${(() => { const seen = [...new Set((calCache()?.events || []).map((e) => calName(e.calendar, "Calendar")).concat(calHidden()))].sort();
+        return seen.length > 1 ? `<h3 class="sub">Show on Today</h3>${seen.map((n) => `<div class="row"><span class="rk">${esc(n)}</span><div class="seg" role="group" aria-label="${esc(n)}"><button type="button" data-calshow="${esc(n)}:1" aria-pressed="${!calHidden().includes(n)}">Show</button><button type="button" data-calshow="${esc(n)}:0" aria-pressed="${calHidden().includes(n)}">Hide</button></div></div>`).join("")}` : ""; })()}
+      <div class="field"><label for="set-cal">${nativeCan("calendar") ? "Or add a calendar address" : "Calendar addresses"} <span class="hint">(one per line)</span></label>
+        <textarea id="set-cal" rows="3" autocapitalize="off" autocomplete="off" spellcheck="false" placeholder="https://calendar.google.com/calendar/ical/…/basic.ics">${esc(calUrls().join("\n"))}</textarea></div>
+      <div class="two">
+        <button class="btn primary" type="button" id="set-cal-save">Save and test</button>
+        <button class="btn" type="button" id="set-cal-clear">Remove</button>
+      </div>
+      <span class="st" id="set-cal-st" role="status"></span>
+      <p class="note">Google: calendar settings › Secret address in iCal format. iPhone: Calendar › calendar info › Public Calendar › Share Link.</p>
+      </div>` },
+    weather: { title: "Weather", value: m.weather ? placeOf(m)?.name || "Add a place" : "Off", body: `
+      <div class="group">
       ${onOff("weather", "Show weather", m.weather)}
       ${canLocate() ? `<div class="row"><span class="rk">Where</span><button class="btn sm" type="button" id="set-mo-loc">${m.useLocation ? `Following you: ${esc(placeOf(m)?.name || "…")}` : "Use my location"}</button></div>` : ""}
       <div class="field"><label for="set-mo-zip">${canLocate() ? "Or a ZIP code or town" : "ZIP code or town"}</label>
@@ -3528,18 +3560,18 @@ function openSettings(focus = "") {
       <p class="note">Blank shows the weather radar. To find a camera, search your town and "webcam": local TV stations and <a href="https://www.windy.com/webcams" target="_blank" rel="noopener">windy.com/webcams</a> list live ones. Use the address of the picture itself (often ending in .jpg) or a YouTube live link.</p>
       <button class="btn primary" type="button" id="set-mo-save">Save</button>
       <span class="st" id="set-mo-st" role="status"></span>
-    </details>
-    <details class="group" id="set-study">
-      <summary><span>Study deck</span><span class="sv">${m.study && m.studyTopic ? esc(studyLabel(m)) : "Off"}</span></summary>
+      </div>` },
+    study: { title: "Study deck", value: m.study && m.studyTopic ? studyLabel(m) : "Off", body: `
+      <div class="group">
       ${onOff("study", "Daily questions", m.study)}
       <div class="field"><label for="set-study-topic">Topic</label>
         <input id="set-study-topic" type="text" autocomplete="off" placeholder="e.g. AWS Solutions Architect, Spanish verbs, US history" value="${esc(m.studyTopic)}"></div>
-      <button class="btn" type="button" id="set-study-save">Save</button>
+      <button class="btn primary" type="button" id="set-study-save">Save</button>
       <span class="st" id="set-study-st" role="status"></span>
       <p class="note">Three practice questions each morning, written by AI. Mark them Done once answered.</p>
-    </details>
-    <details class="group">
-      <summary><span>More cards</span></summary>
+      </div>` },
+    cards: { title: "Daily cards", value: `${cardsOn} on`, body: `
+      <div class="group">
       ${onOff("otd", "On this day", m.otd)}
       ${me ? onOff("song", "Song of the day", m.song) + onOff("hockey", "Last night's games", m.hockey) + onOff("jung", "Jung quote", m.jung) : ""}
       ${me ? `<div class="field"><label for="set-mo-teams">Teams</label><input id="set-mo-teams" type="text" autocomplete="off" autocapitalize="characters" value="${esc(m.teams.join(", "))}"></div>
@@ -3549,26 +3581,9 @@ function openSettings(focus = "") {
         <button class="btn sm" type="button" id="set-song-copy">Copy</button></p>
       <p class="note">In Shortcuts: Find Music where Play Count is greater than 0, sort by Last Played, oldest first, limit 1. Then Get Contents of URL: <b>${esc(ai.relayBase())}/song</b>, method POST, header <b>x-song-key</b> = your key, JSON body title (Name), artist (Artist), lastPlayed (Last Played). Run it from a daily 6:00 AM automation.</p>` : ""}
       <span class="st" id="set-more-st" role="status"></span>
-    </details>
-
-    <h3 class="set-h">What comes in</h3>
-    <details class="group">
-      <summary><span>Calendar</span><span class="sv">${calOn() ? "On" : "Off"}</span></summary>
-      ${nativeCan("calendar") ? `<div class="row"><span class="rk">This iPhone's calendars</span><div class="seg" role="group" aria-label="This iPhone's calendars"><button type="button" data-calnative="1" aria-pressed="${calNative()}">On</button><button type="button" data-calnative="0" aria-pressed="${!calNative()}">Off</button></div></div>
-      <p class="note">Everything in the Calendar app: iCloud, Google, Outlook. Events stay on your iPhone.</p>` : ""}
-      ${(() => { const seen = [...new Set((calCache()?.events || []).map((e) => calName(e.calendar, "Calendar")).concat(calHidden()))].sort();
-        return seen.length > 1 ? `<h3 class="sub">Show on Today</h3>${seen.map((n) => `<div class="row"><span class="rk">${esc(n)}</span><div class="seg" role="group" aria-label="${esc(n)}"><button type="button" data-calshow="${esc(n)}:1" aria-pressed="${!calHidden().includes(n)}">Show</button><button type="button" data-calshow="${esc(n)}:0" aria-pressed="${calHidden().includes(n)}">Hide</button></div></div>`).join("")}` : ""; })()}
-      <div class="field"><label for="set-cal">${nativeCan("calendar") ? "Or a calendar address" : "Calendar addresses"} <span class="hint">(one per line)</span></label>
-        <textarea id="set-cal" rows="3" autocapitalize="off" autocomplete="off" spellcheck="false" placeholder="https://calendar.google.com/calendar/ical/…/basic.ics">${esc(calUrls().join("\n"))}</textarea></div>
-      <div class="two">
-        <button class="btn primary" type="button" id="set-cal-save">Save and test</button>
-        <button class="btn" type="button" id="set-cal-clear">Remove</button>
-      </div>
-      <span class="st" id="set-cal-st" role="status"></span>
-      <p class="note">Today's events show at the top of Today and leave at midnight. Google: calendar settings › Secret address in iCal format. iPhone: Calendar › calendar info › Public Calendar › Share Link.</p>
-    </details>
-    <details class="group">
-      <summary><span>Newsletters</span><span class="sv">${sc.on ? "Mon, Fri" : "Off"}</span></summary>
+      </div>` },
+    newsletters: { title: "Newsletters", value: sc.on ? "Mon, Fri" : "Off", body: `
+      <div class="group">
       <div class="row"><span class="rk">Ask me</span>
         <div class="seg" role="group" aria-label="Ask me"><button type="button" data-school-on="1" aria-pressed="${sc.on}">Mon and Fri</button><button type="button" data-school-on="0" aria-pressed="${!sc.on}">Off</button></div></div>
       <div class="field"><label for="set-sc-school">From <span class="hint">(a school, club or team)</span></label><input id="set-sc-school" type="text" autocomplete="off" placeholder="e.g. Lincoln Middle School" value="${esc(sc.school)}"></div>
@@ -3582,17 +3597,25 @@ function openSettings(focus = "") {
         <button class="btn" type="button" id="set-sc-now">Add one now</button>
       </div>
       <span class="st" id="set-sc-st" role="status"></span>
-    </details>
-    ${me || mailOn ? `<details class="group">
-      <summary><span>Email in</span><span class="sv">${mailOn ? "On" : "Off"}</span></summary>
+      </div>` },
+    email: (me || mailOn) && { title: "Email to Shoebox", value: mailOn ? "On" : "Off", body: `
+      <div class="group">
       <p class="note">${(() => { try { const a = localStorage.getItem("edition.inboxAddress"); return a ? `Forward anything to <b>${esc(a)}</b>. Newsletters become posts; everything else becomes a post of its own.` : "Forward email to your own Shoebox address."; } catch { return ""; } })()}</p>
       <button class="btn" type="button" id="set-mail-check">Check for email now</button>
       <span class="st" id="set-mail-st" role="status"></span>
-    </details>` : ""}
-
-    <h3 class="set-h">AI and reminders</h3>
-    <details class="group">
-      <summary><span>AI</span><span class="sv">${ai.settings.enabled() ? "On" : "Off"}</span></summary>
+      </div>` },
+    reminders: { title: "Reminders", value: NATIVE || push.enabled() ? "9:00 AM" : "Off", body: NATIVE ? `
+      <div class="group"><p class="note">When something you set aside comes back, your iPhone reminds you at 9:00 that morning. To stop them, turn off Shoebox in the iPhone's Settings › Notifications.</p></div>` : `
+      <div class="group" id="set-push-g">
+      <div class="two">
+        <button class="btn primary" type="button" id="set-push-on">${push.enabled() ? "Turn off" : "Turn on"}</button>
+        <button class="btn" type="button" id="set-push-test" ${push.enabled() ? "" : "disabled"}>Send a test</button>
+      </div>
+      <span class="st" id="set-push-st" role="status"></span>
+      <p class="note">When something you set aside comes back, at 9:00${push.needsHomeScreen() ? ". On iPhone, open Shoebox from your Home Screen" : ""}.</p>
+      </div>` },
+    ai: { title: "AI", value: ai.settings.enabled() ? "On" : "Off", body: `
+      <div class="group">
       <div class="row"><span class="rk">Use AI</span>
         <div class="seg" role="group" aria-label="Use AI">
           <button type="button" data-ai="1" aria-pressed="${ai.settings.consented()}">On</button><button type="button" data-ai="0" aria-pressed="${!ai.settings.consented()}">Off</button></div></div>
@@ -3600,54 +3623,40 @@ function openSettings(focus = "") {
       <p class="note" id="set-ai-use"></p>
       <button class="btn" type="button" id="set-discover" ${ai.settings.canDiscover() ? "" : "disabled"}>Get top stories now</button>
       <span class="st" id="set-st" role="status"></span>
-    </details>
-    <details class="group" id="set-push-g">
-      <summary><span>Notifications</span><span class="sv" id="set-push-sv">${push.enabled() ? "On" : "Off"}</span></summary>
-      <div class="two">
-        <button class="btn primary" type="button" id="set-push-on">${push.enabled() ? "Turn off" : "Turn on"}</button>
-        <button class="btn" type="button" id="set-push-test" ${push.enabled() ? "" : "disabled"}>Send a test</button>
-      </div>
-      <span class="st" id="set-push-st" role="status"></span>
-      <p class="note">When something you set aside comes back, at 9:00${push.needsHomeScreen() ? ". On iPhone, open Shoebox from your Home Screen" : ""}.</p>
-    </details>
-
-    <h3 class="set-h">Your data</h3>
-    <details class="group">
-      <summary><span>Backup</span></summary>
+      </div>` },
+    backup: { title: "Backup or move to a new phone", value: "", body: `
+      <div class="group">
       <div class="two">
         <button class="btn" type="button" id="set-export">Export backup</button>
         <button class="btn" type="button" id="set-import">Import backup</button>
       </div>
-      <p class="note">The backup holds everything: items, photos and files, and your settings. Keep it somewhere private.</p>
+      <p class="note">The backup holds everything: items, photos and files, and your settings. Keep it somewhere private. On a new phone, open Shoebox and Import it.</p>
       <input type="file" id="set-import-file" accept="application/json,.json" hidden>
       <span class="st" id="set-bk-st" role="status"></span>
       ${state.items.some((i) => i.sample) ? `<button class="btn" type="button" id="set-samples-clear">Remove the sample items</button>
       <span class="st" id="set-sm-st" role="status"></span>` : ""}
-    </details>
-    <details class="group">
-      <summary><span>What Shoebox learned</span></summary>
-      <h3 class="sub">Suggestions</h3>
+      </div>` },
+    learned: { title: "Suggestions and tags", value: `${tagStats(state.items).length} tags`, body: `
+      <div class="group">
+      <h3 class="sub">What your answers to suggestions taught Shoebox</h3>
       <div id="sug-profile"></div>
       <h3 class="sub" id="set-tags">Tags</h3>
       <div id="tag-list"></div>
-    </details>
-
-    <h3 class="set-h">Help</h3>
-    <div class="group help-links">
-      <a class="row" href="${supportMail()}"><span class="rk">Contact support</span><span class="sv">support@tangomike.app</span></a>
-      <a class="row" href="privacy" target="_blank" rel="noopener"><span class="rk">Privacy</span></a>
-    </div>
-    <div class="group">
+      </div>` },
+    privacy: { title: "Privacy", value: statsOn() ? "Stats on" : "Stats off", body: `
+      <div class="group">
       <div class="row"><span class="rk">Anonymous usage stats</span>
         <div class="seg" role="group" aria-label="Anonymous usage stats"><button type="button" data-stats="1" aria-pressed="${statsOn()}">On</button><button type="button" data-stats="0" aria-pressed="${!statsOn()}">Off</button></div></div>
       <p class="note">Once a day: counts only (how many saves, finished mornings, kinds of problem), never what you saved. It helps make Shoebox better.</p>
-    </div>
-    ${me ? `<details class="group" id="set-usage">
-      <summary><span>Usage (owner)</span></summary>
-      <div id="set-usage-box"><p class="note">Loading…</p></div>
-    </details>` : ""}
-    <details class="group">
-      <summary><span>Something wrong?</span><span class="sv">${problems.length ? `${problems.length} logged` : "None"}</span></summary>
+      </div>
+      <div class="group help-links"><a class="row" href="privacy" target="_blank" rel="noopener"><span class="rk">Read the privacy policy</span>${I.next}</a></div>` },
+    help: { title: "Help and feedback", value: problems.length ? `${problems.length} logged` : "", body: `
+      <div class="group help-links">
+        <a class="row" href="${supportMail()}"><span class="rk">Email support</span><span class="sv">support@tangomike.app</span></a>
+        <a class="row" href="support" target="_blank" rel="noopener"><span class="rk">Questions and answers</span>${I.next}</a>
+      </div>
+      <div class="group">
+      <h3 class="sub">Something wrong?</h3>
       <p class="note" id="set-pr-n"></p>
       <div class="two">
         <button class="btn" type="button" id="set-pr-copy">Copy diagnostics</button>
@@ -3655,16 +3664,35 @@ function openSettings(focus = "") {
       </div>
       <button class="btn" type="button" id="set-rebuild">Rebuild today</button>
       <span class="st" id="set-ed-st" role="status"></span>
-    </details>
-    <p class="version">${APP}${me ? " Me" : ""} ${VERSION} · ${c.inbox} new · ${c.queued} queued · ${c.done} done · ${c.archived} let go</p>`, { label: "Settings" });
+      </div>` },
+    usage: me && { title: "Usage (owner)", value: "", body: `<div class="group"><div id="set-usage-box"><p class="note">Loading…</p></div></div>` },
+  };
+  const close = `<button class="x" type="button" data-close aria-label="Close">${I.close}</button>`;
+  let html;
+  if (panel && P[panel]) {
+    html = `<div class="sheet-head set-head">${fromCard ? "" : `<button class="x" type="button" data-set-back aria-label="All settings">${I.back}</button>`}<h2>${esc(P[panel].title)}</h2>${close}</div>
+      ${fromCard && panel === "weather" && morningCache().weather ? `<button class="btn" type="button" id="set-wx-hide">Hide the weather for today</button>` : ""}
+      ${P[panel].body}
+      ${fromCard ? `<button class="btn ghost sm set-all" type="button" data-set-back>All settings</button>` : ""}`;
+  } else {
+    html = `<div class="sheet-head"><h2>Settings</h2>${close}</div>` + SETTINGS_ORDER.map(([label, keys]) => {
+      const rows = keys.filter((k) => P[k]).map((k) => `<button class="row set-row" type="button" data-set="${k}"><span class="rk">${esc(P[k].title)}</span><span class="sv">${esc(P[k].value || "")}</span>${I.next}</button>`).join("");
+      return rows ? `${label ? `<h3 class="set-h">${esc(label)}</h3>` : ""}<div class="group set-list">${rows}</div>` : "";
+    }).join("") + `<p class="version">${APP}${me ? " Me" : ""} ${VERSION} · ${c.inbox} new · ${c.queued} queued · ${c.done} done · ${c.archived} let go</p>`;
+  }
+  const wrap = sheet(html, { label: panel && P[panel] ? P[panel].title : "Settings" });
+  wrap.querySelectorAll("[data-set]").forEach((b) => b.addEventListener("click", () => openSettings(b.dataset.set)));
+  wrap.querySelectorAll("[data-set-back]").forEach((b) => b.addEventListener("click", () => openSettings()));
+  $("#set-wx-hide", wrap)?.addEventListener("click", () => { closeSheet(); dayAction("wx-hide"); });
+  if (panel === "usage") showUsage($("#set-usage-box", wrap));
 
   const st = $("#set-st", wrap);
-  const say = (el, msg, err) => { el.textContent = msg; el.classList.toggle("err", !!err); };
+  const say = (el, msg, err) => { if (!el) return; el.textContent = msg; el.classList.toggle("err", !!err); };
   wrap.querySelectorAll("[data-ai]").forEach((b) => b.addEventListener("click", () => {
     const on = b.dataset.ai === "1";
     setAi(on);
     wrap.querySelectorAll("[data-ai]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
-    $("#set-discover", wrap).disabled = !on;
+    if ($("#set-discover", wrap)) $("#set-discover", wrap).disabled = !on;
     say(st, on ? "AI is on." : `AI is off. ${APP} works without it.`);
     const sv = b.closest("details")?.querySelector(".sv"); if (sv) sv.textContent = on ? "On" : "Off";
     render({ top: false });
@@ -3675,11 +3703,11 @@ function openSettings(focus = "") {
   renderSuggestProfile(wrap);
   renderTagList(wrap);
   refreshProblems(wrap);
-  $("#set-pr-copy", wrap).addEventListener("click", copyDiagnostics);
-  $("#set-pr-clear", wrap).addEventListener("click", () => { clearProblems(); refreshProblems(wrap); });
-  bindPushSettings(wrap);
-  bindCalendarSettings(wrap);
-  bindSchoolSettings(wrap);
+  $("#set-pr-copy", wrap)?.addEventListener("click", copyDiagnostics);
+  $("#set-pr-clear", wrap)?.addEventListener("click", () => { clearProblems(); refreshProblems(wrap); });
+  if ($("#set-push-on", wrap)) bindPushSettings(wrap);
+  if ($("#set-cal-save", wrap)) bindCalendarSettings(wrap);
+  if ($("#set-sc-save", wrap)) bindSchoolSettings(wrap);
   wrap.querySelectorAll("[data-mo]").forEach((b) => b.addEventListener("click", () => {
     const [k, on] = b.dataset.mo.split(":");
     setMorningSettings({ ...morningSettings(), [k]: on === "1" });
@@ -3687,7 +3715,7 @@ function openSettings(focus = "") {
     render({ top: false });
     loadMorning();
   }));
-  $("#set-mo-save", wrap).addEventListener("click", async () => {
+  $("#set-mo-save", wrap)?.addEventListener("click", async () => {
     const st2 = $("#set-mo-st", wrap);
     const q = $("#set-mo-zip", wrap).value.trim();
     const cam = $("#set-mo-cam", wrap).value.trim();
@@ -3710,7 +3738,7 @@ function openSettings(focus = "") {
     render({ top: false });
     loadMorning();
   });
-  $("#set-study-save", wrap).addEventListener("click", () => {
+  $("#set-study-save", wrap)?.addEventListener("click", () => {
     const topic = $("#set-study-topic", wrap).value.trim().slice(0, 80);
     setMorningSettings({ ...morningSettings(), studyTopic: topic, study: Boolean(topic) });
     wrap.querySelectorAll('[data-mo^="study:"]').forEach((x) => x.setAttribute("aria-pressed", String((x.dataset.mo === "study:1") === Boolean(topic))));
@@ -3736,19 +3764,15 @@ function openSettings(focus = "") {
   }));
   $("#set-usage", wrap)?.addEventListener("toggle", (ev) => { if (ev.currentTarget.open) showUsage($("#set-usage-box", wrap)); });
   $("#set-mail-check", wrap)?.addEventListener("click", () => checkInbox({ statusEl: $("#set-mail-st", wrap) }));
-  if (focus) {
-    const g = $(`#${focus}`, wrap);
-    if (g) { g.open = true; requestAnimationFrame(() => g.scrollIntoView({ block: "start" })); }
-  }
   const edSt = $("#set-ed-st", wrap);
-  $("#set-rebuild", wrap).addEventListener("click", async () => {
+  $("#set-rebuild", wrap)?.addEventListener("click", async () => {
     say(edSt, ai.settings.enabled() ? "Ranking your queue…" : "Rebuilding…");
     try {
       await ensureEdition({ force: true });
       closeSheet(); render(); toast("Today is rebuilt.");
     } catch (e) { say(edSt, e.message || "Could not rebuild.", true); }
   });
-  $("#set-discover", wrap).addEventListener("click", () => findNew(st).then((n) => { refreshProblems(wrap); if (n) render(); }));
+  $("#set-discover", wrap)?.addEventListener("click", () => findNew(st).then((n) => { refreshProblems(wrap); if (n) render(); }));
   $("#set-samples-clear", wrap)?.addEventListener("click", async () => {
     const n = await removeSamples();
     $("#set-samples-clear", wrap).disabled = true;
@@ -3784,7 +3808,7 @@ function openSettings(focus = "") {
     } else { setCalNative(false); say(st2, "This iPhone's calendars are off."); render({ top: false }); }
     wrap.querySelectorAll("[data-calnative]").forEach((x) => x.setAttribute("aria-pressed", String((x.dataset.calnative === "1") === calNative())));
   }));
-  bindAvatarSettings(wrap);
+  if ($("#set-me-choose", wrap)) bindAvatarSettings(wrap);
   wrap.querySelectorAll("[data-look]").forEach((b) => b.addEventListener("click", () => {
     setThemeChoice(b.dataset.look);
     wrap.querySelectorAll("[data-look]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
@@ -3794,7 +3818,7 @@ function openSettings(focus = "") {
     wrap.querySelectorAll("[data-sound]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
     if (soundOn()) { unlock(); tick(true); }
   }));
-  $("#set-export", wrap).addEventListener("click", async () => {
+  $("#set-export", wrap)?.addEventListener("click", async () => {
     const blob = new Blob([await db.exportJson()], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -3803,8 +3827,8 @@ function openSettings(focus = "") {
     setTimeout(() => URL.revokeObjectURL(a.href), 5000);
   });
   const importInput = $("#set-import-file", wrap);
-  $("#set-import", wrap).addEventListener("click", () => importInput.click());
-  importInput.addEventListener("change", async () => {
+  $("#set-import", wrap)?.addEventListener("click", () => importInput.click());
+  importInput?.addEventListener("change", async () => {
     const f = importInput.files[0];
     if (!f) return;
     try {
@@ -3925,9 +3949,9 @@ function renderTagList(wrap) {
 }
 
 function backToTags() {
-  openSettings();
+  openSettings("learned");
   const t = $("#set-tags");
-  if (t) { t.closest("details").open = true; t.scrollIntoView({ block: "start" }); }
+  if (t) t.scrollIntoView({ block: "start" });
 }
 
 function openTag(tag) {
