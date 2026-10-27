@@ -38,7 +38,7 @@ import { topicColor, dominantColor, tintInks, focusOf } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 
-export const VERSION = "4.25.0";
+export const VERSION = "4.26.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -1319,6 +1319,20 @@ function isSchoolMail(m, c = schoolSettings()) {
   return re.test(`${m.from} ${m.fromName} ${m.subject}`) || re.test(String(m.text || "").slice(0, 4000));
 }
 
+/** The PDFs and pictures that came with a mail, fetched from the relay (base64). */
+async function mailFiles(base, m) {
+  const out = [];
+  for (const a of (m.attachments || []).slice(0, 6)) {
+    try {
+      const res = await withTimeout(fetch(`${base}/inbox/file?id=${encodeURIComponent(m.id)}&n=${a.n}`, { headers: { "x-inbox-key": inboxKey() } }), 30000);
+      if (!res.ok) continue;
+      const { data } = await res.json();
+      if (data) out.push({ name: a.name, type: a.type, data });
+    } catch (e) { noteError(e, { quiet: true, where: "inbox: attachment" }); }
+  }
+  return out;
+}
+
 let inboxRunning = false;
 async function checkInbox({ statusEl = null } = {}) {
   const base = ai.relayBase();
@@ -1335,11 +1349,25 @@ async function checkInbox({ statusEl = null } = {}) {
     for (const m of data.mails || []) {
       const c = schoolSettings();
       const school = isSchoolMail(m, c);
+      const files = await mailFiles(base, m);
       if (school && ai.settings.enabled()) {
         const before = state.items.length;
-        await pullNewsletter(`${m.subject}\n\n${m.text}`, null);
+        // A short email that only points at the newsletter's web page: read the page.
+        const body = String(m.text || "").trim(), link = (m.links || [])[0];
+        const raw = !files.length && body.length < 400 && link ? link : `${m.subject}\n\n${m.text}`;
+        await pullNewsletter(raw, null, { files });
         made += state.items.length - before;
       } else {
+        // Anything attached becomes its own saved file, read like any PDF or photo you save.
+        for (const f of files) {
+          try {
+            const bytes = Uint8Array.from(atob(f.data), (ch) => ch.charCodeAt(0));
+            const it = await captureFile(new File([bytes], f.name, { type: f.type }), "email");
+            it.email = { from: m.from, fromName: m.fromName || m.from, at: m.at };
+            await saveItem(it);
+            made++;
+          } catch (e) { noteError(e, { quiet: true, where: "inbox: attachment" }); }
+        }
         const link = (m.links || [])[0];
         const body = String(m.text || "").trim();
         const item = createItem({ kind: KIND.NOTE, text: body.slice(0, 8000), title: m.subject || body.slice(0, 80) || "Email" }, { id: db.newId(), source: "email" });
@@ -1529,10 +1557,10 @@ function schoolAskHtml() {
 }
 
 /** Read a newsletter (link or text) and post what matters. Returns true when a post was made. */
-async function pullNewsletter(raw, statusEl) {
+async function pullNewsletter(raw, statusEl, { files = [] } = {}) {
   const set = (msg, err) => { if (statusEl) { statusEl.textContent = msg; statusEl.classList.toggle("err", !!err); } };
   const input = String(raw || "").trim();
-  if (!input) { set("Paste the newsletter's link or text first.", true); return false; }
+  if (!input && !files.length) { set("Paste the newsletter's link or text first.", true); return false; }
   if (!ai.settings.enabled()) { set("This needs AI. Turn it on in Settings › AI.", true); return false; }
   const c = schoolSettings();
   const first = input.split(/\s+/)[0];
@@ -1552,19 +1580,20 @@ async function pullNewsletter(raw, statusEl) {
   set("Picking out what matters…");
   let out;
   // Names stay on the phone: AI reads "your child" wherever a name was.
-  try { out = await ai.schoolPosts({ text: ai.maskNames(text, childNames(c)), about: ai.maskNames(c.about, childNames(c)) || "No details given: keep what any family at the school needs.", school: c.school }); } catch (e) {
+  // Attachments (flyers, PDFs) go as they are: Claude reads them with the text.
+  try { out = await ai.schoolPosts({ text: ai.maskNames(text, childNames(c)), about: ai.maskNames(c.about, childNames(c)) || "No details given: keep what any family at the school needs.", school: c.school, files }); } catch (e) {
     noteError(e, { quiet: true, where: "school newsletter" });
     set(e.message || "Couldn't read it.", true);
     return false;
   }
-  if (!out.posts.length) { set(`Nothing in this one for ${c.child}.`); markSchoolAsked(); return false; }
+  if (!out.posts.length) { set(`Nothing in this one for ${c.child || "you"}.`); markSchoolAsked(); return false; }
   const now = Date.now(), name = out.school || c.school;
   // Newest first in New, so the newsletter's first piece is created last and shows on top.
   for (let k = out.posts.length - 1; k >= 0; k--) {
     const p = out.posts[k];
     const item = createItem({ kind: KIND.NOTE, text: p.body, title: p.headline || p.body.slice(0, 80), tags: p.tags.length ? p.tags : ["school"] },
       { id: db.newId(), source: "school", now: now - k });
-    Object.assign(item, { title: p.headline || item.title, school: { name, body: p.body, date: p.date, from: url || undefined, query: p.query, pageImgs }, url: url || undefined,
+    Object.assign(item, { title: p.headline || item.title, school: { name, body: p.body, date: p.date, from: url || undefined, query: p.query, pageImgs, fromFile: p.source || undefined }, url: url || undefined,
       enrichedAt: Date.now(), picSettled: Date.now(), coverOff: true, hook: p.body });
     await saveItem(item);
   }
@@ -1970,7 +1999,8 @@ function postHtml(item, { compact = false } = {}) {
   if (item.suggested) say = `<p class="body">${esc(item.suggestReason || item.summary || "Picked from what you finish.")}</p>`;
   else if (item.email) say = `<p class="school-head">${esc(item.title)}</p><p class="body">${esc(String(item.text || "").replace(/\s+/g, " ").slice(0, 280))}${String(item.text || "").length > 280 ? "…" : ""}</p>`;
   else if (item.school) say = `<p class="school-head">${esc(item.title)}</p><p class="body">${esc(item.school.body || "")}</p>`
-    + (item.school.date ? `<p class="ev-place">${I.cal}<span>${esc(shortDate(fromDateInput(item.school.date)))}</span></p>` : "");
+    + (item.school.date ? `<p class="ev-place">${I.cal}<span>${esc(shortDate(fromDateInput(item.school.date)))}</span></p>` : "")
+    + (item.school.fromFile ? `<p class="ev-place">${I.attach}<span>From the attached ${esc(item.school.fromFile)}</span></p>` : "");
   else if (item.kind === KIND.NOTE) say = `<p class="say">${esc(item.text || item.title)}</p>`;
   else if (item.why) say = `<p class="say">${esc(item.why)}</p>`;
   else if (item.hook && !words) say = `<p class="guess"><span class="sr-only">${APP}'s guess: </span>${esc(item.hook)}</p>`;
@@ -3590,7 +3620,7 @@ function openSettings(panel = "", { fromCard = false } = {}) {
       <div class="field"><label for="set-sc-about">What matters to you <span class="hint">(grade, activities, teams)</span></label>
         <textarea id="set-sc-about" rows="3" placeholder="e.g. 8th grade, band, soccer and lacrosse">${esc(sc.about)}</textarea></div>
       <div class="field"><label for="set-sc-child">Child's name <span class="hint">(optional)</span></label><input id="set-sc-child" type="text" autocomplete="off" value="${esc(sc.child)}"></div>
-      <p class="note">Names stay on this phone. AI only ever sees "your child"; Shoebox puts the name back on the post.</p>
+      <p class="note">Names stay on this phone: in the newsletter's text AI sees "your child", and Shoebox puts the name back on the post. Attached flyers and PDFs are read as they are.</p>
       ${me || mailOn ? `<div class="field"><label for="set-sc-words">Words that mark it in email <span class="hint">(sender, district, mascot; commas)</span></label><input id="set-sc-words" type="text" autocomplete="off" value="${esc(sc.words.join(", "))}"></div>` : `<input id="set-sc-words" type="hidden" value="${esc(sc.words.join(", "))}">`}
       <div class="two">
         <button class="btn primary" type="button" id="set-sc-save">Save</button>

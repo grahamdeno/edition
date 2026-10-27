@@ -69,3 +69,39 @@ test("the relay lets the app send every custom header it uses", async () => {
   const allowed = pre.headers.get("access-control-allow-headers").split(",").map((h) => h.trim());
   for (const h of sent) assert.ok(allowed.includes(h), `relay must allow ${h}`);
 });
+
+/* ---- Attachments ---- */
+const b64 = (s) => Buffer.from(s).toString("base64");
+const bigImage = b64("x".repeat(30000));
+const MAIL = [
+  "From: Ducks <news@nhcs.net>", "Subject: Duck Weekly", 'Content-Type: multipart/mixed; boundary="B1"', "", "--B1",
+  "Content-Type: text/plain; charset=utf-8", "", "Band concert Thursday. See the flyer.", "--B1",
+  'Content-Type: application/pdf; name="Flyer.pdf"', 'Content-Disposition: attachment; filename="Flyer.pdf"', "Content-Transfer-Encoding: base64", "", b64("%PDF-1.4 flyer"), "--B1",
+  'Content-Type: image/png; name="logo.png"', "Content-Transfer-Encoding: base64", "", b64("tiny"), "--B1",
+  'Content-Type: image/jpeg; name="poster.jpg"', 'Content-Disposition: inline; filename="poster.jpg"', "Content-Transfer-Encoding: base64", "", bigImage, "--B1--", "",
+].join("\r\n");
+
+test("mail keeps its PDFs and real pictures, skips tiny logos", () => {
+  const m = parseMail(MAIL);
+  assert.equal(m.text.trim(), "Band concert Thursday. See the flyer.");
+  assert.deepEqual(m.files.map((f) => [f.name, f.type]), [["Flyer.pdf", "application/pdf"], ["poster.jpg", "image/jpeg"]]);
+  assert.equal(Buffer.from(m.files[0].data, "base64").toString(), "%PDF-1.4 flyer");
+});
+
+test("attachments wait on the relay, are fetched one by one, and go when the mail is collected", async () => {
+  const store = new Map();
+  const kv = { get: async (k, t) => (store.has(k) ? (t === "json" ? JSON.parse(store.get(k)) : store.get(k)) : null), put: async (k, v) => { store.set(k, v); }, delete: async (k) => { store.delete(k); },
+    list: async ({ prefix }) => ({ keys: [...store.keys()].filter((k) => k.startsWith(prefix)).map((name) => ({ name })) }) };
+  const env = { SHOEBOX: kv };
+  await relay.email({ raw: new Blob([MAIL]).stream(), from: "news@nhcs.net", setReject: () => { throw new Error("rejected"); } }, env);
+  const origin = "https://shoebox.tangomike.app", key = "k".repeat(30);
+  const h = { origin, "x-inbox-key": key };
+  const list = await (await relay.fetch(new Request("https://w.test/inbox", { headers: h }), env)).json();
+  const mail = list.mails[0];
+  assert.deepEqual(mail.attachments.map((a) => a.name), ["Flyer.pdf", "poster.jpg"]);
+  assert.equal(mail.files, undefined);
+  const f = await (await relay.fetch(new Request(`https://w.test/inbox/file?id=${mail.id}&n=0`, { headers: h }), env)).json();
+  assert.equal(Buffer.from(f.data, "base64").toString(), "%PDF-1.4 flyer");
+  await relay.fetch(new Request("https://w.test/inbox/ack", { method: "POST", headers: { ...h, "content-type": "application/json" }, body: JSON.stringify({ ids: [mail.id] }) }), env);
+  assert.equal([...store.keys()].filter((k) => k.startsWith("a:") || k.startsWith("m:")).length, 0);
+});

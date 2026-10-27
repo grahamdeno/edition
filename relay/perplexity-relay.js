@@ -37,7 +37,7 @@
  */
 
 /** What this copy of the relay can do; the app checks it to say when an update is needed. */
-export const RELAY_VERSION = 8;
+export const RELAY_VERSION = 9;
 export const RELAY_FEATURES = ["preview", "image", "photo", "agent", "push", "remind", "ical", "nhl", "inbox", "apple", "ai", "stats"];
 
 const ALLOWED_ORIGINS = ["https://shoebox.tangomike.app", "https://grahamdeno.github.io"];
@@ -68,10 +68,13 @@ export default {
   async email(message, env) {
     if (!env.SHOEBOX) { message.setReject("Shoebox isn't set up to receive mail."); return; }
     const raw = await new Response(message.raw).arrayBuffer();
-    if (raw.byteLength > 4e6) { message.setReject("Too large for Shoebox (4 MB)."); return; }
-    const mail = parseMail(new TextDecoder("utf-8", { fatal: false }).decode(raw));
+    if (raw.byteLength > 12e6) { message.setReject("Too large for Shoebox (12 MB)."); return; }
+    const { files, ...mail } = parseMail(new TextDecoder("utf-8", { fatal: false }).decode(raw));
     const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-    await env.SHOEBOX.put(`m:${id}`, JSON.stringify({ id, at: Date.now(), from: message.from, ...mail }), { expirationTtl: 30 * 86400 });
+    // Attachments wait in their own entries; the app fetches each one when it collects the mail.
+    for (const [n, f] of files.entries()) await env.SHOEBOX.put(`a:${id}:${n}`, f.data, { expirationTtl: 30 * 86400 });
+    const attachments = files.map((f, n) => ({ n, name: f.name, type: f.type, size: f.size }));
+    await env.SHOEBOX.put(`m:${id}`, JSON.stringify({ id, at: Date.now(), from: message.from, ...mail, attachments }), { expirationTtl: 30 * 86400 });
   },
   async scheduled(event, env, ctx) {
     ctx.waitUntil(sendDue(env));
@@ -90,7 +93,7 @@ export default {
     if (pathname === "/stats" || pathname === "/stats/report") return statsRoute(request, env, pathname, cors);
     if (pathname.startsWith("/apple/") || pathname === "/song") return appleRoute(request, env, pathname, searchParams, cors);
     if (request.method === "GET" && pathname === "/nhl") return nhl(searchParams.get("date"), cors);
-    if (pathname === "/inbox" || pathname === "/inbox/ack") return inboxRoute(request, env, pathname, cors);
+    if (pathname === "/inbox" || pathname === "/inbox/ack" || pathname === "/inbox/file") return inboxRoute(request, env, pathname, cors);
     if (request.method === "GET" && pathname === "/ical") return ical(searchParams.get("url"), cors);
     if (request.method === "GET" && pathname === "/image") return image(searchParams.get("url"), cors);
     if (pathname === "/push/key" || pathname === "/push/test" || pathname.startsWith("/remind")) return pushRoute(request, env, pathname, searchParams, cors);
@@ -523,9 +526,19 @@ async function inboxRoute(request, env, pathname, cors) {
     for (const k of list.keys.slice(0, 20)) { const m = await kv.get(k.name, "json"); if (m) mails.push(m); }
     return new Response(JSON.stringify({ mails, address: env.EMAIL_ADDRESS || null }), { headers: { ...cors, "content-type": "application/json", "cache-control": "no-store" } });
   }
+  if (request.method === "GET" && pathname === "/inbox/file") {
+    const q = new URL(request.url).searchParams, id = q.get("id") || "", n = q.get("n") || "";
+    if (!/^[\w-]+$/.test(id) || !/^\d$/.test(n)) return json(400, "Bad file.", cors);
+    const data = await kv.get(`a:${id}:${n}`);
+    if (!data) return json(404, "That attachment is gone.", cors);
+    return new Response(JSON.stringify({ data }), { headers: { ...cors, "content-type": "application/json", "cache-control": "no-store" } });
+  }
   if (request.method === "POST" && pathname === "/inbox/ack") {
     const { ids } = await request.json().catch(() => ({ ids: [] }));
-    for (const id of (ids || []).slice(0, 50)) if (/^[\w-]+$/.test(id)) await kv.delete(`m:${id}`);
+    for (const id of (ids || []).slice(0, 50)) if (/^[\w-]+$/.test(id)) {
+      await kv.delete(`m:${id}`);
+      for (let n = 0; n < 6; n++) await kv.delete(`a:${id}:${n}`);
+    }
     return new Response(JSON.stringify({ ok: true }), { headers: { ...cors, "content-type": "application/json" } });
   }
   return json(404, "Not found.", cors);
@@ -572,6 +585,19 @@ function walk(part, out, depth = 0) {
     for (const p of body.split(`--${boundary}`).slice(1)) { if (!p.startsWith("--")) walk(p.replace(/^\r?\n/, ""), out, depth + 1); }
     return;
   }
+  // PDFs and pictures (attached, or a flyer placed in the email) are kept as base64; tiny images are logos.
+  if (type.startsWith("application/pdf") || /^image\/(png|jpe?g|gif|webp)/.test(type)) {
+    if ((headers["content-transfer-encoding"] || "").toLowerCase() !== "base64") return;
+    const data = body.replace(/[^A-Za-z0-9+/=]/g, "");
+    const size = Math.floor(data.length * 3 / 4);
+    const isPdf = type.startsWith("application/pdf");
+    if (!isPdf && size < 20000) return;
+    const name = decodeWords((/filename\*?="?([^";]+)"?/i.exec(headers["content-disposition"] || "") || /name="?([^";]+)"?/i.exec(headers["content-type"] || "") || [])[1] || (isPdf ? "attachment.pdf" : "picture"));
+    out.files = out.files || [];
+    const used = out.files.reduce((n, f) => n + f.size, 0);
+    if (out.files.length < 6 && used + size <= 4e6) out.files.push({ name: name.slice(0, 120), type: isPdf ? "application/pdf" : type.split(";")[0].trim(), size, data });
+    return;
+  }
   if (/attachment/i.test(headers["content-disposition"] || "")) return;
   if (type.startsWith("text/plain") && !out.text) out.text = decodeBody(body, headers);
   else if (type.startsWith("text/html") && !out.html) out.html = decodeBody(body, headers);
@@ -600,6 +626,7 @@ export function parseMail(raw) {
     fromName: (/^"?([^"<]+?)"?\s*</.exec(from) || [])[1] || from.replace(/<.*>/, "").trim(),
     text,
     links,
+    files: out.files || [],
   };
 }
 
