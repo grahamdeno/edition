@@ -36,7 +36,7 @@ import { I, LOGO } from "./icons.js";
 import { topicColor, dominantColor, tintInks, focusOf } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "4.12.0";
+export const VERSION = "4.12.1";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 
@@ -3243,6 +3243,21 @@ function sheet(html, { tall = false, label = "", guard = null } = {}) {
   wrap.querySelectorAll("[data-close]").forEach((b) => b.addEventListener("click", closeSheet));
   document.body.appendChild(wrap);
   const panel = $(".sheet", wrap);
+  // A swipe on a sheet never scrolls the page behind it: outside the sheet, or when the sheet has nothing
+  // more to scroll that way, iOS would hand the swipe to the page, so it's stopped here.
+  let sy = 0;
+  wrap.addEventListener("touchstart", (e) => { sy = e.touches[0].clientY; }, { passive: true });
+  wrap.addEventListener("touchmove", (e) => {
+    if (!e.cancelable) return;
+    if (!panel.contains(e.target)) { e.preventDefault(); return; }
+    if (e.target.closest(".picks, .chips, .tray")) return; // rows that scroll sideways
+    const box = e.target.closest("textarea");
+    if (box && box.scrollHeight > box.clientHeight) return; // a long field scrolls itself
+    const dy = e.touches[0].clientY - sy;
+    const atTop = panel.scrollTop <= 0, atEnd = panel.scrollTop + panel.clientHeight >= panel.scrollHeight - 1;
+    if (panel.scrollHeight <= panel.clientHeight || (dy < 0 && atEnd)) e.preventDefault();
+    else if (dy > 0 && atTop && !panel.style.transform) e.preventDefault(); // the pull to close moves the sheet itself
+  }, { passive: false });
   // Never sideways: if iOS nudges the sheet left or right (a wide field, a focus jump), put it back.
   panel.addEventListener("scroll", () => { if (panel.scrollLeft) panel.scrollLeft = 0; }, { passive: true });
   bindPull({ scroller: panel, target: panel, host: wrap, onBack: closeSheet, guard });
