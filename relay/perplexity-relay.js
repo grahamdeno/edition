@@ -30,8 +30,8 @@
  */
 
 /** What this copy of the relay can do; the app checks it to say when an update is needed. */
-export const RELAY_VERSION = 3;
-export const RELAY_FEATURES = ["preview", "image", "photo", "agent", "push", "remind", "ical"];
+export const RELAY_VERSION = 4;
+export const RELAY_FEATURES = ["preview", "image", "photo", "agent", "push", "remind", "ical", "nhl", "inbox"];
 
 const ALLOWED_ORIGINS = ["https://grahamdeno.github.io"];
 const UPSTREAM = "https://api.perplexity.ai";
@@ -57,6 +57,15 @@ function json(status, message, headers) {
 }
 
 export default {
+  /** Mail sent to your Shoebox address (Cloudflare Email Routing). Kept until the app picks it up. */
+  async email(message, env) {
+    if (!env.SHOEBOX) { message.setReject("Shoebox isn't set up to receive mail."); return; }
+    const raw = await new Response(message.raw).arrayBuffer();
+    if (raw.byteLength > 4e6) { message.setReject("Too large for Shoebox (4 MB)."); return; }
+    const mail = parseMail(new TextDecoder("utf-8", { fatal: false }).decode(raw));
+    const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    await env.SHOEBOX.put(`m:${id}`, JSON.stringify({ id, at: Date.now(), from: message.from, ...mail }), { expirationTtl: 30 * 86400 });
+  },
   async scheduled(event, env, ctx) {
     ctx.waitUntil(sendDue(env));
   },
@@ -67,7 +76,9 @@ export default {
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
     const { pathname, searchParams } = new URL(request.url);
     if (request.method === "GET" && pathname === "/preview") return preview(searchParams.get("url"), cors, searchParams.get("text") === "1");
-    if (request.method === "GET" && pathname === "/version") return new Response(JSON.stringify({ version: RELAY_VERSION, features: RELAY_FEATURES, push: Boolean(env.SHOEBOX) }), { headers: { ...cors, "content-type": "application/json" } });
+    if (request.method === "GET" && pathname === "/version") return new Response(JSON.stringify({ version: RELAY_VERSION, features: RELAY_FEATURES, push: Boolean(env.SHOEBOX), email: env.EMAIL_ADDRESS || null }), { headers: { ...cors, "content-type": "application/json" } });
+    if (request.method === "GET" && pathname === "/nhl") return nhl(searchParams.get("date"), cors);
+    if (pathname === "/inbox" || pathname === "/inbox/ack") return inboxRoute(request, env, pathname, cors);
     if (request.method === "GET" && pathname === "/ical") return ical(searchParams.get("url"), cors);
     if (request.method === "GET" && pathname === "/image") return image(searchParams.get("url"), cors);
     if (pathname === "/push/key" || pathname === "/push/test" || pathname.startsWith("/remind")) return pushRoute(request, env, pathname, searchParams, cors);
@@ -464,4 +475,118 @@ async function sendPush(kv, sub, message) {
     },
     body,
   });
+}
+
+
+/* ================= NHL scores =================
+ * One day's games from the NHL's public score feed, passed through (it
+ * doesn't let web pages read it directly). Cached for 10 minutes.
+ */
+export async function nhl(date, cors) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date || ""))) return json(400, "Date as YYYY-MM-DD.", cors);
+  let res;
+  try {
+    res = await fetch(`https://api-web.nhle.com/v1/score/${date}`, { headers: { accept: "application/json", "user-agent": "ShoeboxRelay/1.0" }, cf: { cacheTtl: 600, cacheEverything: true } });
+  } catch { return json(502, "Couldn't reach the NHL.", cors); }
+  if (!res.ok) return json(502, `The NHL said ${res.status}.`, cors);
+  return new Response(await res.text(), { status: 200, headers: { ...cors, "content-type": "application/json", "cache-control": "public, max-age=600" } });
+}
+
+/* ================= Your Shoebox email address =================
+ * Mail arrives through Cloudflare Email Routing (an address at a domain you
+ * have on Cloudflare, routed to this Worker). It waits in KV until Shoebox
+ * picks it up with the inbox key it set the first time, then it's deleted.
+ */
+async function inboxRoute(request, env, pathname, cors) {
+  const kv = env.SHOEBOX;
+  if (!kv) return json(501, "The inbox needs the relay's storage. Redeploy with the Deploy to Cloudflare button.", cors);
+  const key = request.headers.get("x-inbox-key") || "";
+  if (!/^[\w-]{24,80}$/.test(key)) return json(401, "No inbox key.", cors);
+  const have = await kv.get("inbox-key");
+  if (!have) await kv.put("inbox-key", key); // the first phone to ask owns the inbox
+  else if (have !== key) return json(403, "This inbox belongs to another phone. Reset it in Cloudflare (delete the inbox-key entry) to move it.", cors);
+  if (request.method === "GET" && pathname === "/inbox") {
+    const list = await kv.list({ prefix: "m:" });
+    const mails = [];
+    for (const k of list.keys.slice(0, 20)) { const m = await kv.get(k.name, "json"); if (m) mails.push(m); }
+    return new Response(JSON.stringify({ mails, address: env.EMAIL_ADDRESS || null }), { headers: { ...cors, "content-type": "application/json", "cache-control": "no-store" } });
+  }
+  if (request.method === "POST" && pathname === "/inbox/ack") {
+    const { ids } = await request.json().catch(() => ({ ids: [] }));
+    for (const id of (ids || []).slice(0, 50)) if (/^[\w-]+$/.test(id)) await kv.delete(`m:${id}`);
+    return new Response(JSON.stringify({ ok: true }), { headers: { ...cors, "content-type": "application/json" } });
+  }
+  return json(404, "Not found.", cors);
+}
+
+/* ---- A small mail reader: headers, multipart, base64 and quoted-printable ---- */
+
+function decodeWords(s) {
+  return String(s || "").replace(/=\?([^?]+)\?([BQbq])\?([^?]*)\?=/g, (_, cs, enc, txt) => {
+    try {
+      const bytes = /b/i.test(enc) ? Uint8Array.from(atob(txt), (c) => c.charCodeAt(0))
+        : Uint8Array.from(txt.replace(/_/g, " ").replace(/=([0-9A-F]{2})/gi, (m, h) => String.fromCharCode(parseInt(h, 16))), (c) => c.charCodeAt(0));
+      return new TextDecoder(/utf-?8/i.test(cs) ? "utf-8" : cs.toLowerCase().includes("1252") ? "windows-1252" : "iso-8859-1").decode(bytes);
+    } catch { return txt; }
+  }).replace(/\?=\s+=\?/g, "");
+}
+
+function splitHead(part) {
+  const i = part.search(/\r?\n\r?\n/);
+  const head = i < 0 ? part : part.slice(0, i), body = i < 0 ? "" : part.slice(i).replace(/^\r?\n\r?\n/, "");
+  const headers = {};
+  for (const line of head.replace(/\r?\n[ \t]+/g, " ").split(/\r?\n/)) {
+    const c = line.indexOf(":");
+    if (c > 0) headers[line.slice(0, c).trim().toLowerCase()] = line.slice(c + 1).trim();
+  }
+  return { headers, body };
+}
+
+function decodeBody(body, headers) {
+  const enc = (headers["content-transfer-encoding"] || "").toLowerCase();
+  const cs = (/charset="?([^";]+)/i.exec(headers["content-type"] || "") || [])[1] || "utf-8";
+  let bytes;
+  if (enc === "base64") { try { bytes = Uint8Array.from(atob(body.replace(/\s+/g, "")), (c) => c.charCodeAt(0)); } catch { return body; } }
+  else if (enc === "quoted-printable") bytes = Uint8Array.from(body.replace(/=\r?\n/g, "").replace(/=([0-9A-F]{2})/gi, (m, h) => String.fromCharCode(parseInt(h, 16))), (c) => c.charCodeAt(0) & 255);
+  else return body;
+  try { return new TextDecoder(/utf-?8/i.test(cs) ? "utf-8" : cs.toLowerCase().includes("1252") ? "windows-1252" : "iso-8859-1").decode(bytes); } catch { return new TextDecoder().decode(bytes); }
+}
+
+function walk(part, out, depth = 0) {
+  const { headers, body } = splitHead(part);
+  const type = (headers["content-type"] || "text/plain").toLowerCase();
+  const boundary = (/boundary="?([^";]+)"?/i.exec(headers["content-type"] || "") || [])[1];
+  if (type.startsWith("multipart/") && boundary && depth < 6) {
+    for (const p of body.split(`--${boundary}`).slice(1)) { if (!p.startsWith("--")) walk(p.replace(/^\r?\n/, ""), out, depth + 1); }
+    return;
+  }
+  if (/attachment/i.test(headers["content-disposition"] || "")) return;
+  if (type.startsWith("text/plain") && !out.text) out.text = decodeBody(body, headers);
+  else if (type.startsWith("text/html") && !out.html) out.html = decodeBody(body, headers);
+}
+
+export function htmlToText(html) {
+  return String(html || "")
+    .replace(/<(script|style|head)\b[\s\S]*?<\/\1>/gi, " ")
+    .replace(/<a\b[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi, (m, href, t) => `${t.replace(/<[^>]+>/g, "").trim()} (${href})`)
+    .replace(/<(br|\/p|\/div|\/h\d|\/li|\/tr)\b[^>]*>/gi, "\n").replace(/<li\b[^>]*>/gi, "\n• ")
+    .replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&#39;|&rsquo;/g, "'").replace(/&quot;|&ldquo;|&rdquo;/g, '"')
+    .replace(/[ \t]+/g, " ").replace(/ *\n */g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/** { subject, fromName, text, links } from a raw message. */
+export function parseMail(raw) {
+  const { headers } = splitHead(raw);
+  const out = {};
+  walk(raw, out);
+  const text = (out.text && out.text.trim().length > 40 ? out.text : htmlToText(out.html || out.text || "")).slice(0, 60000);
+  const links = [...new Set((`${out.html || ""} ${text}`).match(/https?:\/\/[^\s"'<>)]+/g) || [])]
+    .filter((u) => !/unsubscribe|manage.?preferences|list-manage|mailchimp\.com\/track|\.(png|jpe?g|gif)(\?|$)/i.test(u)).slice(0, 30);
+  const from = decodeWords(headers.from || "");
+  return {
+    subject: decodeWords(headers.subject || "").slice(0, 200),
+    fromName: (/^"?([^"<]+?)"?\s*</.exec(from) || [])[1] || from.replace(/<.*>/, "").trim(),
+    text,
+    links,
+  };
 }

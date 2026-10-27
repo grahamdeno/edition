@@ -21,6 +21,18 @@ It only answers Shoebox's own address, and it's free: a personal app uses a tiny
 
 The button copies this folder into a new repository on your GitHub, and Cloudflare redeploys whenever that repository changes.
 
+## Your Shoebox email address (optional)
+
+Forward any email to your own address (for example `shoebox@yourdomain.com`) and it becomes posts in Shoebox; school newsletters become school posts. Cloudflare only receives mail for a domain you have on Cloudflare (a domain costs about $10 a year; Cloudflare sells them at cost).
+
+1. In Cloudflare, add your domain (or buy one under **Domain Registration**).
+2. Open the domain › **Email** › **Email Routing** › **Get started**, and let it add its DNS records.
+3. **Routing rules** › **Create address**: custom address `shoebox`, action **Send to a Worker**, Worker **shoebox-relay**. Save.
+4. Open the Worker › **Settings** › **Variables and Secrets** › add a text variable `EMAIL_ADDRESS` = `shoebox@yourdomain.com` (so Shoebox can show it). Deploy.
+5. In Shoebox: **Settings › Email in › Check for email now**. The first phone to check owns the inbox.
+
+Mail waits at the relay for up to 30 days until Shoebox collects it, then it's deleted there.
+
 ## Updating
 
 When this folder changes, copy `perplexity-relay.js` over the one in your `shoebox-relay` repository (or ask Claude to). Cloudflare redeploys on its own. The address stays the same.

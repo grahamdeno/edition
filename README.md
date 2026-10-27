@@ -46,6 +46,10 @@ When everything is settled, the end of Today shows what you cleared as a collage
 
 School posts have their own section, **From school**, on Today: every one you haven't marked Done or Not needed shows each day, soonest date first, and one whose date has passed leaves on its own. They're not in New, don't take one of today's six and don't count toward what's left. Calendar events work the same way (they can't be marked at all, and leave at midnight).
 
+**This morning.** At the top of Today: the weather for 28409 (now, high and low, rain chance, wind, sunrise and sunset, Wrightsville Beach tides) with the National Weather Service radar for Wilmington (or a camera picture you set); last night's Hurricanes and Capitals games with goal scorers and a highlights link; a Carl Jung quote, each with its source; *On this day*, something you saved a year, a month or a week ago; and three CPMAI practice questions (Sonnet writes them; tap an answer to see why). Each can be turned off in Settings › Mornings.
+
+**Email in.** Forward any email to your Shoebox address and it becomes a post; school mail becomes school posts. Needs a domain on Cloudflare (setup in `relay/README.md`).
+
 **Your calendar.** Settings › Calendar takes your calendar's private iCal address (Google: Secret address in iCal format; iPhone: Public Calendar share link; Outlook: published ICS link), one per line. Today's events show at the top of Today under *On your calendar*: all-day first, then by time, with *Now* and *Ended*. They're read through the relay, never saved as items, can't be kept or removed, and are gone at midnight. Repeating events, time zones, skipped and moved dates are handled on the phone (`src/calendar.js`).
 
 **Your photo.** Settings › Your photo sets the face on your posts. It stays on the phone.
