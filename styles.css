@@ -716,3 +716,13 @@ details.group[open] { padding-bottom: 14px; }
 .wx-attr { margin: 6px 0 0; font-size: 0.75rem; }
 .wx-attr a { color: var(--faint); text-decoration: none; }
 .post.daily .rail { align-self: start; }
+
+/* Morning cards: shrunk weather, finished quiz, Jung buttons, live event */
+.wx-mini { display: flex; align-items: center; gap: 10px; margin: 0 var(--gutter-r) 0 var(--gutter-l); padding: 10px 0; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 0.9rem; }
+.wx-mini > span:nth-child(2) { flex: 1; min-width: 0; }
+.wx-ic-s { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; background: var(--sig-soft); color: var(--sig-ink); font-weight: 600; font-size: 0.75rem; flex: none; }
+.wx-ic-s .i { width: 16px; height: 16px; }
+.day-acts { margin-top: 10px; }
+.cq-score { font-weight: 600; }
+.post.event.live { background: color-mix(in srgb, var(--sig) 7%, var(--bg)); }
+.post.event.live .ev-title { color: var(--sig-ink); }

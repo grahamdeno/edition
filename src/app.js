@@ -37,7 +37,7 @@ import { I, LOGO } from "./icons.js";
 import { topicColor, dominantColor, tintInks, focusOf } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "4.16.0";
+export const VERSION = "4.17.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 
@@ -970,7 +970,7 @@ function sectionHead(title, note = "") {
 
 function todayHtml() {
   const s = todaySections();
-  let h = stripHtml(s) + morningHtml() + schoolAskHtml() + calendarHtml();
+  let h = stripHtml(s) + calendarHtml() + morningHtml() + schoolAskHtml();
   if (s.school.length) h += sectionHead("From school", `${s.school.filter(isOpen).length || "All"} to do`) + s.school.map((i) => postHtml(i)).join("");
   if (s.fresh.length) h += sectionHead("New", `${s.fresh.filter(isOpen).length || "All"} to sort`) + s.fresh.map((i) => postHtml(i)).join("");
   if (s.six.length) h += sectionHead("Today's six", `${s.six.filter(isOpen).length} of ${s.six.length} left`) + s.six.map((i) => postHtml(i)).join("");
@@ -1064,11 +1064,15 @@ function morningHtml() {
   const place = daily.PLACES[m.zip] || daily.PLACES["28409"];
   const card = (cls, rail, meta, body) => `<article class="post daily ${cls}"><div class="rail">${rail}</div><div class="main"><div class="meta">${meta}</div>${body}</div></article>`;
   const hm = (iso) => (iso ? new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) : "");
-  if (m.weather && c.weather) {
+  if (m.weather && c.weather && c.wxHidden) {
+    const w = c.weather;
+    cards.push(`<div class="wx-mini"><span class="wx-ic-s" aria-hidden="true">${I.sun}</span><span>${w.now}° · ${esc(w.word)} · High ${w.hi}° · Low ${w.lo}°${w.rain != null ? ` · Rain ${w.rain}%` : ""}</span>
+      <button class="btn sm ghost" type="button" data-day="wx-show">Show</button></div>`);
+  } else if (m.weather && c.weather) {
     const w = c.weather;
     const pic = m.cam || `https://radar.weather.gov/ridge/standard/${place.radar}_0.gif?t=${Math.floor(Date.now() / 6e5)}`;
     cards.push(card("wx", `<span class="av av-day wx-ic" aria-hidden="true">${I.sun}</span>`,
-      `<span class="who">Weather,</span> <span class="when">${esc(place.name)} ${esc(m.zip)}</span>`,
+      `<span class="who">Weather,</span> <span class="when">${esc(place.name)} ${esc(m.zip)}</span><button class="act icon more" type="button" data-day="wx-hide" aria-label="Shrink the weather for today">${I.close}</button>`,
       `<p class="wx-now"><span class="deg">${w.now}°</span><span class="wx-word">${esc(w.word)}<small>Feels like ${w.feels}°</small></span></p>
        <p class="wx-line">High ${w.hi}° · Low ${w.lo}°${w.rain != null ? ` · Rain ${w.rain}%` : ""} · Wind ${esc(w.windFrom)} ${w.wind} mph${w.gusts > w.wind + 5 ? `, gusts ${w.gusts}` : ""}</p>
        ${w.nextHour ? `<p class="wx-line wx-next">${esc(w.nextHour)}</p>` : ""}
@@ -1097,9 +1101,17 @@ function morningHtml() {
        ${g.recap || g.center ? `<a class="btn sm hl" href="${esc(g.recap || g.center)}" target="_blank" rel="noopener">${I.play}<span>${g.recap ? "Watch highlights" : "Game recap"}</span></a>` : ""}`));
   }
   if (m.jung) {
-    const j = daily.jungFor();
-    cards.push(card("jung", `<span class="av av-day" aria-hidden="true">J</span>`, `<span class="who">Carl Jung</span>`,
-      `<blockquote class="jung-q">${esc(j.q)}</blockquote><p class="wx-line">${esc(j.src)}</p>`));
+    const j = daily.jungFor(Date.now(), jungRetired());
+    if (j && c.jungDone !== j.index) {
+      const kept = state.items.some((i) => i.jung === j.index);
+      cards.push(card("jung", `<span class="av av-day" aria-hidden="true">J</span>`, `<span class="who">Carl Jung</span>`,
+        `<blockquote class="jung-q">${esc(j.q)}</blockquote><p class="wx-line">${esc(j.src)}</p>
+         <div class="acts day-acts"><span class="grow"></span>
+           <button class="act" type="button" data-day="jung-no:${j.index}">${I.letGo}<span>Not for me</span></button>
+           <button class="act done" type="button" data-day="jung-keep:${j.index}" ${kept ? "disabled" : ""}>${I.keep}<span>${kept ? "Kept" : "Keep"}</span></button></div>`));
+    } else if (j && c.jungDone === j.index) {
+      cards.push(`<div class="wx-mini"><span class="wx-ic-s" aria-hidden="true">J</span><span>${state.items.some((i) => i.jung === j.index) ? "Today's Jung quote is in your saves." : "Jung quote cleared for today."}</span></div>`);
+    }
   }
   if (m.otd) {
     const o = daily.onThisDay(state.items);
@@ -1111,7 +1123,11 @@ function morningHtml() {
           <span class="otd-t"><span class="ttl">${esc(o.item.why || o.item.title || "Something you saved")}</span>${o.item.why && o.item.title ? `<span class="site">${esc(o.item.title)}</span>` : ""}</span></button>`));
     }
   }
-  if (m.cpmai && c.cpmai?.questions?.length) {
+  if (m.cpmai && c.cpmai?.questions?.length && c.cpmai.done) {
+    const sc = cpmaiScore();
+    cards.push(`<div class="wx-mini"><span class="wx-ic-s" aria-hidden="true">AI</span><span>CPMAI done: ${c.cpmai.right} of ${c.cpmai.questions.length} right today${sc.total ? ` · ${sc.right} of ${sc.total} this month` : ""}</span>
+      <button class="btn sm ghost" type="button" data-day="cq-show">Review</button></div>`);
+  } else if (m.cpmai && c.cpmai?.questions?.length) {
     const qs = c.cpmai.questions, ans = c.cpmai.answers || {};
     const right = qs.filter((q, k) => ans[k] && ans[k].length === q.answer.length && ans[k].every((x) => q.answer.includes(x))).length;
     const doneN = qs.filter((q, k) => ans[k] && ans[k].length === q.answer.length).length;
@@ -1125,9 +1141,46 @@ function morningHtml() {
             return `<button class="cq-o ${st}" type="button" data-cq="${k}:${i}" ${shown ? "disabled" : ""}><span class="l">${"ABCDE"[i]}</span><span>${esc(o)}</span></button>`;
           }).join("")}</div>
           ${shown ? `<p class="cq-why"><b>${q.answer.length === picked.length && picked.every((x) => q.answer.includes(x)) ? "Right." : `Answer: ${q.answer.map((i) => "ABCDE"[i]).join(", ")}.`}</b> ${esc(q.why)}</p>` : ""}</div>`;
-      }).join("")));
+      }).join("") + (doneN === qs.length ? `<div class="acts day-acts"><span class="cq-score">${right} of ${qs.length} right</span><span class="grow"></span>
+        <button class="act done" type="button" data-day="cq-done:${right}">${I.done}<span>Done</span></button></div>` : "")));
   }
   return cards.length ? sectionHead("This morning") + cards.join("") : "";
+}
+
+/* The morning cards' own buttons: shrink the weather, finish CPMAI, keep or retire a Jung quote. */
+const jungRetired = () => { try { return JSON.parse(localStorage.getItem("edition.jungRetired") || "[]"); } catch { return []; } };
+function cpmaiScore(now = Date.now()) {
+  try {
+    const all = JSON.parse(localStorage.getItem("edition.cpmaiScores") || "{}"), month = dayKey(now).slice(0, 7);
+    return Object.entries(all).filter(([d]) => d.startsWith(month)).reduce((a, [, v]) => ({ right: a.right + v[0], total: a.total + v[1] }), { right: 0, total: 0 });
+  } catch { return { right: 0, total: 0 }; }
+}
+async function dayAction(what) {
+  const [act, arg] = what.split(":");
+  const c = morningCache();
+  if (act === "wx-hide") c.wxHidden = true;
+  else if (act === "wx-show") c.wxHidden = false;
+  else if (act === "cq-done" && c.cpmai) {
+    c.cpmai.done = true; c.cpmai.right = +arg || 0;
+    try { const all = JSON.parse(localStorage.getItem("edition.cpmaiScores") || "{}"); all[dayKey()] = [c.cpmai.right, c.cpmai.questions.length]; localStorage.setItem("edition.cpmaiScores", JSON.stringify(all)); } catch { /* full */ }
+    tick(true);
+  } else if (act === "cq-show" && c.cpmai) c.cpmai.done = false;
+  else if (act === "jung-keep") {
+    const j = daily.JUNG[+arg];
+    if (j && !state.items.some((i) => i.jung === +arg)) {
+      const item = createItem({ kind: KIND.QUOTE, text: j.q, author: "Carl Jung", title: j.q.slice(0, 140) }, { id: db.newId(), source: "jung" });
+      Object.assign(item, { jung: +arg, note: j.src, status: STATUS.QUEUED, queuedAt: Date.now(), tags: ["jung", "psychology"], enrichedAt: Date.now() });
+      await saveItem(item);
+      toast("Kept. It's in your saves and can come back as one of your six.");
+    }
+    c.jungDone = +arg; tick(true);
+  } else if (act === "jung-no") {
+    try { const r = jungRetired(); if (!r.includes(+arg)) r.push(+arg); localStorage.setItem("edition.jungRetired", JSON.stringify(r)); } catch { /* full */ }
+    c.jungDone = +arg;
+    toast("That one won't come back.");
+  }
+  saveMorningCache(c);
+  render({ top: false });
 }
 
 /** Play or stop a song's 30-second preview. */
@@ -1453,7 +1506,7 @@ function calendarHtml() {
   return sectionHead("On your calendar", left ? `${left} still to come` : "All done") + c.events.map((e) => {
     const live = !e.allDay && e.start <= now && e.end > now, past = !e.allDay && (e.end > e.start ? e.end : e.start + 1) <= now;
     const notes = e.notes ? e.notes.replace(/\s+/g, " ").slice(0, 220) + (e.notes.length > 220 ? "…" : "") : "";
-    return `<article class="post event${past ? " past" : ""}" aria-label="${esc(eventWhen(e))}: ${esc(e.title)}">
+    return `<article class="post event${past ? " past" : ""}${live ? " live" : ""}" aria-label="${esc(eventWhen(e))}: ${esc(e.title)}">
       <div class="rail"><span class="av av-cal" aria-hidden="true">${I.cal}</span></div>
       <div class="main">
         <div class="meta"><span class="who">${esc(calName(e.calendar, "Google Calendar"))},</span> <span class="when">${esc(eventWhen(e))}</span>${live ? '<span class="tag now">Now</span>' : past ? '<span class="tag">Ended</span>' : ""}</div>
@@ -1776,6 +1829,7 @@ async function onTimelineClick(e) {
   let b;
   if ((b = hit("[data-tab]"))) { selectTab(b.dataset.tab); return; }
   if ((b = hit("[data-preview]"))) { playPreview(b); return; }
+  if ((b = hit("[data-day]"))) { await dayAction(b.dataset.day); return; }
   if ((b = hit("[data-cq]"))) { const [k, i] = b.dataset.cq.split(":").map(Number); answerCpmai(k, i); return; }
   if ((b = hit("[data-school=go]"))) {
     b.disabled = true;
