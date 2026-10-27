@@ -765,8 +765,27 @@ export async function schoolPosts({ text, about, school = "", today = new Date()
 }
 
 /**
- * A picture for one school post, and a line about the child that fits what's
- * in it, shown large over the photo. Returns { index, overlay, alt }.
+ * Children's names stay on the phone: before anything goes to AI, each name
+ * the parent gave is swapped for a stand-in, and put back on the device.
+ */
+export const CHILD_TOKEN = "{child}";
+export function maskNames(text, names = [], stand = "your child") {
+  let out = String(text || "");
+  for (const n of names.map((x) => String(x || "").trim()).filter((x) => x.length > 1)) {
+    out = out.replace(new RegExp(`\\b${n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "gi"), stand);
+  }
+  return out;
+}
+export function unmaskName(text, name) {
+  const s = String(text || "");
+  if (!name) return s.replace(/\{child\},?\s*/gi, "").replace(/^./, (c) => c.toUpperCase());
+  return s.replace(/\{child\}/gi, name);
+}
+
+/**
+ * A picture for one school post, and a line that fits what's in it, shown
+ * large over the photo. The child is only ever "{child}" here; the app puts
+ * the name in. Returns { index, overlay, alt }.
  */
 export async function schoolPicture({ headline, body, child, candidates }) {
   const list = (candidates || []).slice(0, 5);
@@ -775,10 +794,13 @@ export async function schoolPicture({ headline, body, child, candidates }) {
   parts.push({ type: "text", text: [
     `These are ${list.length} candidate photos, numbered 0 to ${list.length - 1} in the order shown, for a post from a school to a parent.`,
     `Post headline: ${headline}`, `Post: ${body}`,
-    `The parent's child is ${child}.`,
+    child ? `The parent's child is referred to as ${CHILD_TOKEN}: write it exactly like that, braces included, never a made-up name.` : "The post is for a parent.",
     "Pick the photo that best fits the post: a real photograph of the activity or place. Avoid logos, flyers full of text, clip art and photos where a face is the main subject.",
-    `Then write the overlay: one short line, max 48 characters, that names ${child} and plays on what is visible in the chosen photo as it relates to the post ` +
-    `(e.g. for a photo of a lit stage and a concert: "${child}, those lights are yours Thursday"). Warm and specific, no emoji, no hashtags.`,
+    child
+      ? `Then write the overlay: one short line, max 48 characters, that starts with ${CHILD_TOKEN} and plays on what is visible in the chosen photo as it relates to the post ` +
+        `(e.g. for a photo of a lit stage and a concert: "${CHILD_TOKEN}, those lights are yours Thursday"). Warm and specific, no emoji, no hashtags.`
+      : `Then write the overlay: one short line, max 48 characters, that plays on what is visible in the chosen photo as it relates to the post ` +
+        `(e.g. for a photo of a lit stage and a concert: "Those lights are yours Thursday"). Warm and specific, no emoji, no hashtags.`,
     'Return JSON: {"index": integer (-1 if none fits), "overlay": string, "alt": string (one plain sentence describing the chosen photo, max 140 chars)}',
   ].join("\n") });
   const out = parseJson(textOf(await call({ content: parts, system: ENRICH_SYSTEM, maxTokens: 250 })));
@@ -807,6 +829,36 @@ export function unwrapLink(raw) {
  * the six CPMAI phases and the course's core ideas. Single answer or
  * "choose two"; each with why the answer is right.
  */
+/**
+ * Study deck: a few practice questions a day on any topic the reader picks.
+ * CPMAI keeps its own exam-shaped prompt; anything else gets a general one.
+ */
+export async function studyQuestions({ topic, count = 3, seed = 0, recent = [] } = {}) {
+  const t = clip(String(topic || "").trim(), 80);
+  if (!t) return [];
+  if (/cpmai/i.test(t)) return cpmaiQuestions({ count, seed, recent });
+  const prompt = [
+    `Write ${count} multiple-choice practice questions on: ${t}.`,
+    "Aim for someone studying it seriously: test understanding and application, not trivia. One best answer each, with plausible wrong options.",
+    "Only include facts you are confident are correct and current. Vary the sub-topics.",
+    "Make one of them a choose-two question.",
+    `Today's variety number is ${seed}; use it to pick different sub-topics than other days.`,
+    recent.length ? `Don't repeat these recent questions: ${recent.slice(0, 12).join(" | ")}` : "",
+    "",
+    'Return JSON: {"questions": [{"topic": string (short), "q": string (max 320 chars), "options": array of 4 or 5 strings (max 140 chars each), "answer": array of the correct option indexes (one, or two for choose-two), "why": string (max 300 chars: why the answer is right)}]}',
+  ].filter(Boolean).join("\n");
+  const out = parseJson(textOf(await call({ content: prompt, system: "You write accurate practice questions. Reply with JSON only.", maxTokens: 2000 })));
+  return cleanQuestions(out, count);
+}
+
+function cleanQuestions(out, count) {
+  return (out.questions || []).slice(0, count).map((x) => {
+    const options = (Array.isArray(x.options) ? x.options : []).slice(0, 5).map((o) => clip(o, 160)).filter(Boolean);
+    const answer = (Array.isArray(x.answer) ? x.answer : [x.answer]).map(Number).filter((n) => Number.isInteger(n) && n >= 0 && n < options.length);
+    return { topic: clip(x.topic, 60), q: clip(x.q, 360), options, answer: [...new Set(answer)], why: clip(x.why, 340) };
+  }).filter((x) => x.q && x.options.length >= 3 && x.answer.length);
+}
+
 /** Exam questions need to be right more than they need to be cheap. */
 export const QUIZ_MODEL = "claude-sonnet-5-5";
 
@@ -832,9 +884,5 @@ export async function cpmaiQuestions({ count = 3, seed = 0, recent = [] } = {}) 
     'Return JSON: {"questions": [{"topic": string (short), "q": string (max 320 chars), "options": array of 4 or 5 strings (max 140 chars each), "answer": array of the correct option indexes (one, or two for choose-two), "why": string (max 300 chars: why the answer is right and the best distractor is wrong)}]}',
   ].filter(Boolean).join("\n");
   const out = parseJson(textOf(await call({ content: prompt, system: "You write accurate certification practice questions. Reply with JSON only.", maxTokens: 2500, model: QUIZ_MODEL })));
-  return (out.questions || []).slice(0, count).map((x) => {
-    const options = (Array.isArray(x.options) ? x.options : []).slice(0, 5).map((o) => clip(o, 160)).filter(Boolean);
-    const answer = (Array.isArray(x.answer) ? x.answer : [x.answer]).map(Number).filter((n) => Number.isInteger(n) && n >= 0 && n < options.length);
-    return { topic: clip(x.topic, 60), q: clip(x.q, 360), options, answer: [...new Set(answer)], why: clip(x.why, 340) };
-  }).filter((x) => x.q && x.options.length >= 3 && x.answer.length);
+  return cleanQuestions(out, count);
 }

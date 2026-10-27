@@ -296,3 +296,36 @@ test("the app falls back to an older key while the relay has no AI, then drops t
   await hook({ kind: "link", title: "x" });
   assert.equal(store["edition.apiKey"], undefined);
 });
+
+/* ---- Study deck and names that stay on the phone ---- */
+import { maskNames, unmaskName, studyQuestions, schoolPicture, CHILD_TOKEN } from "../src/ai.js";
+
+test("children's names are swapped out before AI and put back after", () => {
+  assert.equal(maskNames("Gunner is in 8th grade; GUNNER plays band. Gunnersen is someone else.", ["Gunner"]), "your child is in 8th grade; your child plays band. Gunnersen is someone else.");
+  assert.equal(maskNames("Ava and Max", ["Ava", "Max"]), "your child and your child");
+  assert.equal(unmaskName(`${CHILD_TOKEN}, those lights are yours Thursday`, "Gunner"), "Gunner, those lights are yours Thursday");
+  assert.equal(unmaskName(`${CHILD_TOKEN}, those lights are yours Thursday`, ""), "Those lights are yours Thursday");
+});
+
+test("the picture prompt never carries a child's name", async () => {
+  const sent = stubApi({ index: 0, overlay: `${CHILD_TOKEN}, those lights are yours`, alt: "A stage" });
+  const r = await schoolPicture({ headline: "Band concert", body: "Thursday at 7", child: CHILD_TOKEN, candidates: [{ src: "https://img.test/a.jpg" }] });
+  const text = JSON.stringify(sent[0]);
+  assert.ok(text.includes(CHILD_TOKEN));
+  assert.ok(!/Gunner/.test(text));
+  assert.equal(r.overlay, `${CHILD_TOKEN}, those lights are yours`);
+});
+
+test("study deck: any topic uses the everyday model; CPMAI keeps its exam prompt", async () => {
+  const q = { questions: [{ topic: "t", q: "Which?", options: ["a", "b", "c", "d"], answer: [1], why: "because" }] };
+  let sent = stubApi(q);
+  const out = await studyQuestions({ topic: "Spanish verbs", count: 1 });
+  assert.equal(out[0].answer[0], 1);
+  assert.match(promptOf(sent[0]), /practice questions on: Spanish verbs/);
+  assert.equal(sent[0].model, "claude-haiku-5-5");
+  sent = stubApi(q);
+  await studyQuestions({ topic: "PMI-CPMAI", count: 1 });
+  assert.match(promptOf(sent[0]), /PMI-CPMAI/);
+  assert.equal(sent[0].model, "claude-sonnet-5-5");
+  assert.deepEqual(await studyQuestions({ topic: "  " }), []);
+});
