@@ -617,3 +617,18 @@ details.group[open] { padding-bottom: 14px; }
 .ev-notes { margin: 6px 0 0; color: var(--muted); font-size: 0.875rem; -webkit-user-select: text; user-select: text; }
 .post.event.past .ev-title, .post.event.past .ev-place, .post.event.past .ev-notes { opacity: 0.5; }
 .tag.now { background: var(--sig); color: var(--on-sig); }
+
+/* School newsletter: the Monday and Friday ask, and the school's posts */
+.ask { margin: 12px var(--gutter-r) 4px var(--gutter-l); padding: 14px; border-radius: 18px; background: var(--panel); border: 1px solid var(--line-2); display: flex; flex-direction: column; gap: 10px; }
+.ask-top { display: flex; gap: 12px; align-items: flex-start; }
+.ask h2 { margin: 0; font: 400 1.35rem/1.2 var(--serif); }
+.ask p { margin: 2px 0 0; color: var(--muted); font-size: 0.875rem; }
+.ask textarea { width: 100%; min-height: 48px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line-2); background: var(--bg); color: var(--fg); font: 400 max(16px, 1rem)/1.45 var(--sans); resize: none; outline: none; -webkit-user-select: text; user-select: text; }
+.ask textarea:focus { border-color: var(--sig); }
+.ask-acts { display: flex; gap: 8px; flex-wrap: wrap; }
+.ask .st:empty { display: none; }
+.av-school { display: grid; place-items: center; background: #1F6F5C; color: #fff; font: 600 1.1rem var(--sans); box-shadow: none; flex: none; }
+.ask .av-school { width: 40px; height: 40px; border-radius: 50%; }
+.school-head { margin: 2px 0 4px; font: 400 1.6rem/1.15 var(--serif); color: var(--fg); }
+.coming ul { padding-left: 1.1em; }
+.coming b { font-weight: 600; }

@@ -208,3 +208,11 @@ test("tagging sees their note, reason and replies, and puts their use first", ()
   assert.match(describeItem({ kind: "photo", note: "gift idea" }).join("\n"), /Their note about it: gift idea/);
   assert.match(OWN_WORDS_RULE, /date idea/);
 });
+
+import { unwrapLink } from "../src/ai.js";
+test("Outlook Safe Links unwrap to the real address", () => {
+  const safe = "https://nam12.safelinks.protection.outlook.com/?url=https%3A%2F%2Fmyrtlegrovemiddle.givebacks.com%2Fshop%2Fitems%2F0b1c061aa483cd&data=05%7C02&reserved=0";
+  assert.equal(unwrapLink(safe), "https://myrtlegrovemiddle.givebacks.com/shop/items/0b1c061aa483cd");
+  assert.equal(unwrapLink("https://example.com/a"), "https://example.com/a");
+  assert.equal(unwrapLink("not a link"), "not a link");
+});

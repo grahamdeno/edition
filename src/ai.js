@@ -656,3 +656,50 @@ async function imageForModel(blob) {
     return null; // a format this browser can't decode
   }
 }
+
+/* ---- School newsletter ----
+ * From a newsletter's text, what matters for one child, written as a short,
+ * catchy post from the school, with the dates and to-dos underneath.
+ */
+export async function schoolPost({ text, about, school = "", today = new Date() }) {
+  const prompt = [
+    `Today is ${today.toDateString()}. This is a school newsletter${school ? ` from ${school}` : ""}.`,
+    `The parent cares about one child: ${about}`,
+    "",
+    "Keep only what matters for that child: their grade, their activities and teams, and whole-school dates, deadlines and closings that affect them.",
+    "Leave out other grades, other sports and clubs, staff news, fundraising pitches and general filler.",
+    "",
+    "Return JSON: {",
+    '"school": string (the school\'s short name, e.g. "Myrtle Grove Middle"),',
+    '"headline": string (a catchy line a parent would stop scrolling for, max 70 chars; specific, no clickbait, no emoji),',
+    '"body": string (1 to 3 short sentences, max 260 chars, like a lively school social post to this parent: the one or two things that matter most this week; at most one exclamation mark; no emoji, no hashtags),',
+    '"items": array of up to 8 {"date": "YYYY-MM-DD" or null, "text": string (max 110 chars: what, when, where, what to bring or do)}, soonest first, undated last,',
+    '"tags": array of 1-3 lowercase topic words',
+    "}",
+    'If nothing in it matters for this child, return {"school": string, "headline": "", "body": "", "items": [], "tags": []}.',
+    "",
+    "Newsletter:",
+    String(text || "").slice(0, 30000),
+  ].join("\n");
+  const out = parseJson(textOf(await call({ content: prompt, system: ENRICH_SYSTEM, maxTokens: 1500 })));
+  const items = (Array.isArray(out.items) ? out.items : []).slice(0, 8)
+    .map((i) => ({ date: /^\d{4}-\d{2}-\d{2}$/.test(i?.date || "") ? i.date : null, text: clip(i?.text, 140) }))
+    .filter((i) => i.text);
+  return { school: clip(out.school, 60), headline: clip(out.headline, 90), body: clip(out.body, 300), items, tags: cleanTags(out.tags) };
+}
+
+/** Outlook Safe Links and similar wrappers, unwrapped to the real address. */
+export function unwrapLink(raw) {
+  let s = String(raw || "").trim();
+  for (let k = 0; k < 3; k++) {
+    let u;
+    try { u = new URL(s); } catch { return s; }
+    const inner = /safelinks\.protection\.outlook\.com$/i.test(u.hostname) ? u.searchParams.get("url")
+      : /^(www\.)?google\.[a-z.]+$/i.test(u.hostname) && u.pathname === "/url" ? u.searchParams.get("q") || u.searchParams.get("url")
+      : /urldefense\.com$/i.test(u.hostname) ? (u.pathname.match(/__(https?:\/\/.+?)__/) || [])[1]
+      : null;
+    if (!inner) return s;
+    s = inner;
+  }
+  return s;
+}
