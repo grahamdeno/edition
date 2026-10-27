@@ -241,3 +241,30 @@ export function eventPlace(e) {
   return { text: loc.split(",")[0].trim().slice(0, 60), online: false, full: loc };
 }
 
+
+/* ---- The day bar ---- */
+
+/** Free stretches of at least `min` ms between `from` and `to`, around the timed events. */
+export function freeGaps(events, from, to, min = 30 * 60e3) {
+  const busy = events.filter((e) => !e.allDay && e.end > from && e.start < to)
+    .map((e) => [Math.max(e.start, from), Math.min(Math.max(e.end, e.start), to)]).sort((a, b) => a[0] - b[0]);
+  const gaps = [];
+  let t = from;
+  for (const [s, e] of busy) {
+    if (s - t >= min) gaps.push({ start: t, end: s });
+    t = Math.max(t, e);
+  }
+  if (to - t >= min) gaps.push({ start: t, end: to });
+  return gaps;
+}
+
+/** The hours the bar spans: 7a to 9p, stretched to fit early or late events. */
+export function barRange(events, dayStart) {
+  const h = 3600e3;
+  const timed = events.filter((e) => !e.allDay);
+  const first = Math.min(dayStart + 7 * h, ...timed.map((e) => e.start));
+  const last = Math.max(dayStart + 21 * h, ...timed.map((e) => e.end));
+  const from = Math.max(dayStart, dayStart + Math.floor((first - dayStart) / h) * h);
+  const to = Math.min(dayStart + 24 * h, dayStart + Math.ceil((last - dayStart) / h) * h);
+  return { from, to };
+}
