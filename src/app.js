@@ -36,7 +36,7 @@ import { I, LOGO } from "./icons.js";
 import { topicColor, dominantColor, tintInks, focusOf } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "4.10.1";
+export const VERSION = "4.11.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 
@@ -147,6 +147,7 @@ async function boot() {
   wireGlobal();
   picturePending();
   enrichPending();
+  schoolPictures();
   registerWorker();
   refreshCalendar();
   setInterval(() => { if (document.visibilityState === "visible") refreshCalendar(); }, 15 * 60e3);
@@ -907,9 +908,15 @@ function todayHtml() {
  * a link also needs the relay to read the page.
  */
 const SCHOOL_KEY = "edition.school", SCHOOL_ASKED = "edition.schoolAsked";
-const SCHOOL_DEFAULT = { on: true, days: [1, 5], child: "your son", school: "Myrtle Grove Middle",
-  about: "My son is in 8th grade at Myrtle Grove Middle School. He plays in the band, and plays soccer and lacrosse." };
-function schoolSettings() { try { return { ...SCHOOL_DEFAULT, ...JSON.parse(localStorage.getItem(SCHOOL_KEY) || "{}") }; } catch { return { ...SCHOOL_DEFAULT }; } }
+const SCHOOL_DEFAULT = { on: true, days: [1, 5], child: "Gunner", school: "Myrtle Grove Middle",
+  about: "Gunner is in 8th grade at Myrtle Grove Middle School. He plays in the band, and plays soccer and lacrosse." };
+function schoolSettings() {
+  let c;
+  try { c = { ...SCHOOL_DEFAULT, ...JSON.parse(localStorage.getItem(SCHOOL_KEY) || "{}") }; } catch { c = { ...SCHOOL_DEFAULT }; }
+  if (!c.child || c.child === "your son") c.child = SCHOOL_DEFAULT.child; // earlier versions saved the placeholder
+  if (/^My son is in 8th grade/.test(c.about)) c.about = SCHOOL_DEFAULT.about;
+  return c;
+}
 function setSchoolSettings(v) { try { localStorage.setItem(SCHOOL_KEY, JSON.stringify(v)); } catch { /* private mode */ } }
 const schoolAsked = () => { try { return localStorage.getItem(SCHOOL_ASKED) === dayKey(); } catch { return false; } };
 const markSchoolAsked = () => { try { localStorage.setItem(SCHOOL_ASKED, dayKey()); } catch { /* private mode */ } };
@@ -937,7 +944,7 @@ async function pullNewsletter(raw, statusEl) {
   const c = schoolSettings();
   const first = input.split(/\s+/)[0];
   const isLink = /^https?:\/\/\S+$/i.test(input);
-  let url = isLink ? ai.unwrapLink(first) : "", text = isLink ? "" : input;
+  let url = isLink ? ai.unwrapLink(first) : "", text = isLink ? "" : input, pageImgs = [];
   if (isLink) {
     if (!ai.relayBase()) { set("Reading a link needs the relay (Settings › Relay). Or paste the newsletter's text instead.", true); return false; }
     set("Reading the newsletter…");
@@ -945,6 +952,7 @@ async function pullNewsletter(raw, statusEl) {
       const res = await withTimeout(fetch(`${ai.relayBase()}/preview?text=1&url=${encodeURIComponent(url)}`), 20000);
       const data = res.ok ? await res.json() : {};
       text = [data.title, data.description, data.text].filter(Boolean).join("\n\n");
+      pageImgs = candidatesOf(data).slice(0, 4);
     } catch (e) { noteError(e, { quiet: true, where: "school: read page" }); }
     if (text.length < 300) { set("That page didn't give up its text (it may need a sign-in or build itself in the browser). Copy the newsletter's text and paste it here instead.", true); return false; }
   }
@@ -962,15 +970,84 @@ async function pullNewsletter(raw, statusEl) {
     const p = out.posts[k];
     const item = createItem({ kind: KIND.NOTE, text: p.body, title: p.headline || p.body.slice(0, 80), tags: p.tags.length ? p.tags : ["school"] },
       { id: db.newId(), source: "school", now: now - k });
-    Object.assign(item, { title: p.headline || item.title, school: { name, body: p.body, date: p.date, from: url || undefined }, url: url || undefined,
+    Object.assign(item, { title: p.headline || item.title, school: { name, body: p.body, date: p.date, from: url || undefined, query: p.query, pageImgs }, url: url || undefined,
       enrichedAt: Date.now(), picSettled: Date.now(), coverOff: true, hook: p.body });
     await saveItem(item);
   }
   state.schoolCount = out.posts.length;
+  setTimeout(schoolPictures, 50);
   state.schoolDraft = "";
   state.schoolForce = false;
   markSchoolAsked();
   return true;
+}
+
+/*
+ * A picture for each school post: the newsletter page's own photos first,
+ * then openly licensed photos (Openverse, through the relay) for the post's
+ * subject. Claude picks one and writes a line about Gunner that fits it,
+ * shown large over the photo. One post at a time, in the background.
+ */
+let schoolPicRunning = false;
+async function schoolPictures() {
+  if (schoolPicRunning) return;
+  schoolPicRunning = true;
+  try {
+    for (;;) {
+      const next = state.items.find((i) => i.school && i.school.body && !i.school.picDone && (i.school.picTries || 0) < 2
+        && (i.status === STATUS.INBOX || i.status === STATUS.QUEUED));
+      if (!next) break;
+      const relay = ai.relayBase();
+      let cands = [...(next.school.pageImgs || [])].slice(0, 2);
+      const query = next.school.query || firstWords(next.title || "", 4);
+      if (relay && query) {
+        try {
+          const res = await withTimeout(fetch(`${relay}/photo?q=${encodeURIComponent(query)}`), 15000);
+          const data = res.ok ? await res.json() : {};
+          cands.push(...(data.photos || []).slice(0, 4).map((p) => ({ src: p.src, credit: p.credit, license: p.license, link: p.link, search: true })));
+        } catch (e) { noteError(e, { quiet: true, where: "school: photo search" }); }
+      }
+      cands = await usableImages(cands, { timeout: 6000 });
+      const c = schoolSettings();
+      let pick = cands.length ? 0 : -1, overlay = "", alt = "";
+      if (cands.length && ai.settings.enabled()) {
+        try {
+          const r = await withTimeout(ai.schoolPicture({ headline: next.title, body: next.school.body, child: c.child, candidates: cands }), 25000);
+          pick = r.index; overlay = r.overlay; alt = r.alt;
+        } catch (e) {
+          noteError(e, { quiet: true, where: "school: pick picture" });
+          if (e && [0, 429, 529].includes(e.status)) break;
+        }
+      }
+      const cur = byId(next.id);
+      if (!cur) continue;
+      const tries = (cur.school.picTries || 0) + 1;
+      const done = pick >= 0 || tries >= 2 || !relay;
+      const upd = { ...cur, school: { ...cur.school, picTries: tries, picDone: done, overlay: overlay || cur.school.overlay } };
+      if (pick >= 0) {
+        const ch = cands[pick];
+        Object.assign(upd, { coverOff: false, imageAlt: alt || ch.alt || undefined,
+          cover: { src: ch.src, from: ch.search ? "search" : "page", credit: ch.credit, license: ch.license, link: ch.link, pinned: true } });
+      }
+      await saveItem(upd);
+      refreshPost(upd.id);
+      if (!relay) break;
+    }
+  } finally {
+    schoolPicRunning = false;
+  }
+  focusPending();
+}
+
+/** A school post's photo, with the line about Gunner over it. */
+function schoolMediaHtml(item) {
+  const pic = pictureOf(item);
+  if (!pic || !pic.src) return "";
+  const credit = creditLine(pic);
+  return `<div class="pic school-pic"><button class="open" type="button" data-open="${esc(item.id)}" aria-label="Open: ${esc(item.title)}">
+      <img alt="${esc(item.imageAlt || "")}"${focusAttr(item, pic)} src="${esc(pic.src)}" referrerpolicy="no-referrer" loading="lazy" onerror="this.closest('.pic')?.remove()">
+      ${item.school.overlay ? `<span class="overlay">${esc(item.school.overlay)}</span>` : ""}</button></div>
+    ${credit ? `<p class="credit">${pic.link ? `<a href="${esc(pic.link)}" target="_blank" rel="noopener">${esc(credit)}</a>` : esc(credit)}</p>` : ""}`;
 }
 
 /* ================= Today's calendar =================
@@ -1212,7 +1289,7 @@ function postHtml(item, { compact = false } = {}) {
     <div class="main">
       <div class="meta"><span class="who">${esc(b.who)},</span> <span class="when">${esc(b.when)}</span>${tag}<button class="act icon more" type="button" data-edit="${esc(item.id)}" aria-label="Edit">${I.menu}</button></div>
       ${say}${quote}${why}
-      ${mediaHtml(item, compact)}
+      ${item.school ? schoolMediaHtml(item) : mediaHtml(item, compact)}
       ${busy}${item.school ? coming : points}
     </div>
     <div class="acts-row">${settled ? stampHtml(item, settled) : actionsHtml(item, open)}</div>
@@ -2508,7 +2585,7 @@ function bindSchoolSettings(wrap) {
   const st = $("#set-sc-st", wrap);
   const read = () => ({ ...schoolSettings(),
     school: $("#set-sc-school", wrap).value.trim() || SCHOOL_DEFAULT.school,
-    child: $("#set-sc-child", wrap).value.trim() || "your son",
+    child: $("#set-sc-child", wrap).value.trim() || SCHOOL_DEFAULT.child,
     about: $("#set-sc-about", wrap).value.trim() || SCHOOL_DEFAULT.about });
   wrap.querySelectorAll("[data-school-on]").forEach((b) => b.addEventListener("click", () => {
     const on = b.dataset.schoolOn === "1";
@@ -2641,7 +2718,7 @@ function openSettings() {
         <div class="seg" role="group" aria-label="Ask me"><button type="button" data-school-on="1" aria-pressed="${schoolSettings().on}">Mon and Fri</button><button type="button" data-school-on="0" aria-pressed="${!schoolSettings().on}">Off</button></div></div>
       <div class="two">
         <div class="field"><label for="set-sc-school">School</label><input id="set-sc-school" type="text" autocomplete="off" value="${esc(schoolSettings().school)}"></div>
-        <div class="field"><label for="set-sc-child">Called</label><input id="set-sc-child" type="text" autocomplete="off" placeholder="your son" value="${esc(schoolSettings().child)}"></div>
+        <div class="field"><label for="set-sc-child">Called</label><input id="set-sc-child" type="text" autocomplete="off" placeholder="Gunner" value="${esc(schoolSettings().child)}"></div>
       </div>
       <div class="field"><label for="set-sc-about">What matters <span class="hint">(grade, activities)</span></label>
         <textarea id="set-sc-about" rows="3">${esc(schoolSettings().about)}</textarea></div>

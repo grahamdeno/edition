@@ -676,7 +676,8 @@ export async function schoolPosts({ text, about, school = "", today = new Date()
     '  "headline": string (a catchy line a parent would stop scrolling for, max 70 chars; specific, no clickbait, no emoji),',
     '  "body": string (1 to 3 short sentences, max 300 chars, written like a lively school social post: the details of this one piece; at most one exclamation mark; no emoji, no hashtags),',
     '  "date": "YYYY-MM-DD" or null (the day it happens or is due),',
-    '  "tags": array of 1-2 lowercase topic words',
+    '  "tags": array of 1-2 lowercase topic words,',
+    '  "photo_query": string (2 to 4 concrete words naming a photograph that would suit this post, something a camera could take: e.g. "middle school band concert", "youth lacrosse game", "school bus morning"; no names, no text)',
     "} in the newsletter's order",
     "}",
     'If nothing in it matters for this child, return {"school": string, "posts": []}.',
@@ -690,8 +691,31 @@ export async function schoolPosts({ text, about, school = "", today = new Date()
     body: clip(p?.body, 340),
     date: /^\d{4}-\d{2}-\d{2}$/.test(p?.date || "") ? p.date : null,
     tags: cleanTags(p?.tags),
+    query: clip(String(p?.photo_query || "").replace(/["']/g, ""), 60),
   })).filter((p) => p.headline || p.body);
   return { school: clip(out.school, 60), posts };
+}
+
+/**
+ * A picture for one school post, and a line about the child that fits what's
+ * in it, shown large over the photo. Returns { index, overlay, alt }.
+ */
+export async function schoolPicture({ headline, body, child, candidates }) {
+  const list = (candidates || []).slice(0, 5);
+  if (!list.length) return { index: -1, overlay: "", alt: "" };
+  const parts = list.map((c) => ({ type: "image", source: { type: "url", url: c.src } }));
+  parts.push({ type: "text", text: [
+    `These are ${list.length} candidate photos, numbered 0 to ${list.length - 1} in the order shown, for a post from a school to a parent.`,
+    `Post headline: ${headline}`, `Post: ${body}`,
+    `The parent's child is ${child}.`,
+    "Pick the photo that best fits the post: a real photograph of the activity or place. Avoid logos, flyers full of text, clip art and photos where a face is the main subject.",
+    `Then write the overlay: one short line, max 48 characters, that names ${child} and plays on what is visible in the chosen photo as it relates to the post ` +
+    `(e.g. for a photo of a lit stage and a concert: "${child}, those lights are yours Thursday"). Warm and specific, no emoji, no hashtags.`,
+    'Return JSON: {"index": integer (-1 if none fits), "overlay": string, "alt": string (one plain sentence describing the chosen photo, max 140 chars)}',
+  ].join("\n") });
+  const out = parseJson(textOf(await call({ content: parts, system: ENRICH_SYSTEM, maxTokens: 250 })));
+  const index = Number.isInteger(+out.index) && +out.index >= 0 && +out.index < list.length ? +out.index : -1;
+  return { index, overlay: index >= 0 ? clip(out.overlay, 60) : "", alt: index >= 0 ? clip(out.alt, 160) : "" };
 }
 
 /** Outlook Safe Links and similar wrappers, unwrapped to the real address. */
