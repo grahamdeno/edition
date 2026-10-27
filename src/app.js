@@ -36,7 +36,7 @@ import { I, LOGO } from "./icons.js";
 import { topicColor, dominantColor, tintInks, focusOf } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "4.11.2";
+export const VERSION = "4.11.3";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 
@@ -2065,7 +2065,7 @@ function bindPictureEdit(wrap, id) {
     box.innerHTML = pickTilesHtml(cands, current(it), { ownUrl: own, suggest: false })
       + (it.kind === KIND.LINK && it.url && ai.relayBase() ? `<button class="pk txt" type="button" data-pk="again">${I.requeue}<span>Look again</span></button>` : "");
     const pic = pictureOf(it);
-    note.textContent = it.coverOff ? "No picture. The post shows the link on its own."
+    note.textContent = it.coverOff ? (it.school ? "No picture." : "No picture. The post shows the link on its own.")
       : !pic ? (cands.length ? "Pick one, or add your own." : it.kind === KIND.LINK && !ai.relayBase() ? "Pictures from the page need the relay (Settings)." : "No pictures found. Add your own.")
       : pic.from === "mine" ? "Your photo." : pic.from === "page" ? "From the page." : "";
   };
@@ -3179,6 +3179,8 @@ function sheet(html, { tall = false, label = "", guard = null } = {}) {
   wrap.querySelectorAll("[data-close]").forEach((b) => b.addEventListener("click", closeSheet));
   document.body.appendChild(wrap);
   const panel = $(".sheet", wrap);
+  // Never sideways: if iOS nudges the sheet left or right (a wide field, a focus jump), put it back.
+  panel.addEventListener("scroll", () => { if (panel.scrollLeft) panel.scrollLeft = 0; }, { passive: true });
   bindPull({ scroller: panel, target: panel, host: wrap, onBack: closeSheet, guard });
   $("#app")?.setAttribute("inert", "");
   $(".reader")?.setAttribute("inert", "");
