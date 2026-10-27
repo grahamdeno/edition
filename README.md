@@ -40,6 +40,8 @@ When everything is settled, the end of Today shows what you cleared as a collage
 
 **Add.** Paste or type into the box, or use **Paste** and **Photo or file** under it. Once Shoebox knows what it is, the same fields as Edit appear: Picture (a row of the page's photos), Title (filled in from the page), Why you're saving it, and Your note. The AI tags it and estimates the time, reading your reason and note first; fix either in Edit if needed. A title you type, the AI leaves alone. Several things at once share the reason. Save stays pinned at the bottom.
 
+**Set aside until a date.** In Add (or ⋯ › Edit later), *Show it* offers Now, Tomorrow, This weekend, Next week, In a month or Pick a date. A set-aside item is out of sight (All saves › Set aside lists them, with Bring back now) and comes back as new at the top of Today that morning, marked *Back today*. **Remind me that morning** hands your phone a calendar file with a 9:00 alert, so you're reminded outside the app; web apps on iPhone can't schedule their own notifications.
+
 **Your photo.** Settings › Your photo sets the face on your posts. It stays on the phone.
 
 **Appearance.** Settings › Appearance: Match phone (default), Light or Dark. The choice is applied before the first paint, so the app never flashes the other look.
