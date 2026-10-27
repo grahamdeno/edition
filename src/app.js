@@ -27,7 +27,7 @@ import {
 } from "./model.js";
 import * as db from "./db.js";
 import * as push from "./push.js";
-import { parseIcs, eventsOn, calLink, cleanEventTitle, eventPlace } from "./calendar.js";
+import { parseIcs, eventsOn, calLink, cleanEventTitle, eventPlace, freeGaps, barRange } from "./calendar.js";
 import * as daily from "./daily.js";
 import { captureText, captureFile, captureTransfer, readClipboard, captureShares } from "./capture.js";
 import { sampleItems, SAMPLES_VERSION } from "./samples.js";
@@ -38,7 +38,7 @@ import { topicColor, dominantColor, tintInks, focusOf } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 
-export const VERSION = "4.23.0";
+export const VERSION = "4.24.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -1740,9 +1740,10 @@ const setCalHidden = (list) => { try { localStorage.setItem("edition.calHidden",
 const shortClock = (ts) => new Date(ts).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }).replace(":00", "").replace(" AM", "a").replace(" PM", "p");
 
 /**
- * Today's calendar as a glance, not a list: what's on now or next (with
- * where and a Join button), the rest of the day one line each, and how the
- * day ends. Finished events fold away; a busy day shows four and a "more".
+ * Today's calendar as a day bar: a strip from morning to night with a block
+ * per event and a line for now, so a packed day reads at a glance. Under it,
+ * what's on now or next (with Join), and the free stretches still ahead.
+ * Tap the bar for the full list.
  */
 function calendarHtml() {
   const c = calCache();
@@ -1750,49 +1751,72 @@ function calendarHtml() {
   const hidden = new Set(calHidden());
   const evs = c.events.filter((e) => !hidden.has(calName(e.calendar, "Calendar")));
   if (!evs.length) return "";
-  const now = Date.now();
+  const now = Date.now(), dayStart = startOfToday();
+  const ends = (e) => (e.end > e.start ? e.end : e.start + 15 * 60e3);
   const allDay = evs.filter((e) => e.allDay);
   const timed = evs.filter((e) => !e.allDay).sort((a, b) => a.start - b.start);
-  const done = timed.filter((e) => (e.end > e.start ? e.end : e.start + 1) <= now);
-  const ahead = timed.filter((e) => (e.end > e.start ? e.end : e.start + 1) > now);
+  const ahead = timed.filter((e) => ends(e) > now);
   const focus = ahead[0];
-  const rest = ahead.slice(1);
-  const names = [...new Set(evs.map((e) => calName(e.calendar, "Calendar")))];
-  // One clearly different color per calendar (work and home side by side should never look alike).
+  // The busiest calendar gets the house purple; the others clearly different colors (sorted by name, so they stay put).
+  const tally = {};
+  for (const e of timed) tally[calName(e.calendar, "Calendar")] = (tally[calName(e.calendar, "Calendar")] || 0) + 1;
+  const names = [...new Set(evs.map((e) => calName(e.calendar, "Calendar")))].sort((a, b) => (tally[b] || 0) - (tally[a] || 0) || a.localeCompare(b));
   const CAL_COLORS = ["#7B3FF2", "#E0A100", "#1F8A70", "#D9485F", "#2F7DD1", "#8A5A2B"];
   const colorOf = (e) => CAL_COLORS[Math.max(0, names.indexOf(calName(e.calendar, "Calendar"))) % CAL_COLORS.length];
   const dot = (e) => names.length > 1 ? `<span class="cal-dot" style="--c:${colorOf(e)}" title="${esc(calName(e.calendar, "Calendar"))}"></span>` : "";
-  const line = (e) => `<li class="ag-row">${dot(e)}<span class="ag-t">${esc(shortClock(e.start))}</span><span class="ag-n">${esc(cleanEventTitle(e.title))}</span></li>`;
 
+  // The bar
+  const { from, to } = barRange(timed, dayStart);
+  const pct = (t) => (Math.min(Math.max(t, from), to) - from) / (to - from) * 100;
+  const blocks = timed.map((e) => {
+    const l = pct(e.start), w = Math.max(pct(ends(e)) - l, 0.9);
+    return `<span class="db-blk${ends(e) <= now ? " past" : ""}" style="left:${l.toFixed(2)}%;width:${w.toFixed(2)}%;--c:${colorOf(e)}"></span>`;
+  }).join("");
+  const ticks = [];
+  for (let t = from; t <= to; t += 3600e3) {
+    const hr = new Date(t).getHours();
+    if (hr % 4 === 0 && t > from && t < to) ticks.push(`<span class="db-tick" style="left:${pct(t).toFixed(2)}%">${esc(shortClock(t))}</span>`);
+  }
+  const nowLine = now > from && now < to ? `<span class="db-now" style="left:${pct(now).toFixed(2)}%"></span>` : "";
+  const label = `${timed.length} events today${focus ? `, next at ${shortClock(focus.start)}` : ""}. Show the list.`;
+
+  // Now or next
   let focusHtml = "";
   if (focus) {
     const live = focus.start <= now;
     const mins = Math.round((focus.start - now) / 60e3);
-    const when = live ? `Now, until ${shortClock(focus.end)}` : mins <= 90 ? `In ${mins} min · ${shortClock(focus.start)}` : `Next · ${eventWhen(focus)}`;
     const place = eventPlace(focus), link = calLink(focus);
-    focusHtml = `<div class="ag-focus${live ? " live" : ""}">
-        <p class="ag-when">${esc(when)}</p>
-        <p class="ag-title">${esc(cleanEventTitle(focus.title))}</p>
-        ${place.text ? `<p class="ag-place">${place.online ? "" : I.pin}<span>${esc(place.text)}</span></p>` : ""}
-        ${link ? `<a class="btn sm primary ag-go" href="${esc(link)}" target="_blank" rel="noopener">${place.online ? "Join" : "Open"}</a>` : ""}
+    const when = live ? `Now, until ${shortClock(focus.end)}` : mins <= 90 ? `In ${mins} min · ${shortClock(focus.start)}` : `Next · ${shortClock(focus.start)}`;
+    focusHtml = `<div class="db-next${live ? " live" : ""}">
+        <div class="db-next-t"><p class="ag-when">${esc(when)}${place.text ? ` · ${esc(place.text)}` : ""}</p>
+          <p class="db-next-n">${esc(cleanEventTitle(focus.title))}</p></div>
+        ${link ? `<a class="btn sm primary" href="${esc(link)}" target="_blank" rel="noopener">${place.online ? "Join" : "Open"}</a>` : ""}
       </div>`;
   }
-  const shown = rest.slice(0, 3), more = rest.slice(3);
-  const last = timed.length ? Math.max(...timed.map((e) => e.end)) : 0;
-  const tail = !focus ? (timed.length ? "That's everything today." : "")
-    : last && new Date(last).getHours() < 21 ? `Free after ${shortClock(last)}` : "";
-  const day = new Date().toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
-  const count = `${timed.length} event${timed.length === 1 ? "" : "s"}`;
-  return `<article class="post event agenda" aria-label="Today's calendar">
+
+  // Free stretches still ahead, until the evening (or the last event, if later)
+  const lastEnd = timed.length ? Math.max(...timed.map(ends)) : 0;
+  const gaps = focus ? freeGaps(ahead, Math.max(now, from), Math.min(to, Math.max(lastEnd, dayStart + 21 * 3600e3)), 45 * 60e3) : [];
+  // A stretch that starts now only repeats "in 46 min": show the ones after the next event.
+  const gapChips = gaps.filter((g) => g.start > now + 60e3).slice(0, 3).map((g) => {
+    const open = g.end >= Math.max(lastEnd, dayStart + 21 * 3600e3) - 60e3 && g.start >= lastEnd;
+    return `<span class="db-free">${open ? `Free after ${esc(shortClock(g.start))}` : `Free ${esc(shortClock(g.start))}–${esc(shortClock(g.end))}`}</span>`;
+  }).join("");
+  const left = ahead.length;
+  const head = left ? `${left} left${lastEnd ? ` · done ${shortClock(lastEnd)}` : ""}` : timed.length ? "All done for today" : "";
+
+  const rows = timed.map((e) => `<li class="ag-row${ends(e) <= now ? " past" : ""}">${dot(e)}<span class="ag-t">${esc(shortClock(e.start))}</span><span class="ag-n">${esc(cleanEventTitle(e.title))}</span></li>`).join("");
+  return `<article class="post event daybar" aria-label="Today's calendar">
       <div class="rail"><span class="av av-cal" aria-hidden="true">${I.cal}</span></div>
       <div class="main">
-        <div class="meta"><span class="who">Today,</span> <span class="when">${esc(day)}${timed.length ? ` · ${count}` : ""}</span></div>
+        <div class="meta"><span class="who">Today,</span> <span class="when">${esc(head || new Date().toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" }))}</span></div>
         ${allDay.length ? `<p class="ag-allday">${allDay.map((e) => `<span class="chip">${dot(e)}${esc(cleanEventTitle(e.title))}</span>`).join("")}</p>` : ""}
+        ${timed.length ? `<details class="db">
+          <summary aria-label="${esc(label)}"><span class="db-track" aria-hidden="true">${blocks}${nowLine}</span><span class="db-ticks" aria-hidden="true">${ticks.join("")}<span class="db-more"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></span></span></summary>
+          <ol class="ag-list">${rows}</ol>
+        </details>` : ""}
         ${focusHtml}
-        ${shown.length ? `<ol class="ag-list">${shown.map(line).join("")}</ol>` : ""}
-        ${more.length ? `<details class="ag-more"><summary>${more.length} more</summary><ol class="ag-list">${more.map(line).join("")}</ol></details>` : ""}
-        ${done.length ? `<details class="ag-more ag-done"><summary>${done.length} earlier today</summary><ol class="ag-list">${done.map(line).join("")}</ol></details>` : ""}
-        ${tail ? `<p class="ag-tail">${esc(tail)}</p>` : ""}
+        ${gapChips ? `<p class="db-frees">${gapChips}</p>` : ""}
       </div>
     </article>`;
 }

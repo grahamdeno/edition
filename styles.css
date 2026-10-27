@@ -784,3 +784,25 @@ table.usage th { color: var(--muted); font-weight: 600; }
 .ag-more summary { cursor: pointer; font-size: 0.875rem; font-weight: 600; color: var(--sig-ink); min-height: 30px; display: flex; align-items: center; }
 .ag-done .ag-n, .ag-done .ag-t { opacity: 0.55; }
 .ag-tail { margin: 8px 0 0; font-size: 0.8125rem; color: var(--muted); }
+/* Today's calendar: the day bar */
+.daybar .db { margin-top: 8px; }
+.daybar .db summary { list-style: none; cursor: pointer; display: block; padding: 2px 0 0; }
+.daybar .db summary::-webkit-details-marker { display: none; }
+.db-track { position: relative; display: block; height: 20px; border-radius: 7px; background: var(--soft); overflow: hidden; }
+.db-blk { position: absolute; top: 0; bottom: 0; border-radius: 4px; background: var(--c, var(--sig)); box-shadow: 0 0 0 1px var(--bg); }
+.db-blk.past { opacity: 0.35; }
+.db-now { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; border-radius: 1px; background: #D9485F; }
+.db-ticks { position: relative; display: block; height: 18px; }
+.db-tick { position: absolute; top: 3px; transform: translateX(-50%); font-size: 0.6875rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.daybar .db[open] .ag-list { margin-top: 2px; }
+.ag-row.past .ag-n, .ag-row.past .ag-t { opacity: 0.55; }
+.db-next { display: flex; align-items: center; gap: 10px; margin-top: 8px; padding: 10px 12px; border-radius: 14px; background: var(--panel); border: 1px solid var(--line-2); }
+.db-next.live { border-color: var(--sig); }
+.db-next-t { flex: 1; min-width: 0; }
+.db-next-n { margin: 2px 0 0; font: 400 1.15rem/1.25 var(--serif); color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.db-frees { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; }
+.db-free { padding: 4px 10px; border-radius: 999px; background: #E6F4EE; color: #155E4B; font-size: 0.8125rem; font-weight: 600; }
+:root[data-theme="dark"] .db-free { background: #173A30; color: #A9E5CF; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .db-free { background: #173A30; color: #A9E5CF; } }
+.db-more { position: absolute; right: 0; top: 2px; color: var(--sig-ink); display: flex; transition: transform 0.2s; }
+.daybar .db[open] .db-more { transform: rotate(180deg); }

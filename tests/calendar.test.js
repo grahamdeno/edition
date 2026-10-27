@@ -78,3 +78,18 @@ test("event titles lose mail prefixes; online meetings are named by service", ()
   assert.equal(eventPlace({ location: "Little Leaps, 5226 S. College Rd, Wilmington, NC" }).text, "Little Leaps");
   assert.equal(calLink({ notes: "Join: https://teams.microsoft.com/l/meetup-join/abc) more" }), "https://teams.microsoft.com/l/meetup-join/abc");
 });
+
+import { freeGaps, barRange } from "../src/calendar.js";
+
+test("free stretches skip overlaps and short gaps", () => {
+  const h = 3600e3, d = new Date(2026, 9, 27).getTime();
+  const ev = (s, e) => ({ start: d + s * h, end: d + e * h, allDay: false });
+  const gaps = freeGaps([ev(12.5, 13), ev(14, 15), ev(14.5, 16), ev(16, 17), ev(19, 20.25)], d + 11.85 * h, d + 21 * h, 45 * 60e3);
+  assert.deepEqual(gaps.map((g) => [(g.start - d) / h, (g.end - d) / h]), [[13, 14], [17, 19], [20.25, 21]]);
+});
+
+test("the bar spans 7a to 9p unless events run earlier or later", () => {
+  const h = 3600e3, d = new Date(2026, 9, 27).getTime();
+  assert.deepEqual(barRange([{ start: d + 8 * h, end: d + 9 * h }], d), { from: d + 7 * h, to: d + 21 * h });
+  assert.deepEqual(barRange([{ start: d + 5.5 * h, end: d + 6 * h }, { start: d + 21 * h, end: d + 22.25 * h }], d), { from: d + 5 * h, to: d + 23 * h });
+});
