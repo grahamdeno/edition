@@ -37,7 +37,7 @@
  */
 
 /** What this copy of the relay can do; the app checks it to say when an update is needed. */
-export const RELAY_VERSION = 7;
+export const RELAY_VERSION = 8;
 export const RELAY_FEATURES = ["preview", "image", "photo", "agent", "push", "remind", "ical", "nhl", "inbox", "apple", "ai", "stats"];
 
 const ALLOWED_ORIGINS = ["https://shoebox.tangomike.app", "https://grahamdeno.github.io"];
@@ -52,7 +52,7 @@ function corsHeaders(origin) {
   return {
     "access-control-allow-origin": allowed(origin) ? origin : ALLOWED_ORIGINS[0],
     "access-control-allow-methods": "GET, POST, DELETE, OPTIONS",
-    "access-control-allow-headers": "authorization, content-type, x-shoebox-device, x-shoebox-token",
+    "access-control-allow-headers": "authorization, content-type, x-inbox-key, x-shoebox-device, x-shoebox-token",
     "access-control-expose-headers": "retry-after",
     "access-control-max-age": "86400",
     vary: "origin",
