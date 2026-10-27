@@ -37,7 +37,7 @@ import { I, LOGO } from "./icons.js";
 import { topicColor, dominantColor, tintInks, focusOf } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "4.17.1";
+export const VERSION = "4.18.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 
@@ -3291,6 +3291,7 @@ function openSettings() {
         <button class="btn" type="button" id="set-export">Export backup</button>
         <button class="btn" type="button" id="set-import">Import backup</button>
       </div>
+      <p class="note">The backup holds everything: items, photos and files, and your settings, including keys. Keep it somewhere private.</p>
       <input type="file" id="set-import-file" accept="application/json,.json" hidden>
       <span class="st" id="set-bk-st" role="status"></span>
       <div class="two">
@@ -3460,8 +3461,9 @@ function openSettings() {
     if (!f) return;
     try {
       const n = await db.importJson(await f.text());
+      if (n.settings) { location.reload(); return; }
       state.items = await db.items.all();
-      closeSheet(); render(); toast(`Imported ${n} items.`);
+      closeSheet(); render(); toast(`Imported ${n.items} items.`);
     } catch (e) { say($("#set-bk-st", wrap), e.message || "That file couldn't be read.", true); }
   });
 }
