@@ -8,6 +8,11 @@
  *                       readable text, for a summary
  *   GET  /image?url=    a picture from another site, passed through so the
  *                       app may read its pixels (to find its subject)
+ *   GET  /push/key      the public key phones subscribe to notifications with
+ *   POST /push/test     send a test notification to a subscription now
+ *   POST /remind        keep a reminder: { id, token, at, title, body, url, sub }
+ *   DELETE /remind/:id  forget one (?token= must match)
+ *   (every 15 minutes)  send the reminders that are due, then forget them
  *   GET  /photo?q=      Openverse photo search (kept for older app versions;
  *                       Shoebox no longer uses it)
  *
@@ -33,7 +38,7 @@ function allowed(origin) {
 function corsHeaders(origin) {
   return {
     "access-control-allow-origin": allowed(origin) ? origin : ALLOWED_ORIGINS[0],
-    "access-control-allow-methods": "GET, POST, OPTIONS",
+    "access-control-allow-methods": "GET, POST, DELETE, OPTIONS",
     "access-control-allow-headers": "authorization, content-type",
     "access-control-expose-headers": "retry-after",
     "access-control-max-age": "86400",
@@ -46,7 +51,10 @@ function json(status, message, headers) {
 }
 
 export default {
-  async fetch(request) {
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(sendDue(env));
+  },
+  async fetch(request, env = {}) {
     const origin = request.headers.get("origin") || "";
     const cors = corsHeaders(origin);
     if (!allowed(origin)) return json(403, "This relay only serves Shoebox.", cors);
@@ -54,6 +62,7 @@ export default {
     const { pathname, searchParams } = new URL(request.url);
     if (request.method === "GET" && pathname === "/preview") return preview(searchParams.get("url"), cors, searchParams.get("text") === "1");
     if (request.method === "GET" && pathname === "/image") return image(searchParams.get("url"), cors);
+    if (pathname === "/push/key" || pathname === "/push/test" || pathname.startsWith("/remind")) return pushRoute(request, env, pathname, searchParams, cors);
     if (request.method === "GET" && pathname === "/photo") return photo(searchParams.get("q"), cors);
     if (request.method !== "POST" || !PATHS.has(pathname)) return json(404, "Not found.", cors);
     const auth = request.headers.get("authorization");
@@ -273,4 +282,162 @@ export function pickPhotos(results) {
     }))
     .sort((a, b) => Number(b.tall) - Number(a.tall))
     .slice(0, 8);
+}
+
+
+/* ================= Notifications (Web Push) =================
+ * Shoebox on your phone subscribes to notifications and hands this relay its
+ * reminders: a time, a title and the subscription to send to. Every 15
+ * minutes a Cron Trigger sends the ones that are due, then forgets them.
+ * Reminders live in Workers KV (binding SHOEBOX), each only until it's sent.
+ *
+ * Web Push needs a key pair (VAPID). The relay makes its own the first time
+ * and keeps it in KV, so there's nothing to set up. The message itself is
+ * encrypted for the phone (RFC 8291), so Apple and Google can't read it.
+ */
+
+const PUSH_HOSTS = /(^|\.)(push\.apple\.com|fcm\.googleapis\.com|push\.services\.mozilla\.com|notify\.windows\.com)$/;
+
+function pushJson(status, body, cors) {
+  return new Response(JSON.stringify(body), { status, headers: { ...cors, "content-type": "application/json" } });
+}
+
+async function pushRoute(request, env, pathname, params, cors) {
+  const kv = env.SHOEBOX;
+  if (!kv) return json(501, "Notifications need the relay's KV storage. Redeploy with the Deploy to Cloudflare button.", cors);
+  try {
+    if (request.method === "GET" && pathname === "/push/key") {
+      const v = await vapidKeys(kv);
+      return pushJson(200, { key: v.publicKey }, cors);
+    }
+    if (request.method === "POST" && pathname === "/push/test") {
+      const { sub } = await request.json();
+      if (!validSub(sub)) return json(400, "That isn't a notification subscription.", cors);
+      const res = await sendPush(kv, sub, { title: "Shoebox", body: "Notifications work. You'll hear from Shoebox when something you set aside comes back.", url: "" });
+      return res.ok ? pushJson(200, { ok: true }, cors) : json(502, `The push service said ${res.status}.`, cors);
+    }
+    if (request.method === "POST" && pathname === "/remind") {
+      const r = await request.json();
+      const at = +r.at;
+      if (!/^[\w-]{4,80}$/.test(String(r.id || "")) || !/^[\w-]{16,80}$/.test(String(r.token || ""))) return json(400, "Missing id or token.", cors);
+      if (!Number.isFinite(at) || at > Date.now() + 400 * 864e5) return json(400, "Bad time.", cors);
+      if (!validSub(r.sub)) return json(400, "That isn't a notification subscription.", cors);
+      const value = JSON.stringify({ token: r.token, at, title: String(r.title || "").slice(0, 120), body: String(r.body || "").slice(0, 240), url: String(r.url || "").slice(0, 500), sub: r.sub });
+      const ttl = Math.max(60, Math.round((at - Date.now()) / 1000) + 7 * 86400);
+      await kv.put(`r:${r.id}`, value, { metadata: { at }, expirationTtl: ttl });
+      return pushJson(200, { ok: true }, cors);
+    }
+    if (request.method === "DELETE" && pathname.startsWith("/remind/")) {
+      const id = pathname.slice("/remind/".length);
+      const cur = await kv.get(`r:${id}`, "json");
+      if (cur && cur.token === params.get("token")) await kv.delete(`r:${id}`);
+      return pushJson(200, { ok: true }, cors);
+    }
+  } catch {
+    return json(400, "Bad request.", cors);
+  }
+  return json(404, "Not found.", cors);
+}
+
+export function validSub(sub) {
+  try {
+    const u = new URL(sub.endpoint);
+    return u.protocol === "https:" && PUSH_HOSTS.test(u.hostname) && typeof sub.keys?.p256dh === "string" && typeof sub.keys?.auth === "string";
+  } catch { return false; }
+}
+
+/** Send what's due. Run by the Cron Trigger; reads only key metadata until something is due. */
+export async function sendDue(env, now = Date.now()) {
+  const kv = env.SHOEBOX;
+  if (!kv) return 0;
+  let sent = 0, cursor;
+  do {
+    const page = await kv.list({ prefix: "r:", cursor });
+    for (const k of page.keys) {
+      if ((k.metadata?.at || 0) > now) continue;
+      const r = await kv.get(k.name, "json");
+      if (r) {
+        const res = await sendPush(kv, r.sub, { title: r.title, body: r.body, url: r.url }).catch(() => null);
+        // Sent, or the phone has unsubscribed (404/410): forget it. Otherwise try again next run.
+        if (res && !(res.ok || res.status === 404 || res.status === 410)) continue;
+        if (res && res.ok) sent++;
+      }
+      await kv.delete(k.name);
+    }
+    cursor = page.list_complete ? undefined : page.cursor;
+  } while (cursor);
+  return sent;
+}
+
+/* ---- VAPID and encryption ---- */
+
+export const b64u = {
+  enc(buf) { let s = ""; for (const b of new Uint8Array(buf)) s += String.fromCharCode(b); return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); },
+  dec(str) { const s = atob(String(str).replace(/-/g, "+").replace(/_/g, "/") + "===".slice((String(str).length + 3) % 4)); return Uint8Array.from(s, (c) => c.charCodeAt(0)); },
+};
+
+async function vapidKeys(kv) {
+  const have = await kv.get("vapid", "json");
+  if (have) return have;
+  const pair = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+  const keys = {
+    privateJwk: await crypto.subtle.exportKey("jwk", pair.privateKey),
+    publicKey: b64u.enc(await crypto.subtle.exportKey("raw", pair.publicKey)),
+  };
+  await kv.put("vapid", JSON.stringify(keys));
+  return keys;
+}
+
+/** The Authorization header for one push service (RFC 8292). */
+export async function vapidAuth(endpoint, keys, now = Date.now()) {
+  const enc = new TextEncoder();
+  const head = b64u.enc(enc.encode(JSON.stringify({ typ: "JWT", alg: "ES256" })));
+  const body = b64u.enc(enc.encode(JSON.stringify({ aud: new URL(endpoint).origin, exp: Math.floor(now / 1000) + 12 * 3600, sub: "https://grahamdeno.github.io/edition/" })));
+  const key = await crypto.subtle.importKey("jwk", keys.privateJwk, { name: "ECDSA", namedCurve: "P-256" }, false, ["sign"]);
+  const sig = await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, key, enc.encode(`${head}.${body}`));
+  return `vapid t=${head}.${body}.${b64u.enc(sig)}, k=${keys.publicKey}`;
+}
+
+async function hkdf(salt, ikm, info, bytes) {
+  const key = await crypto.subtle.importKey("raw", ikm, "HKDF", false, ["deriveBits"]);
+  return new Uint8Array(await crypto.subtle.deriveBits({ name: "HKDF", hash: "SHA-256", salt, info }, key, bytes * 8));
+}
+
+const cat = (...parts) => { const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0)); let o = 0; for (const p of parts) { out.set(p, o); o += p.length; } return out; };
+
+/** Encrypt a message for one subscription (RFC 8291, aes128gcm). */
+export async function encryptPush(sub, text, { salt = crypto.getRandomValues(new Uint8Array(16)), pair } = {}) {
+  const enc = new TextEncoder();
+  const uaPublic = b64u.dec(sub.keys.p256dh), authSecret = b64u.dec(sub.keys.auth);
+  pair = pair || await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]);
+  const asPublic = new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey));
+  const uaKey = await crypto.subtle.importKey("raw", uaPublic, { name: "ECDH", namedCurve: "P-256" }, false, []);
+  const shared = new Uint8Array(await crypto.subtle.deriveBits({ name: "ECDH", public: uaKey }, pair.privateKey, 256));
+  const ikm = await hkdf(authSecret, shared, cat(enc.encode("WebPush: info\0"), uaPublic, asPublic), 32);
+  const cek = await hkdf(salt, ikm, enc.encode("Content-Encoding: aes128gcm\0"), 16);
+  const nonce = await hkdf(salt, ikm, enc.encode("Content-Encoding: nonce\0"), 12);
+  const aes = await crypto.subtle.importKey("raw", cek, "AES-GCM", false, ["encrypt"]);
+  const sealed = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce }, aes, cat(enc.encode(text), new Uint8Array([2]))));
+  const header = new Uint8Array(21 + asPublic.length);
+  header.set(salt, 0);
+  new DataView(header.buffer).setUint32(16, 4096);
+  header[20] = asPublic.length;
+  header.set(asPublic, 21);
+  return cat(header, sealed);
+}
+
+async function sendPush(kv, sub, message) {
+  const keys = await vapidKeys(kv);
+  const body = await encryptPush(sub, JSON.stringify(message));
+  return fetch(sub.endpoint, {
+    method: "POST",
+    headers: {
+      authorization: await vapidAuth(sub.endpoint, keys),
+      "content-encoding": "aes128gcm",
+      "content-type": "application/octet-stream",
+      ttl: "86400",
+      urgency: "normal",
+    },
+    body,
+  });
 }

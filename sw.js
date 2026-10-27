@@ -4,7 +4,7 @@
  * Bump VERSION with each release so phones pick up the new shell.
  */
 
-const VERSION = "4.7.0";
+const VERSION = "4.8.0";
 const CACHE = `edition-${VERSION}`;
 const SHELL = [
   "./",
@@ -19,6 +19,7 @@ const SHELL = [
   "src/samples.js",
   "src/icons.js",
   "src/visuals.js",
+  "src/push.js",
   "src/feel.js",
   "src/problems.js",
   "icons/icon-192.png",
@@ -112,3 +113,28 @@ async function storeShare(record) {
     t.onerror = () => reject(t.error);
   });
 }
+
+/* Notifications from the relay: show them, and open Shoebox when tapped. */
+self.addEventListener("push", (e) => {
+  let m = {};
+  try { m = e.data ? e.data.json() : {}; } catch { m = { body: e.data && e.data.text() }; }
+  e.waitUntil(self.registration.showNotification(m.title || "Shoebox", {
+    body: m.body || "Something you set aside is back.",
+    icon: "icons/icon-192.png",
+    badge: "icons/icon-192.png",
+    data: { url: m.url || self.registration.scope },
+    tag: m.url || "shoebox",
+  }));
+});
+
+self.addEventListener("notificationclick", (e) => {
+  e.notification.close();
+  const url = (e.notification.data && e.notification.data.url) || self.registration.scope;
+  e.waitUntil((async () => {
+    const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    for (const w of wins) {
+      if (w.url.startsWith(self.registration.scope)) { await w.focus(); w.postMessage({ type: "open", url }); return; }
+    }
+    await self.clients.openWindow(url);
+  })());
+});

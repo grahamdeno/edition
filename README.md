@@ -40,7 +40,7 @@ When everything is settled, the end of Today shows what you cleared as a collage
 
 **Add.** Paste or type into the box, or use **Paste** and **Photo or file** under it. Once Shoebox knows what it is, the same fields as Edit appear: Picture (a row of the page's photos), Title (filled in from the page), Why you're saving it, and Your note. The AI tags it and estimates the time, reading your reason and note first; fix either in Edit if needed. A title you type, the AI leaves alone. Several things at once share the reason. Save stays pinned at the bottom.
 
-**Set aside until a date.** In Add (or ⋯ › Edit later), *Show it* offers Now, Tomorrow, This weekend, Next week, In a month or Pick a date. A set-aside item is out of sight (All saves › Set aside lists them, with Bring back now) and comes back as new at the top of Today that morning, marked *Back today*. **Remind me that morning** hands your phone a calendar file with a 9:00 alert, so you're reminded outside the app; web apps on iPhone can't schedule their own notifications.
+**Set aside until a date.** In Add (or ⋯ › Edit later), *Show it* offers Now, Tomorrow, This weekend, Next week, In a month or Pick a date. A set-aside item is out of sight (All saves › Set aside lists them, with Bring back now) and comes back as new at the top of Today that morning, marked *Back today*. **Remind me that morning** sends a notification at 9:00 through your relay (Settings › Notifications), or, with notifications off, hands your phone a calendar file with a 9:00 alert. Tapping the notification opens Shoebox on that post.
 
 **Your photo.** Settings › Your photo sets the face on your posts. It stays on the phone.
 
@@ -62,7 +62,7 @@ Add an Anthropic API key in Settings. It stays in this browser's storage and is 
 
 Your verdicts are the learning signal: finished and loved items raise their tags; let-go items lower them. Ranking blends the AI score (60%) with a local score (40%) built from age, deferrals and those tag affinities, so the app orders sensibly with no key at all.
 
-The **relay** (`relay/`, a free Cloudflare Worker, about five minutes to deploy) reads link pages for their pictures and text, and forwards Perplexity calls. **This release changes the relay**: redeploy it so the picture picker gets every photo on a page. With the old relay, links still get the page's single preview picture.
+The **relay** (`relay/`, a free Cloudflare Worker, one Deploy to Cloudflare button) reads link pages for their pictures and text, forwards Perplexity calls, and sends set-aside reminders as notifications. **This release changes the relay**: redeploy it so the picture picker gets every photo on a page. With the old relay, links still get the page's single preview picture.
 
 Model: `claude-haiku-5-5`. Every AI action is a paid API call on your account.
 
@@ -94,6 +94,7 @@ src/ai.js             Anthropic API: enrich, pick picture, rank, discover
 src/icons.js          the icon set and the Shoebox mark (SVG only, no text glyphs)
 src/visuals.js        topic colours and picture tints, worked out on the phone
 src/feel.js           soft click on verdicts and saves
+src/push.js           notifications through the relay: subscribe, remind, cancel
 relay/                Cloudflare Worker: page pictures and text, Perplexity forwarding
 icons/                app icons, favicon and logo.svg
 sw.js                 offline shell and share target
