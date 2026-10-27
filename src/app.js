@@ -39,7 +39,7 @@ import { problems, noteError as logError, onFirstProblem, clearProblems, formatP
 import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone, mixStories, followOrder } from "./onboard.js";
 
-export const VERSION = "4.41.0";
+export const VERSION = "4.42.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -1111,7 +1111,8 @@ function morningSettings() {
   // Earlier versions had a CPMAI switch; it's now a study deck on that topic.
   if (saved.cpmai !== undefined && saved.study === undefined) { saved.study = saved.cpmai; saved.studyTopic = saved.studyTopic || "PMI-CPMAI"; }
   const m = { ...(personal() ? MORNING_ME : MORNING_PUBLIC), ...saved };
-  if (!personal()) for (const k of PERSONAL_MODULES) m[k] = false;
+  // Song of the day is for everyone in the iPhone app (from the phone's own library); otherwise only in Shoebox Me.
+  if (!personal()) for (const k of PERSONAL_MODULES) if (!(k === "song" && nativeCan("music"))) m[k] = false;
   return m;
 }
 /** Can this phone tell Shoebox where it is? (the iPhone app, or a browser that shares location) */
@@ -1167,6 +1168,11 @@ function setMorningSettings(v) { try { localStorage.setItem(MORNING_KEY, JSON.st
 function morningCache() {
   try { const c = JSON.parse(localStorage.getItem(MORNING_CACHE) || "null"); return c && c.day === dayKey() ? c : { day: dayKey() }; } catch { return { day: dayKey() }; }
 }
+/** A song from the iPhone's library, as the morning card keeps it. */
+function nativeSong(r) {
+  return { native: true, id: String(r.id || ""), title: r.title || "Untitled", artist: r.artist || "", album: r.album || "", year: r.year || "",
+    plays: r.plays || 0, lastPlayed: r.lastPlayed || 0, art: r.art ? `data:image/jpeg;base64,${r.art}` : "" };
+}
 function saveMorningCache(c) { try { localStorage.setItem(MORNING_CACHE, JSON.stringify(c)); } catch { /* full */ } }
 const yesterdayKey = () => dayKey(Date.now() - 864e5);
 
@@ -1208,7 +1214,11 @@ async function loadMorning() {
       if (w && place.tide) { try { w.tides = await withTimeout(daily.fetchTides(place.tide), 10000); } catch { /* tides are a bonus */ } }
       if (w) { c.weather = w; c.weatherFor = place.name; changed = true; }
     }
-    if (m.song && relay && c.relayInfo?.apple && (!c.songAt || Date.now() - c.songAt > 30 * 60e3)) {
+    if (m.song && nativeCan("music") && !c.song && !c.songTried) {
+      c.songTried = true; changed = true;
+      try { const r = await nativeAsk("music", { op: "pick", seed: daily.dayOfYear() }, 20000); if (r.ok) c.song = nativeSong(r); else c.songStatus = r.status; }
+      catch (e) { noteError(e, { quiet: true, where: "song of the day (iPhone)" }); }
+    } else if (m.song && !nativeCan("music") && relay && c.relayInfo?.apple && (!c.songAt || Date.now() - c.songAt > 30 * 60e3)) {
       try {
         const r = await withTimeout(fetch(`${relay}/apple/song`, { headers: { "x-inbox-key": inboxKey(), ...ai.ownerHeaders() } }), 15000);
         const d = await r.json().catch(() => ({}));
@@ -1283,7 +1293,18 @@ function morningHtml() {
        ${fig}
        ${w.source === "apple" ? `<p class="wx-attr"><a href="https://weatherkit.apple.com/legal-attribution.html" target="_blank" rel="noopener"> Weather</a></p>` : ""}`));
   }
-  if (m.song && c.song) {
+  if (m.song && c.song?.native) {
+    const sg = c.song;
+    const last = sg.lastPlayed ? `You last played it ${friendlyWhen(sg.lastPlayed)}` : "";
+    cards.push(card("song", `<span class="av av-day" aria-hidden="true">${I.music}</span>`, `<span class="who">Song of the day</span>${cardMore("cards", "Daily cards")}`,
+      `<div class="song">${sg.art ? `<img class="art" alt="" src="${esc(sg.art)}">` : ""}
+        <div class="song-t"><p class="ttl">${esc(sg.title)}</p><p class="wx-line">${esc(sg.artist || "")}${sg.year ? ` · ${esc(sg.year)}` : ""}</p>${last ? `<p class="wx-line">${esc(last)}</p>` : ""}</div></div>
+       <div class="song-acts"><button class="btn sm primary" type="button" data-song-play="${esc(sg.id)}">${I.play}<span>Play</span></button>
+         <button class="btn sm" type="button" data-song-next="1">Another one</button></div>`));
+  } else if (m.song && nativeCan("music") && c.songStatus === "empty") {
+    cards.push(card("song", `<span class="av av-day" aria-hidden="true">${I.music}</span>`, `<span class="who">Song of the day</span>${cardMore("cards", "Daily cards")}`,
+      `<p class="wx-line">Song of the day picks from songs you've played in the Music app. Play a few there and one shows up here tomorrow.</p>`));
+  } else if (m.song && c.song) {
     const sg = c.song, mt = sg.match || {};
     const last = sg.lastPlayed ? (() => { const t = Date.parse(sg.lastPlayed); return Number.isFinite(t) ? `last played ${friendlyWhen(t)}` : ""; })() : "";
     cards.push(card("song", `<span class="av av-day" aria-hidden="true">${I.music}</span>`, `<span class="who">Song of the day</span>${cardMore("cards", "Daily cards")}`,
@@ -2692,6 +2713,17 @@ async function onTimelineClick(e) {
   let b;
   if ((b = hit("[data-tab]"))) { selectTab(b.dataset.tab); return; }
   if ((b = hit("[data-preview]"))) { playPreview(b); return; }
+  if ((b = hit("[data-song-play]"))) {
+    const r = await nativeAsk("music", { op: "play", song: b.dataset.songPlay }).catch(() => ({ ok: false }));
+    if (r.ok) { buzz(8); toast("Playing in Music."); } else toast("Couldn't play it. It may not be on this iPhone any more.");
+    return;
+  }
+  if ((b = hit("[data-song-next]"))) {
+    b.disabled = true;
+    const r = await nativeAsk("music", { op: "pick", seed: Math.floor(Math.random() * 1000) }, 20000).catch(() => ({ ok: false }));
+    if (r.ok) { const c = morningCache(); c.song = nativeSong(r); saveMorningCache(c); render({ top: false }); } else b.disabled = false;
+    return;
+  }
   if ((b = hit("[data-day]"))) { await dayAction(b.dataset.day); return; }
   if ((b = hit("[data-cq]"))) { const [k, i] = b.dataset.cq.split(":").map(Number); answerCpmai(k, i); return; }
   if ((b = hit("[data-school=go]"))) {
@@ -4096,7 +4128,7 @@ function openSettings(panel = "", { fromCard = false } = {}) {
   const mailOn = (() => { try { return Boolean(localStorage.getItem("edition.inboxAddress")); } catch { return false; } })();
   const mailPick = (() => { try { return localStorage.getItem("edition.inboxPick") || ""; } catch { return ""; } })();
   const calShown = [...new Set((calCache()?.events || []).map((e) => calName(e.calendar, "Calendar")))].filter((n) => !calHidden().includes(n));
-  const cardsOn = ["otd", ...(me ? ["song", "hockey", "jung"] : [])].filter((k) => m[k]).length;
+  const cardsOn = ["otd", ...(me ? ["song", "hockey", "jung"] : nativeCan("music") ? ["song"] : [])].filter((k) => m[k]).length;
   const P = {
     you: { title: "You", value: { system: "Phone look", light: "Light", dark: "Dark" }[themeChoice()], body: `
       <div class="group">
@@ -4158,10 +4190,12 @@ function openSettings(panel = "", { fromCard = false } = {}) {
     cards: { title: "Daily cards", value: `${cardsOn} on`, body: `
       <div class="group">
       ${onOff("otd", "On this day", m.otd)}
-      ${me ? onOff("song", "Song of the day", m.song) + onOff("hockey", "Last night's games", m.hockey) + onOff("jung", "Jung quote", m.jung) : ""}
+      ${me || nativeCan("music") ? onOff("song", "Song of the day", m.song) : ""}
+      ${nativeCan("music") ? `<p class="note">A song from your Music library you haven't played in a while. It stays on your iPhone.</p>` : ""}
+      ${me ? onOff("hockey", "Last night's games", m.hockey) + onOff("jung", "Jung quote", m.jung) : ""}
       ${me ? `<div class="field"><label for="set-mo-teams">Teams</label><input id="set-mo-teams" type="text" autocomplete="off" autocapitalize="characters" value="${esc(m.teams.join(", "))}"></div>
       <button class="btn" type="button" id="set-mo-teams-save">Save teams</button>
-      <h3 class="sub">Song of the day: your Shortcut</h3>
+      ${nativeCan("music") ? "" : `<h3 class="sub">Song of the day: your Shortcut</h3>
       ${(() => {
         const got = (k) => { try { return localStorage.getItem(k) || ""; } catch { return ""; } };
         const key = got("edition.songKey"), err = got("edition.songErr"), last = +got("edition.songLast");
@@ -4176,7 +4210,7 @@ function openSettings(panel = "", { fromCard = false } = {}) {
           <li>Automation › <b>+</b> › Time of Day, 6:00 AM, Daily, Run Immediately › this Shortcut.</li>
         </ol>
         <p class="note" id="set-song-last">${last ? `Last song arrived ${esc(new Date(last).toLocaleString("en-US", { weekday: "short", hour: "numeric", minute: "2-digit" }))}.` : "No song has arrived yet."}</p>`;
-      })()}` : ""}
+      })()}`}` : ""}
       <span class="st" id="set-more-st" role="status"></span>
       </div>` },
     newsletters: { title: "Newsletters", value: sc.on ? "Mon, Fri" : "Off", body: `
@@ -4341,6 +4375,14 @@ function openSettings(panel = "", { fromCard = false } = {}) {
   wrap.querySelectorAll("[data-mo]").forEach((b) => b.addEventListener("click", () => {
     const [k, on] = b.dataset.mo.split(":");
     setMorningSettings({ ...morningSettings(), [k]: on === "1" });
+    if (k === "song" && on === "1" && nativeCan("music")) {
+      nativeAsk("music", { op: "pick", ask: true, seed: daily.dayOfYear() }, 60000).then((r) => {
+        const c = morningCache();
+        if (r.ok) { c.song = nativeSong(r); delete c.songStatus; affirm($("#set-more-st", wrap), `Today's song: ${r.title}.`); }
+        else { c.songStatus = r.status; affirm($("#set-more-st", wrap), r.status === "denied" ? "Music access is off. Turn it on in the iPhone's Settings › Shoebox › Media & Apple Music." : "No songs with plays in your Music library yet.", true); }
+        c.songTried = true; saveMorningCache(c); render({ top: false });
+      }).catch(() => {});
+    }
     wrap.querySelectorAll(`[data-mo^="${k}:"]`).forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
     render({ top: false });
     loadMorning();
