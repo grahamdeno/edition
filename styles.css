@@ -606,3 +606,14 @@ details.group[open] { padding-bottom: 14px; }
 .kb .adding .sheet { padding-bottom: 0; }
 .kb .cap-foot { padding-bottom: 10px; }
 .sheet { -webkit-overflow-scrolling: touch; }
+
+/* Today's calendar: pages that come and go with the day */
+.post.event { padding-bottom: 16px; }
+.av-cal { display: grid; place-items: center; background: var(--gold); color: var(--on-gold); box-shadow: none; }
+.av-cal .i { width: 55%; height: 55%; }
+.ev-title { margin: 2px 0 0; font: 400 1.45rem/1.2 var(--serif); color: var(--fg); }
+.ev-place { display: flex; gap: 6px; align-items: flex-start; margin: 6px 0 0; color: var(--muted); font-size: 0.875rem; }
+.ev-place .i { width: 16px; height: 16px; flex: none; margin-top: 2px; }
+.ev-notes { margin: 6px 0 0; color: var(--muted); font-size: 0.875rem; -webkit-user-select: text; user-select: text; }
+.post.event.past .ev-title, .post.event.past .ev-place, .post.event.past .ev-notes { opacity: 0.5; }
+.tag.now { background: var(--sig); color: var(--on-sig); }

@@ -4,6 +4,7 @@ A small Cloudflare Worker that does what a web page can't do on its own:
 
 - **Link pictures and text.** Reads a link's page for its photos, title and text (`/preview`), and passes pictures through so the phone can find their subject (`/image`).
 - **Perplexity.** Forwards Top stories calls (Perplexity refuses calls made straight from a web page). Your key stays in Shoebox and passes through.
+- **Your calendar.** Reads your calendar's private iCal address so today's events can show on Today (`/ical`). Passed straight through; nothing is kept.
 - **Notifications.** Keeps your set-aside reminders and sends them to your phone at 9:00 on the day (`/push/*`, `/remind`, and a Cron Trigger every 15 minutes).
 
 It only answers Shoebox's own address, and it's free: a personal app uses a tiny fraction of Cloudflare's free plan (100,000 requests a day; this uses about a hundred).
