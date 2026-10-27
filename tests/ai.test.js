@@ -196,3 +196,15 @@ test("storyBrief asks for top stories in their areas", () => {
   assert.match(b, /top stories of the last 3 days/);
   assert.match(b, /Scrum at scale/);
 });
+
+import { describe as describeItem, OWN_WORDS_RULE } from "../src/ai.js";
+
+test("tagging sees their note, reason and replies, and puts their use first", () => {
+  const lines = describeItem({ kind: "link", url: "https://x.test/pottery", title: "Pottery class", why: "", text: "Good date idea for us",
+    replies: [{ text: "Book for her birthday" }] }).join("\n");
+  assert.match(lines, /Their note about it: Good date idea/);
+  assert.match(lines, /Book for her birthday/);
+  assert.doesNotMatch(lines, /^Text:/m);
+  assert.match(describeItem({ kind: "photo", note: "gift idea" }).join("\n"), /Their note about it: gift idea/);
+  assert.match(OWN_WORDS_RULE, /date idea/);
+});
