@@ -22,7 +22,7 @@ import {
   SUGGESTIONS_PER_DAY, WHY_NOT, WHY_NOT_LABEL, emptySuggestProfile, learnFromSuggestion, suggestionGuide,
   screenSuggestions, suggestMaxMinutes,
   canonTags, tagVocab, tagStats, renameTag, addAlias, releaseTags, renameInSuggestProfile, localTags, normTag, MAX_TAGS,
-  friendlyWhen, usablePicture, discoveryItems,
+  friendlyWhen, usablePicture, discoveryItems, schoolToday,
   setAside, wakeAside, bringBackNow, asideChoices, fromDateInput, toDateInput, shortDate, reminderIcs,
 } from "./model.js";
 import * as db from "./db.js";
@@ -36,7 +36,7 @@ import { I, LOGO } from "./icons.js";
 import { topicColor, dominantColor, tintInks, focusOf } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "4.12.2";
+export const VERSION = "4.13.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 
@@ -875,19 +875,22 @@ function applyTint(el, color) {
 function todaySections() {
   topUpEdition();
   const isNew = (i) => i.status === STATUS.INBOX || state.recent.get(i.id)?.stage === "inbox";
-  const fresh = state.items.filter((i) => !i.suggested && isNew(i)).sort((a, b) => (b.backAt || b.created) - (a.backAt || a.created));
+  const fresh = state.items.filter((i) => !i.suggested && !i.school && isNew(i)).sort((a, b) => (b.backAt || b.created) - (a.backAt || a.created));
   const freshIds = new Set(fresh.map((i) => i.id));
   const v = editionView(state.items, state.edition);
-  const six = v.pages.filter((p) => !freshIds.has(p.id));
+  const six = v.pages.filter((p) => !freshIds.has(p.id) && !p.school);
   const sixIds = new Set(six.map((p) => p.id));
   const sugg = state.items.filter((i) => i.suggested && !sixIds.has(i.id) && isNew(i))
     .sort((a, b) => b.created - a.created).slice(0, SUGGESTIONS_PER_DAY);
-  return { fresh, six, sugg, edition: v };
+  // School posts: every one not done, each day, apart from New and the six. Settled ones stay till tomorrow, stamped.
+  const school = state.items.filter((i) => i.school && (schoolToday([i]).length || (state.recent.has(i.id))))
+    .sort((a, b) => (a.school.date || "9999").localeCompare(b.school.date || "9999") || a.created - b.created);
+  return { fresh, six, sugg, school, edition: v };
 }
 
 function todayIds() {
   const s = todaySections();
-  return [...s.fresh, ...s.six, ...s.sugg].map((i) => i.id);
+  return [...s.school, ...s.fresh, ...s.six, ...s.sugg].map((i) => i.id);
 }
 
 /** Is a post on Today still waiting for a verdict? */
@@ -962,6 +965,7 @@ function sectionHead(title, note = "") {
 function todayHtml() {
   const s = todaySections();
   let h = stripHtml(s) + schoolAskHtml() + calendarHtml();
+  if (s.school.length) h += sectionHead("From school", `${s.school.filter(isOpen).length || "All"} to do`) + s.school.map((i) => postHtml(i)).join("");
   if (s.fresh.length) h += sectionHead("New", `${s.fresh.filter(isOpen).length || "All"} to sort`) + s.fresh.map((i) => postHtml(i)).join("");
   if (s.six.length) h += sectionHead("Today's six", `${s.six.filter(isOpen).length} of ${s.six.length} left`) + s.six.map((i) => postHtml(i)).join("");
   if (s.sugg.length) h += sectionHead("Top stories") + s.sugg.map((i) => postHtml(i)).join("");
@@ -1405,6 +1409,12 @@ function actionsHtml(item, open) {
       ? `<button class="act" type="button" data-requeue="${esc(item.id)}">${I.requeue}<span>Bring back</span></button>` : "";
     return `<div class="acts">${love}${reply}<span class="grow"></span>${requeue}</div>`;
   }
+  if (item.school) {
+    return `<div class="acts">${love}<span class="grow"></span>
+    <button class="act" type="button" data-v="${VERDICT.LET_GO}" data-id="${esc(item.id)}">${I.letGo}<span>Not needed</span></button>
+    <button class="act done" type="button" data-v="${VERDICT.DONE}" data-id="${esc(item.id)}">${I.done}<span>Done</span></button>
+  </div>`;
+  }
   const keep = item.status === STATUS.INBOX || isFaded(item);
   return `<div class="acts">${love}${reply}<span class="grow"></span>
     <button class="act" type="button" data-v="${VERDICT.LATER}" data-id="${esc(item.id)}">${keep ? I.keep : I.later}<span>${keep ? "Keep" : "Later"}</span></button>
@@ -1514,7 +1524,7 @@ async function onTimelineClick(e) {
     b.disabled = true;
     const ok = await pullNewsletter($("#ask-in")?.value, $("#ask-st"));
     b.disabled = false;
-    if (ok) { tick(true); render({ top: true }); toast(`${state.schoolCount} post${state.schoolCount === 1 ? "" : "s"} from school, at the top of New.`); }
+    if (ok) { tick(true); render({ top: true }); toast(`${state.schoolCount} post${state.schoolCount === 1 ? "" : "s"} from school, under From school on Today.`); }
     return;
   }
   if ((b = hit("[data-school=skip]"))) { markSchoolAsked(); state.schoolDraft = ""; state.schoolForce = false; render({ top: false }); return; }

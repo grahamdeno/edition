@@ -397,7 +397,8 @@ export function buildEdition(items, previous, { now = Date.now(), size = EDITION
   if (previous && previous.date === today && previous.ids && previous.ids.length) return previous;
   const profile = interestProfile(items);
   // Faded items wait in the Tideline for a verdict; they don't come back on their own.
-  const queued = items.filter((i) => i.status === STATUS.QUEUED && !isFaded(i, now));
+  // School posts have their own place on Today and never take one of the six.
+  const queued = items.filter((i) => i.status === STATUS.QUEUED && !i.school && !isFaded(i, now));
   const ranked = queued
     .map((i) => ({ i, s: score(i, profile, now) }))
     .sort((a, b) => b.s - a.s || a.i.created - b.i.created);
@@ -509,7 +510,7 @@ export function circling(items, { now = Date.now(), limit = 5 } = {}) {
 export function fading(items, edition, { now = Date.now(), limit = 5, within = 7 } = {}) {
   const inEdition = new Set(edition?.ids || []);
   return items
-    .filter((i) => i.status === STATUS.QUEUED && !inEdition.has(i.id))
+    .filter((i) => i.status === STATUS.QUEUED && !i.school && !inEdition.has(i.id))
     .map((i) => {
       const days = Math.floor((now - touchedAt(i)) / DAY);
       const faded = isFaded(i, now);
@@ -887,3 +888,16 @@ export function reminderIcs({ title, why = "", url = "", until, appUrl, now = Da
 }
 
 function hashStr(s) { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return h; }
+
+
+/**
+ * School posts on Today: every one not yet done or let go, every day, soonest
+ * date first (undated after). One whose date has passed leaves on its own.
+ */
+export function schoolToday(items, now = Date.now()) {
+  const today = dayKey(now);
+  return items
+    .filter((i) => i.school && (i.status === STATUS.INBOX || i.status === STATUS.QUEUED))
+    .filter((i) => !i.school.date || i.school.date >= today)
+    .sort((a, b) => (a.school.date || "9999") .localeCompare(b.school.date || "9999") || a.created - b.created);
+}
