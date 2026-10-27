@@ -30,10 +30,10 @@ import { sampleItems, SAMPLES_VERSION } from "./samples.js";
 import * as ai from "./ai.js";
 import { tick, unlock, soundOn, setSound } from "./feel.js";
 import { I, LOGO } from "./icons.js";
-import { topicColor, dominantColor, tintInks } from "./visuals.js";
+import { topicColor, dominantColor, tintInks, focusOf } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "4.5.1";
+export const VERSION = "4.6.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 
@@ -426,6 +426,7 @@ async function enrichPending() {
             hookV: out.hook ? ai.HOOK_VERSION : cur.hookV,
             extended: out.extended || cur.extended,
             imageAlt: cur.imageAlt || (cur.kind === KIND.PHOTO ? out.alt : "") || undefined,
+            focus: cur.kind === KIND.PHOTO && cur.blobId && out.focus ? { key: cur.blobId, ...out.focus, by: "ai" } : cur.focus,
             extTries: (cur.extTries || 0) + 1,
             enrichedAt: Date.now(),
           };
@@ -458,6 +459,7 @@ async function enrichPending() {
   } finally {
     enrichRunning = false;
   }
+  focusPending();
 }
 
 /*
@@ -625,11 +627,11 @@ async function settlePicture(item) {
   const cur0 = byId(item.id);
   if (!cur0) return;
   const usable = await usableImages(cur0.imageCands || []);
-  let pick = usable.length ? 0 : -1, alt = "";
+  let pick = usable.length ? 0 : -1, alt = "", focus = null;
   if (usable.length && ai.settings.enabled() && (cur0.enrichedAt || (cur0.enrichTries || 0) >= 2)) {
     try {
       const r = await withTimeout(ai.pickPicture(cur0, usable), 20000);
-      pick = r.index; alt = r.alt;
+      pick = r.index; alt = r.alt; focus = r.focus;
     } catch (e) { noteError(e, { quiet: true, where: "pick picture" }); }
   }
   const cur = byId(item.id);
@@ -639,6 +641,7 @@ async function settlePicture(item) {
     upd.imageUrl = pick >= 0 ? usable[pick].src : undefined;
     upd.imageAlt = pick >= 0 ? alt || usable[pick].alt || cur.imageAlt || undefined : cur.imageAlt;
     upd.tint = undefined;
+    if (pick >= 0 && focus) upd.focus = { key: usable[pick].src, ...focus, by: "ai" };
   }
   await saveItem(upd);
   refreshPost(item.id);
@@ -664,6 +667,72 @@ async function picturePending() {
     }
   } finally {
     pictureRunning = false;
+  }
+  focusPending();
+}
+
+/* ---- Keeping a picture's subject in view ----
+ * Every picture gets a focus point, worked out on the phone (see visuals.js).
+ * With an Anthropic key, Claude looks at the picture and its answer replaces
+ * the phone's guess. Kept per picture, so a new picture is looked at afresh.
+ */
+
+/** Which picture a focus belongs to: a photo's thumbnail and full size share one. */
+function focusKey(item, pic) {
+  if (!pic) return "";
+  if (pic.blobId && item.kind === KIND.PHOTO && (pic.blobId === item.thumbId || pic.blobId === item.blobId)) return item.blobId;
+  return pic.blobId || pic.src || "";
+}
+
+/** The crop position for a picture's img tag, when its focus is known. */
+function focusAttr(item, pic) {
+  const f = item.focus;
+  if (!f || !Number.isFinite(f.x) || f.key !== focusKey(item, pic)) return "";
+  return ` style="object-position:${f.x}% ${f.y}%"`;
+}
+
+let focusRunning = false;
+async function focusPending() {
+  if (focusRunning) return;
+  focusRunning = true;
+  let aiOff = !ai.settings.enabled();
+  try {
+    const open = (i) => i.status === STATUS.INBOX || i.status === STATUS.QUEUED || state.edition?.ids.includes(i.id);
+    for (;;) {
+      const needs = (i) => { const k = focusKey(i, pictureOf(i)); return k && (!i.focus || i.focus.key !== k); };
+      const local = state.items.find((i) => open(i) && needs(i));
+      if (local) {
+        const pic = pictureOf(local), key = focusKey(local, pic);
+        const src = pic.blobId ? await blobUrl(pic.blobId) : pic.src;
+        const f = await focusOf(src, { relay: ai.relayBase() });
+        const cur = byId(local.id);
+        if (!cur || focusKey(cur, pictureOf(cur)) !== key) continue;
+        await saveItem({ ...cur, focus: f ? { key, ...f, by: "phone" } : { key, by: "none" } });
+        refreshPost(cur.id);
+        continue;
+      }
+      if (aiOff) break;
+      // Claude reads pictures by address, so this covers pictures from pages; photos get theirs when they're filed.
+      const ask = state.items.find((i) => {
+        const pic = pictureOf(i);
+        return open(i) && pic && pic.src && i.focus && i.focus.key === pic.src && i.focus.by !== "ai" && !i.focus.asked;
+      });
+      if (!ask) break;
+      const src = pictureOf(ask).src;
+      let f = null;
+      try { f = await withTimeout(ai.focusPoint(src), 20000); } catch (e) {
+        noteError(e, { quiet: true, where: "picture focus" });
+        if (e && [0, 429, 529].includes(e.status)) aiOff = true;
+      }
+      const cur = byId(ask.id);
+      if (!cur || pictureOf(cur)?.src !== src) continue;
+      await saveItem({ ...cur, focus: f ? { key: src, ...f, by: "ai" } : { ...cur.focus, asked: true } });
+      if (f) refreshPost(cur.id);
+    }
+  } catch (e) {
+    noteError(e, { quiet: true, where: "picture focus" });
+  } finally {
+    focusRunning = false;
   }
 }
 
@@ -807,8 +876,8 @@ function stripHtml(s) {
   const dots = s.six.map((i) => {
     const done = !isOpen(i);
     const pic = pictureOf(i);
-    const face = pic && pic.blobId ? `<img alt="" data-blob="${esc(pic.blobId)}">`
-      : pic && pic.src ? `<img alt="" src="${esc(pic.src)}" referrerpolicy="no-referrer" onerror="this.remove()">`
+    const face = pic && pic.blobId ? `<img alt=""${focusAttr(i, pic)} data-blob="${esc(pic.blobId)}">`
+      : pic && pic.src ? `<img alt=""${focusAttr(i, pic)} src="${esc(pic.src)}" referrerpolicy="no-referrer" onerror="this.remove()">`
       : `<span class="dot-l" style="--c:${topicColor(i)}">${esc(firstWords(headline(i), 1).charAt(0).toUpperCase() || "•")}</span>`;
     return `<button class="dot${done ? " done" : ""}" type="button" data-jump="${esc(i.id)}" aria-label="${esc(firstWords(headline(i), 8))}${done ? ", done" : ""}">${face}${done ? `<span class="tick" aria-hidden="true">${I.done}</span>` : ""}</button>`;
   }).join("");
@@ -858,8 +927,8 @@ function endHtml(s) {
 
 function tileHtml(item) {
   const pic = pictureOf(item);
-  if (pic && pic.blobId) return `<img alt="" data-blob="${esc(pic.blobId)}">`;
-  if (pic && pic.src) return `<img alt="" referrerpolicy="no-referrer" src="${esc(pic.src)}" onerror="this.remove()">`;
+  if (pic && pic.blobId) return `<img alt=""${focusAttr(item, pic)} data-blob="${esc(pic.blobId)}">`;
+  if (pic && pic.src) return `<img alt=""${focusAttr(item, pic)} referrerpolicy="no-referrer" src="${esc(pic.src)}" onerror="this.remove()">`;
   const words = item.kind === KIND.QUOTE ? `“${firstWords(item.text || item.title, 5)}”` : firstWords(headline(item), 6);
   return `<span class="tw" style="--c:${topicColor(item)}">${esc(words)}</span>`;
 }
@@ -993,8 +1062,8 @@ function mediaHtml(item, compact) {
   const pic = pictureOf(item);
   const alt = esc(item.imageAlt || (item.kind === KIND.PHOTO ? item.title : ""));
   const imgTag = (cls = "") => pic.blobId
-    ? `<img class="${cls}" alt="${alt}" data-blob="${esc(pic.blobId)}">`
-    : `<img class="${cls}" alt="${alt}" src="${esc(pic.src)}" referrerpolicy="no-referrer" loading="lazy" onerror="this.closest('.pic')?.remove()">`;
+    ? `<img class="${cls}" alt="${alt}"${focusAttr(item, pic)} data-blob="${esc(pic.blobId)}">`
+    : `<img class="${cls}" alt="${alt}"${focusAttr(item, pic)} src="${esc(pic.src)}" referrerpolicy="no-referrer" loading="lazy" onerror="this.closest('.pic')?.remove()">`;
   const openBtn = (inner, label) => `<button class="open" type="button" data-open="${esc(item.id)}" aria-label="${esc(label)}">${inner}</button>`;
   switch (item.kind) {
     case KIND.PHOTO:
@@ -1367,7 +1436,7 @@ function imgFull(item) {
   if (!pic) return "";
   const credit = creditLine(pic);
   const alt = esc(item.imageAlt || item.title);
-  const img = pic.blobId ? `<img alt="${alt}" ${gone} data-blob="${esc(pic.blobId)}">` : `<img alt="${alt}" ${gone} referrerpolicy="no-referrer" src="${esc(pic.src)}">`;
+  const img = pic.blobId ? `<img alt="${alt}" ${gone}${focusAttr(item, pic)} data-blob="${esc(pic.blobId)}">` : `<img alt="${alt}" ${gone}${focusAttr(item, pic)} referrerpolicy="no-referrer" src="${esc(pic.src)}">`;
   return `<div class="media">${img}</div>${credit ? `<p class="credit">${pic.link ? `<a href="${esc(pic.link)}" target="_blank" rel="noopener">${esc(credit)}</a>` : esc(credit)}</p>` : ""}`;
 }
 
@@ -1663,7 +1732,7 @@ function bindPictureEdit(wrap, id) {
       : !pic ? (cands.length ? "Pick one, or add your own." : it.kind === KIND.LINK && !ai.relayBase() ? "Pictures from the page need the relay (Settings)." : "No pictures found. Add your own.")
       : pic.from === "mine" ? "Your photo." : pic.from === "page" ? "From the page." : "";
   };
-  const after = async () => { await show(); refreshPost(id); render(); };
+  const after = async () => { await show(); refreshPost(id); render(); focusPending(); };
   box.addEventListener("click", async (e) => {
     const b = e.target.closest("[data-pk]");
     if (!b) return;
