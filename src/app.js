@@ -36,7 +36,7 @@ import { I, LOGO } from "./icons.js";
 import { topicColor, dominantColor, tintInks, focusOf } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "4.13.0";
+export const VERSION = "4.13.1";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 
@@ -1166,7 +1166,8 @@ async function loadCalendar({ force = false } = {}) {
           if (res.status === 404 && msg === "Not found.") throw new Error("Your relay is an older copy without the calendar. Update it: Settings › Relay › How to update.");
           throw new Error(msg || `The relay said ${res.status}.`);
         }
-        events.push(...eventsOn(parseIcs(await res.text()), dayStart));
+        const label = calLabel(url);
+        events.push(...eventsOn(parseIcs(await res.text()), dayStart).map((e) => ({ ...e, calendar: calName(e.calendar, label) })));
       } catch (e) { errors.push(e.message); noteError(e, { quiet: true, where: "calendar" }); }
     }
     if (errors.length === urls.length && have) return have;
@@ -1179,6 +1180,18 @@ async function loadCalendar({ force = false } = {}) {
   } finally {
     calLoading = false;
   }
+}
+
+/** Which service a calendar address belongs to. */
+function calLabel(url) {
+  const h = (() => { try { return new URL(url).hostname; } catch { return ""; } })();
+  return /google\.com$/.test(h) ? "Google Calendar" : /icloud\.com$/.test(h) ? "iCloud Calendar"
+    : /outlook\.(com|office365\.com|live\.com)$/.test(h) ? "Outlook Calendar" : "Calendar";
+}
+
+/** A calendar's own name, unless it's an email address (Google names your main calendar after it). */
+function calName(name, label) {
+  return !name || /@/.test(name) ? label : name;
 }
 
 function startOfToday() { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); }
@@ -1203,7 +1216,7 @@ function calendarHtml() {
     return `<article class="post event${past ? " past" : ""}" aria-label="${esc(eventWhen(e))}: ${esc(e.title)}">
       <div class="rail"><span class="av av-cal" aria-hidden="true">${I.cal}</span></div>
       <div class="main">
-        <div class="meta"><span class="who">${esc(e.calendar || "Calendar")},</span> <span class="when">${esc(eventWhen(e))}</span>${live ? '<span class="tag now">Now</span>' : past ? '<span class="tag">Ended</span>' : ""}</div>
+        <div class="meta"><span class="who">${esc(calName(e.calendar, "Google Calendar"))},</span> <span class="when">${esc(eventWhen(e))}</span>${live ? '<span class="tag now">Now</span>' : past ? '<span class="tag">Ended</span>' : ""}</div>
         <p class="ev-title">${esc(e.title)}</p>
         ${e.location ? `<p class="ev-place">${I.pin}<span>${esc(e.location)}</span></p>` : ""}
         ${notes ? `<p class="ev-notes">${esc(notes)}</p>` : ""}
