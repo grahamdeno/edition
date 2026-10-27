@@ -113,15 +113,74 @@ export async function migrateFromLocalStorage(migrateLegacy) {
   return out.length;
 }
 
-/** Backup of everything except file bytes, as a JSON string. */
-export async function exportJson() {
-  const list = await items.all();
-  return JSON.stringify({ app: "edition", version: 1, exported: new Date().toISOString(), items: list }, null, 2);
+/* ---------- Backup ---------- */
+
+// Settings live in localStorage under "edition.*". Caches are rebuilt on their own.
+const SETTINGS_PREFIX = "edition.";
+const SKIP_SETTINGS = new Set(["edition.calCache", "edition.morningCache"]);
+
+export function settingsSnapshot(storage = localStorage) {
+  const out = {};
+  for (let i = 0; i < storage.length; i++) {
+    const k = storage.key(i);
+    if (k && k.startsWith(SETTINGS_PREFIX) && !SKIP_SETTINGS.has(k)) out[k] = storage.getItem(k);
+  }
+  return out;
 }
 
+export async function blobToBase64(blob) {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+
+export function base64ToBlob(b64, type = "") {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Blob([bytes], { type });
+}
+
+/** Builds a version 2 backup: items, files, app state and settings. */
+export async function packBackup({ items: list, meta: metaRows, blobs: blobRows, settings }) {
+  const files = [];
+  for (const r of blobRows) {
+    if (!r || !r.blob) continue;
+    files.push({ id: r.id, type: r.blob.type || "", data: await blobToBase64(r.blob) });
+  }
+  return { app: "edition", version: 2, exported: new Date().toISOString(), items: list, meta: metaRows, files, settings };
+}
+
+/** Reads a version 1 or 2 backup into plain parts. Throws on anything else. */
+export function unpackBackup(data) {
+  if (!data || data.app !== "edition" || !Array.isArray(data.items)) throw new Error("That file isn't a Shoebox backup.");
+  return {
+    items: data.items,
+    meta: Array.isArray(data.meta) ? data.meta : [],
+    files: Array.isArray(data.files) ? data.files.map((f) => ({ id: f.id, blob: base64ToBlob(f.data, f.type) })) : [],
+    settings: data.settings && typeof data.settings === "object" ? data.settings : {},
+  };
+}
+
+/** Full backup as a JSON string: items, photos and files, app state, settings. */
+export async function exportJson() {
+  const [list, metaRows, blobRows] = await Promise.all([
+    items.all(),
+    tx("meta", "readonly", (s) => wrap(s.getAll())),
+    tx("blobs", "readonly", (s) => wrap(s.getAll())),
+  ]);
+  return JSON.stringify(await packBackup({ items: list, meta: metaRows, blobs: blobRows, settings: settingsSnapshot() }));
+}
+
+/** Restores a backup over what's here. Returns counts for the message. */
 export async function importJson(text) {
-  const data = JSON.parse(text);
-  if (data.app !== "edition" || !Array.isArray(data.items)) throw new Error("That file isn't a Shoebox backup.");
-  await items.putMany(data.items);
-  return data.items.length;
+  const parts = unpackBackup(JSON.parse(text));
+  await items.putMany(parts.items);
+  if (parts.files.length) await tx("blobs", "readwrite", (s) => { parts.files.forEach((f) => s.put(f)); });
+  if (parts.meta.length) await tx("meta", "readwrite", (s) => { parts.meta.forEach((m) => m && m.key && s.put(m)); });
+  for (const [k, v] of Object.entries(parts.settings)) {
+    if (k.startsWith(SETTINGS_PREFIX) && typeof v === "string") localStorage.setItem(k, v);
+  }
+  return { items: parts.items.length, files: parts.files.length, settings: Object.keys(parts.settings).length };
 }
