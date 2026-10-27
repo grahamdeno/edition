@@ -85,3 +85,17 @@ test("YouTube links in any shape give the video id; pictures don't", () => {
   assert.equal(youtubeId("https://www.vision-environnement.com/live/image/webcam/x.JPG"), "");
   assert.equal(youtubeId("not a link"), "");
 });
+
+import { placeFromCoords, kmBetween } from "../src/daily.js";
+
+test("the phone's location becomes a place; the phone's own town name wins", async () => {
+  const fake = async () => ({ ok: true, json: async () => ({ properties: { radarStation: "KLTX", relativeLocation: { properties: { city: "Masonboro" } } } }) });
+  assert.deepEqual(await placeFromCoords(34.1634, -77.8721, { name: "Wilmington", zip: "28409" }, fake), { name: "Wilmington", lat: 34.163, lon: -77.872, radar: "KLTX", zip: "28409" });
+  assert.equal((await placeFromCoords(34.16, -77.87, {}, fake)).name, "Masonboro");
+});
+
+test("moving town is told apart from moving across town", () => {
+  const home = { lat: 34.163, lon: -77.872 };
+  assert.ok(kmBetween(home, { lat: 34.21, lon: -77.89 }) < 15);
+  assert.ok(kmBetween(home, { lat: 35.78, lon: -78.64 }) > 150);
+});

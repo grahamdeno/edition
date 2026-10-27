@@ -24,17 +24,29 @@ export async function lookupPlace(query, fetchImpl = fetch) {
   if (!geo.ok) throw new Error(`Place lookup failed (${geo.status}).`);
   const hit = ((await geo.json()).results || [])[0];
   if (!hit) return null;
-  const place = { name: hit.name, lat: +hit.latitude.toFixed(3), lon: +hit.longitude.toFixed(3), radar: "", zip: /^\d{5}$/.test(q) ? q : "" };
+  return placeFromCoords(hit.latitude, hit.longitude, { name: hit.name, zip: /^\d{5}$/.test(q) ? q : "" }, fetchImpl);
+}
+
+/** A place from coordinates (the phone's location, or a geocoder hit), with the nearest NWS radar. */
+export async function placeFromCoords(lat, lon, { name = "", zip = "" } = {}, fetchImpl = fetch) {
+  const place = { name, lat: +(+lat).toFixed(3), lon: +(+lon).toFixed(3), radar: "", zip };
   try {
     const pt = await fetchImpl(`https://api.weather.gov/points/${place.lat},${place.lon}`, { headers: { accept: "application/geo+json" } });
     if (pt.ok) {
       const pr = (await pt.json()).properties || {};
       place.radar = pr.radarStation || "";
       const city = pr.relativeLocation?.properties?.city;
-      if (city && /^\d/.test(place.name)) place.name = city;
+      if (city && (!place.name || /^\d/.test(place.name))) place.name = city;
     }
   } catch { /* radar is a bonus */ }
+  if (!place.name) place.name = "Your area";
   return place;
+}
+
+/** Kilometres between two places, roughly (fine for "has the phone moved town?"). */
+export function kmBetween(a, b) {
+  const r = Math.PI / 180, x = (b.lon - a.lon) * r * Math.cos(((a.lat + b.lat) / 2) * r), y = (b.lat - a.lat) * r;
+  return Math.sqrt(x * x + y * y) * 6371;
 }
 
 /** A YouTube video or live stream id from any of its link shapes, or "". */
