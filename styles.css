@@ -666,3 +666,7 @@ details.group[open] { padding-bottom: 14px; }
 .sheet > * { flex-shrink: 0; }
 .sheet-wrap { overscroll-behavior: none; }
 .sheet { touch-action: pan-y; }
+
+/* The Save bar runs edge to edge (it's meant to be wider than the sheet's padding) and sits above the home bar. */
+.sheet > .cap-foot { max-width: none; }
+.cap-foot { padding-bottom: calc(max(var(--safe-b), 12px) + 14px); }
