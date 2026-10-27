@@ -51,12 +51,19 @@ jobs:
           report() { grep -E "error:|Error|failed|No profiles|rovisioning|ertificate|not available|denied" "$1" | sort -u | head -25 | sed 's/^/::error::/'; tail -n 15 "$1"; }
           # Automatic signing needs one registered iPhone for its development profile.
           ASC_KEY_ID=${{ secrets.ASC_KEY_ID }} ASC_ISSUER_ID=${{ secrets.ASC_ISSUER_ID }} ASC_KEY_PATH=$RUNNER_TEMP/asc.p8 ruby register-device.rb || exit 1
+          # Archive unsigned (a development profile would need a real registered iPhone), then stamp each
+          # part with its entitlements (the App Group); the export signs for the App Store and keeps them.
           xcodebuild -project Shoebox.xcodeproj -scheme Shoebox -configuration Release \
             -destination 'generic/platform=iOS' -archivePath "$RUNNER_TEMP/Shoebox.xcarchive" \
-            CURRENT_PROJECT_VERSION=${{ github.run_number }} $AUTH \
+            CURRENT_PROJECT_VERSION=${{ github.run_number }} CODE_SIGNING_ALLOWED=NO \
             archive > archive.log 2>&1
           code=$?
           if [ $code -ne 0 ]; then echo "::error::archive failed"; report archive.log; exit $code; fi
+          APP="$RUNNER_TEMP/Shoebox.xcarchive/Products/Applications/Shoebox.app"
+          codesign -f -s - --entitlements Share/Share.entitlements "$APP/PlugIns/ShoeboxShare.appex" || exit 1
+          codesign -f -s - --entitlements Widget/Widget.entitlements "$APP/PlugIns/ShoeboxWidget.appex" || exit 1
+          codesign -f -s - --entitlements App/Shoebox.entitlements "$APP" || exit 1
+          codesign -d --entitlements - --xml "$APP" 2>/dev/null | grep -q group.com.grahamdeno.shoebox && echo "::notice::Archive carries the App Group"
           xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/Shoebox.xcarchive" \
             -exportOptionsPlist ExportOptions.plist -exportPath "$RUNNER_TEMP/out" $AUTH > export.log 2>&1
           code=$?
