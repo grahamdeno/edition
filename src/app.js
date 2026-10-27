@@ -36,7 +36,7 @@ import { I, LOGO } from "./icons.js";
 import { topicColor, dominantColor, tintInks, focusOf } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "4.12.1";
+export const VERSION = "4.12.2";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 
@@ -1151,8 +1151,17 @@ async function loadCalendar({ force = false } = {}) {
     const events = [], errors = [];
     for (const url of urls) {
       try {
-        const res = await withTimeout(fetch(`${ai.relayBase()}/ical?url=${encodeURIComponent(url)}`), 20000);
-        if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d?.error?.message || `The relay said ${res.status}.`); }
+        let res;
+        try { res = await withTimeout(fetch(`${ai.relayBase()}/ical?url=${encodeURIComponent(url)}`), 30000); } catch {
+          throw new Error(`Couldn't reach your relay at ${new URL(ai.relayBase()).host}. Check the address in Settings › Relay.`);
+        }
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({}));
+          const msg = d?.error?.message || "";
+          // An older relay has no calendar step: its answer is a plain "Not found."
+          if (res.status === 404 && msg === "Not found.") throw new Error("Your relay is an older copy without the calendar. Update it: Settings › Relay › How to update.");
+          throw new Error(msg || `The relay said ${res.status}.`);
+        }
         events.push(...eventsOn(parseIcs(await res.text()), dayStart));
       } catch (e) { errors.push(e.message); noteError(e, { quiet: true, where: "calendar" }); }
     }
@@ -2781,7 +2790,9 @@ function openSettings() {
         <button class="btn" type="button" id="set-pplx-clear">Remove key</button>
       </div>
       <span class="st" id="set-pplx-st" role="status"></span>
-      <p class="note">Your Cloudflare relay: link pictures, Perplexity and notifications. Setup is one button in the repo's relay folder.</p>
+      <p class="note">Your Cloudflare relay: link pictures, Perplexity, notifications and your calendar. Setup is one button in the repo's relay folder.</p>
+      <p class="note"><b>How to update:</b> in Cloudflare, open Workers › your relay › Edit code, replace everything with the latest
+        <a href="https://raw.githubusercontent.com/grahamdeno/edition/main/relay/perplexity-relay.js" target="_blank" rel="noopener">relay file</a>, and Deploy. The address stays the same.</p>
     </details>
     <details class="group" id="set-push-g">
       <summary><span>Notifications</span><span class="sv" id="set-push-sv">${push.enabled() ? "On" : "Off"}</span></summary>
@@ -2906,7 +2917,10 @@ function openSettings() {
         if (res.status === 403) throw new Error("The relay answered but refused this app. Check ALLOWED_ORIGINS in the relay code.");
         if (!res.ok) throw new Error(`The relay answered with an error (${res.status}). Check the address.`);
         const data = await res.json();
-        notes.push(Array.isArray(data.images) ? "Relay works. Links get pictures from their pages." : "Relay works, but it's the older version: redeploy it to get the full picture picker.");
+        const ver = await withTimeout(fetch(`${relay}/version`), 10000).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+        notes.push(!ver ? "Relay works, but it's an older copy: update it (below) for the calendar, notifications and photo search."
+          : !ver.push ? "Relay works. Notifications need its storage: redeploy with the Deploy button."
+          : "Relay works and is up to date.");
         state.items = state.items.map((i) => (i.imageCands ? i : { ...i, pageTries: 0 }));
         picturePending();
       } catch (e) {
