@@ -58,7 +58,6 @@ jobs:
         run: |
           printf '%s\n' "${{ secrets.ASC_KEY_P8 }}" | sed 's/\r$//' > "$RUNNER_TEMP/asc.p8"
           chmod 600 "$RUNNER_TEMP/asc.p8"
-          if ls ipa/Payload/*.app/PrivacyInfo.xcprivacy >/dev/null 2>&1; then echo "::notice::Privacy manifest included"; else echo "::error::No privacy manifest in the app: $(ls ipa/Payload/*.app | tr '\n' ' ' | head -c 600)"; exit 1; fi
           mkdir -p ~/.appstoreconnect/private_keys && cp "$RUNNER_TEMP/asc.p8" ~/.appstoreconnect/private_keys/AuthKey_${{ secrets.ASC_KEY_ID }}.p8
       - name: Archive and send to TestFlight
         if: env.HAS_KEY == 'true' && github.ref == 'refs/heads/main'
@@ -93,6 +92,7 @@ jobs:
             g=$(codesign -d --entitlements - --xml "$b" 2>/dev/null | grep -o "group.com.grahamdeno.shoebox" | head -1)
             echo "::notice::$(basename "$b"): ${g:-NO APP GROUP}"
           done
+          if ls ipa/Payload/*.app/PrivacyInfo.xcprivacy >/dev/null 2>&1; then echo "::notice::Privacy manifest included"; else echo "::error::No privacy manifest in the app: $(ls ipa/Payload/*.app | tr '\n' ' ' | head -c 600)"; exit 1; fi
           mkdir -p ~/.appstoreconnect/private_keys && cp "$RUNNER_TEMP/asc.p8" ~/.appstoreconnect/private_keys/AuthKey_${{ secrets.ASC_KEY_ID }}.p8
           xcrun altool --upload-app -f *.ipa -t ios --apiKey ${{ secrets.ASC_KEY_ID }} --apiIssuer ${{ secrets.ASC_ISSUER_ID }} > upload.log 2>&1
           code=$?
