@@ -149,6 +149,14 @@ async function direct(body, key) {
   return data;
 }
 
+/** The relay's anonymous usage stats; only owner installs may read them. */
+export async function ownerStats() {
+  const res = await fetch(`${relayBase()}/stats`, { headers: { "x-shoebox-device": safeGet(DEVICE_STORE), "x-shoebox-token": safeGet(TOKEN_STORE) } });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new AiError(data?.error?.message || `Couldn't read stats (${res.status}).`, res.status);
+  return data;
+}
+
 /** Today's AI spend for this install, from the relay. */
 export async function usage() {
   const res = await fetch(`${relayBase()}/ai/usage`, { headers: { "x-shoebox-device": safeGet(DEVICE_STORE), "x-shoebox-token": safeGet(TOKEN_STORE) } });

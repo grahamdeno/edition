@@ -20,7 +20,11 @@ targets:
   Shoebox:
     type: application
     platform: iOS
-    sources: [App, Shared]
+    sources:
+      - App
+      - Shared
+      - path: Privacy
+        buildPhase: resources
     dependencies:
       - target: ShoeboxShare
       - target: ShoeboxWidget

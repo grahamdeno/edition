@@ -761,3 +761,7 @@ details.group[open] { padding-bottom: 14px; }
 .sched-row.past .sched-title, .sched-row.past .sched-loc, .sched-row.past .sched-t { opacity: 0.5; }
 .sched-row.live .sched-title { color: var(--sig-ink); }
 .welcome .wel-ok { align-self: center; font-weight: 600; font-size: 0.875rem; color: var(--sig-ink); padding: 0 6px; }
+table.usage { width: 100%; border-collapse: collapse; font-size: 0.8125rem; font-variant-numeric: tabular-nums; }
+table.usage th, table.usage td { text-align: right; padding: 5px 4px; border-bottom: 1px solid var(--line); }
+table.usage th:first-child, table.usage td:first-child { text-align: left; }
+table.usage th { color: var(--muted); font-weight: 600; }
