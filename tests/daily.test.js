@@ -53,3 +53,35 @@ test("Apple Weather maps to the card: Fahrenheit, mph, chance, next hour", () =>
   assert.match(w.nextHour, /^Rain starting around/);
   assert.equal(conditionWord("HeavyRain"), "Heavy rain");
 });
+
+import { lookupPlace, youtubeId } from "../src/daily.js";
+
+test("a ZIP code becomes a place with its nearest radar", async () => {
+  const calls = [];
+  const fake = async (url) => {
+    calls.push(url);
+    if (url.includes("geocoding")) return { ok: true, json: async () => ({ results: [{ name: "Burlington", latitude: 44.4759, longitude: -73.2121 }] }) };
+    return { ok: true, json: async () => ({ properties: { radarStation: "KCXX", relativeLocation: { properties: { city: "Burlington" } } } }) };
+  };
+  const p = await lookupPlace("05401", fake);
+  assert.deepEqual(p, { name: "Burlington", lat: 44.476, lon: -73.212, radar: "KCXX", zip: "05401" });
+  assert.match(calls[1], /api\.weather\.gov\/points\/44\.476,-73\.212/);
+  assert.equal((await lookupPlace("28409", fake)).radar, "KLTX");
+  assert.equal(await lookupPlace("zz", fake), null);
+});
+
+test("a place still works when the radar lookup fails", async () => {
+  const fake = async (url) => (url.includes("geocoding")
+    ? { ok: true, json: async () => ({ results: [{ name: "Anchorage", latitude: 61.2181, longitude: -149.9003 }] }) }
+    : { ok: false, status: 500 });
+  const p = await lookupPlace("Anchorage", fake);
+  assert.equal(p.name, "Anchorage");
+  assert.equal(p.radar, "");
+  assert.equal(p.zip, "");
+});
+
+test("YouTube links in any shape give the video id; pictures don't", () => {
+  for (const u of ["https://www.youtube.com/watch?v=abcDEF12345", "https://youtu.be/abcDEF12345", "https://youtube.com/live/abcDEF12345?si=x", "https://m.youtube.com/embed/abcDEF12345"]) assert.equal(youtubeId(u), "abcDEF12345");
+  assert.equal(youtubeId("https://www.vision-environnement.com/live/image/webcam/x.JPG"), "");
+  assert.equal(youtubeId("not a link"), "");
+});

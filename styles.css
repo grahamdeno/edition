@@ -727,3 +727,9 @@ details.group[open] { padding-bottom: 14px; }
 .cq-score { font-weight: 600; }
 .post.event.live { background: color-mix(in srgb, var(--sig) 7%, var(--bg)); }
 .post.event.live .ev-title { color: var(--sig-ink); }
+.set-h { margin: 14px 4px -2px; font-size: 0.8125rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+.help-links { padding: 0 14px; gap: 0; }
+.help-links .row { min-height: 52px; text-decoration: none; color: inherit; font-weight: 600; }
+.help-links .row + .row { border-top: 1px solid var(--line); }
+.help-links .sv { margin-left: auto; font-weight: 500; color: var(--muted); font-size: 0.875rem; }
+.wx-live iframe { display: block; width: 100%; aspect-ratio: 16 / 9; border: 0; border-radius: 12px; background: #000; }

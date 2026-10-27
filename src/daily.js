@@ -11,6 +11,45 @@ const DAY = 864e5;
 
 export const PLACES = { "28409": { name: "Wilmington", lat: 34.163, lon: -77.872, radar: "KLTX", tide: "8658163" } };
 
+/**
+ * A ZIP code or town, turned into a place: Open-Meteo's free geocoder for
+ * where it is, then the National Weather Service for the nearest radar.
+ * US only for now. Returns { name, lat, lon, radar } or null.
+ */
+export async function lookupPlace(query, fetchImpl = fetch) {
+  const q = String(query || "").trim();
+  if (q.length < 3) return null;
+  if (PLACES[q]) return { ...PLACES[q], zip: q };
+  const geo = await fetchImpl(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=1&language=en&format=json&countryCode=US`);
+  if (!geo.ok) throw new Error(`Place lookup failed (${geo.status}).`);
+  const hit = ((await geo.json()).results || [])[0];
+  if (!hit) return null;
+  const place = { name: hit.name, lat: +hit.latitude.toFixed(3), lon: +hit.longitude.toFixed(3), radar: "", zip: /^\d{5}$/.test(q) ? q : "" };
+  try {
+    const pt = await fetchImpl(`https://api.weather.gov/points/${place.lat},${place.lon}`, { headers: { accept: "application/geo+json" } });
+    if (pt.ok) {
+      const pr = (await pt.json()).properties || {};
+      place.radar = pr.radarStation || "";
+      const city = pr.relativeLocation?.properties?.city;
+      if (city && /^\d/.test(place.name)) place.name = city;
+    }
+  } catch { /* radar is a bonus */ }
+  return place;
+}
+
+/** A YouTube video or live stream id from any of its link shapes, or "". */
+export function youtubeId(url) {
+  let u;
+  try { u = new URL(String(url || "").trim()); } catch { return ""; }
+  const host = u.hostname.replace(/^(www\.|m\.)/, "");
+  let id = "";
+  if (host === "youtu.be") id = u.pathname.slice(1);
+  else if (/(^|\.)youtube(-nocookie)?\.com$/.test(host)) {
+    id = u.searchParams.get("v") || (u.pathname.match(/^\/(?:live|embed|shorts)\/([^/?#]+)/) || [])[1] || "";
+  }
+  return /^[\w-]{6,20}$/.test(id) ? id : "";
+}
+
 const WMO = {
   0: "Clear", 1: "Mostly clear", 2: "Partly cloudy", 3: "Overcast", 45: "Fog", 48: "Freezing fog",
   51: "Light drizzle", 53: "Drizzle", 55: "Heavy drizzle", 56: "Freezing drizzle", 57: "Freezing drizzle",
