@@ -48,6 +48,8 @@ School posts have their own section, **From school**, on Today: every one you ha
 
 **This morning.** At the top of Today: the weather for 28409 (now, high and low, rain chance, wind, sunrise and sunset, Wrightsville Beach tides) with the National Weather Service radar for Wilmington (or a camera picture you set); last night's Hurricanes and Capitals games with goal scorers and a highlights link; a Carl Jung quote, each with its source; *On this day*, something you saved a year, a month or a week ago; and three CPMAI practice questions (Sonnet writes them; tap an answer to see why). Each can be turned off in Settings › Mornings.
 
+**Apple.** With your Apple key in the relay: *Song of the day* (an iPhone Shortcut sends the library song you've gone longest without playing; Shoebox shows its artwork, a 30-second preview and Open in Apple Music) and Apple Weather for the weather card, with the next hour's rain. Setup in `relay/README.md`.
+
 **Email in.** Forward any email to your Shoebox address and it becomes a post; school mail becomes school posts. Needs a domain on Cloudflare (setup in `relay/README.md`).
 
 **Your calendar.** Settings › Calendar takes your calendar's private iCal address (Google: Secret address in iCal format; iPhone: Public Calendar share link; Outlook: published ICS link), one per line. Today's events show at the top of Today under *On your calendar*: all-day first, then by time, with *Now* and *Ended*. They're read through the relay, never saved as items, can't be kept or removed, and are gone at midnight. Repeating events, time zones, skipped and moved dates are handled on the phone (`src/calendar.js`).

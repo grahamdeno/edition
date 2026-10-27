@@ -30,8 +30,8 @@
  */
 
 /** What this copy of the relay can do; the app checks it to say when an update is needed. */
-export const RELAY_VERSION = 4;
-export const RELAY_FEATURES = ["preview", "image", "photo", "agent", "push", "remind", "ical", "nhl", "inbox"];
+export const RELAY_VERSION = 5;
+export const RELAY_FEATURES = ["preview", "image", "photo", "agent", "push", "remind", "ical", "nhl", "inbox", "apple"];
 
 const ALLOWED_ORIGINS = ["https://grahamdeno.github.io"];
 const UPSTREAM = "https://api.perplexity.ai";
@@ -72,11 +72,14 @@ export default {
   async fetch(request, env = {}) {
     const origin = request.headers.get("origin") || "";
     const cors = corsHeaders(origin);
-    if (!allowed(origin)) return json(403, "This relay only serves Shoebox.", cors);
+    // The one caller without a web address: your iPhone Shortcut posting the song of the day (it carries the song key).
+    const shortcut = request.method === "POST" && new URL(request.url).pathname === "/song";
+    if (!allowed(origin) && !shortcut) return json(403, "This relay only serves Shoebox.", cors);
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
     const { pathname, searchParams } = new URL(request.url);
     if (request.method === "GET" && pathname === "/preview") return preview(searchParams.get("url"), cors, searchParams.get("text") === "1");
-    if (request.method === "GET" && pathname === "/version") return new Response(JSON.stringify({ version: RELAY_VERSION, features: RELAY_FEATURES, push: Boolean(env.SHOEBOX), email: env.EMAIL_ADDRESS || null }), { headers: { ...cors, "content-type": "application/json" } });
+    if (request.method === "GET" && pathname === "/version") return new Response(JSON.stringify({ version: RELAY_VERSION, features: RELAY_FEATURES, push: Boolean(env.SHOEBOX), email: env.EMAIL_ADDRESS || null, apple: Boolean(env.APPLE_P8), weatherkit: Boolean(env.APPLE_P8 && env.APPLE_WEATHER_SERVICE_ID) }), { headers: { ...cors, "content-type": "application/json" } });
+    if (pathname.startsWith("/apple/") || pathname === "/song") return appleRoute(request, env, pathname, searchParams, cors);
     if (request.method === "GET" && pathname === "/nhl") return nhl(searchParams.get("date"), cors);
     if (pathname === "/inbox" || pathname === "/inbox/ack") return inboxRoute(request, env, pathname, cors);
     if (request.method === "GET" && pathname === "/ical") return ical(searchParams.get("url"), cors);
@@ -589,4 +592,110 @@ export function parseMail(raw) {
     text,
     links,
   };
+}
+
+
+/* ================= Apple: MusicKit, WeatherKit, MapKit JS =================
+ * One Apple key (.p8) does all three. Put its contents in a Worker secret
+ * named APPLE_P8; the Key ID and Team ID are built in below (they aren't
+ * secret: Apple puts them in every token). WeatherKit also needs your
+ * Services ID in APPLE_WEATHER_SERVICE_ID.
+ */
+const APPLE_KEY_ID = "79QU7DSTN9";
+const APPLE_TEAM_ID = "7MHDTK68M2";
+
+const enc8 = (o) => b64u.enc(new TextEncoder().encode(JSON.stringify(o)));
+
+export async function appleKey(p8) {
+  const der = Uint8Array.from(atob(String(p8 || "").replace(/-----[^-]+-----/g, "").replace(/\s+/g, "")), (c) => c.charCodeAt(0));
+  return crypto.subtle.importKey("pkcs8", der, { name: "ECDSA", namedCurve: "P-256" }, false, ["sign"]);
+}
+
+/** An ES256 token signed with the Apple key. */
+export async function appleJwt(key, header, payload) {
+  const body = `${enc8({ alg: "ES256", ...header })}.${enc8(payload)}`;
+  const sig = await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, key, new TextEncoder().encode(body));
+  return `${body}.${b64u.enc(sig)}`;
+}
+
+const tokenCache = {};
+async function appleToken(env, kind, now = Math.floor(Date.now() / 1000)) {
+  const c = tokenCache[kind];
+  if (c && c.exp - now > 3600) return c.token;
+  const key = await appleKey(env.APPLE_P8);
+  const kid = env.APPLE_KEY_ID || APPLE_KEY_ID, iss = env.APPLE_TEAM_ID || APPLE_TEAM_ID;
+  let token, exp;
+  if (kind === "music") { exp = now + 30 * 86400; token = await appleJwt(key, { kid }, { iss, iat: now, exp }); }
+  else if (kind === "maps") { exp = now + 7 * 86400; token = await appleJwt(key, { kid, typ: "JWT" }, { iss, iat: now, exp, origin: ALLOWED_ORIGINS[0] }); }
+  else if (kind === "weather") {
+    const sub = env.APPLE_WEATHER_SERVICE_ID;
+    exp = now + 3600 * 6;
+    token = await appleJwt(key, { kid, id: `${iss}.${sub}` }, { iss, iat: now, exp, sub });
+  }
+  tokenCache[kind] = { token, exp };
+  return token;
+}
+
+async function appleRoute(request, env, pathname, params, cors) {
+  const out = (status, body, extra = {}) => new Response(JSON.stringify(body), { status, headers: { ...cors, "content-type": "application/json", ...extra } });
+  // The Shortcut on your phone posts the song; it has no web origin, so it proves itself with the song key.
+  if (pathname === "/song" && request.method === "POST") {
+    const kv = env.SHOEBOX;
+    if (!kv) return out(501, { error: { message: "Needs the relay's storage." } });
+    const want = await kv.get("song-key");
+    if (!want || request.headers.get("x-song-key") !== want) return out(403, { error: { message: "Wrong song key. Copy it from Shoebox: Settings › Mornings." } });
+    const b = await request.json().catch(() => ({}));
+    const song = { title: String(b.title || b.name || "").slice(0, 200), artist: String(b.artist || "").slice(0, 200), album: String(b.album || "").slice(0, 200),
+      lastPlayed: String(b.lastPlayed || b.last_played || "").slice(0, 60), plays: Number(b.plays || b.playCount || 0) || null, at: Date.now() };
+    if (!song.title) return out(400, { error: { message: "No song title." } });
+    await kv.put("song", JSON.stringify(song));
+    return out(200, { ok: true });
+  }
+  if (!env.APPLE_P8) return out(501, { error: { message: "Add your Apple key to the relay (secret APPLE_P8)." } });
+  try {
+    if (pathname === "/apple/music-token") return out(200, { token: await appleToken(env, "music") }, { "cache-control": "private, max-age=3600" });
+    if (pathname === "/apple/maps-token") return out(200, { token: await appleToken(env, "maps") }, { "cache-control": "private, max-age=3600" });
+    if (pathname === "/apple/weather") {
+      if (!env.APPLE_WEATHER_SERVICE_ID) return out(501, { error: { message: "Add your WeatherKit Services ID to the relay (APPLE_WEATHER_SERVICE_ID)." } });
+      const lat = Number(params.get("lat")), lon = Number(params.get("lon"));
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) return out(400, { error: { message: "lat and lon." } });
+      const tz = params.get("tz") || "America/New_York";
+      const u = `https://weatherkit.apple.com/api/v1/weather/en/${lat.toFixed(3)}/${lon.toFixed(3)}?dataSets=currentWeather,forecastDaily,forecastNextHour&timezone=${encodeURIComponent(tz)}&countryCode=US`;
+      const res = await fetch(u, { headers: { authorization: `Bearer ${await appleToken(env, "weather")}` } });
+      if (!res.ok) return out(502, { error: { message: `Apple Weather said ${res.status}.` } });
+      return new Response(await res.text(), { headers: { ...cors, "content-type": "application/json", "cache-control": "private, max-age=600" } });
+    }
+    if (pathname === "/apple/song") {
+      // The app (owner of the inbox) reads the song of the day, and gets the key for its Shortcut.
+      const kv = env.SHOEBOX;
+      if (!kv) return out(501, { error: { message: "Needs the relay's storage." } });
+      const owner = await kv.get("inbox-key"), key = request.headers.get("x-inbox-key") || "";
+      if (!/^[\w-]{24,80}$/.test(key) || (owner && owner !== key)) return out(403, { error: { message: "Not this phone's relay." } });
+      if (!owner) await kv.put("inbox-key", key);
+      let songKey = await kv.get("song-key");
+      if (!songKey) { songKey = b64u.enc(crypto.getRandomValues(new Uint8Array(18))); await kv.put("song-key", songKey); }
+      const song = await kv.get("song", "json");
+      let match = null;
+      if (song) {
+        match = song.match || null;
+        if (!match) {
+          const term = `${song.title} ${song.artist}`.trim();
+          const r = await fetch(`https://api.music.apple.com/v1/catalog/us/search?types=songs&limit=5&term=${encodeURIComponent(term)}`, { headers: { authorization: `Bearer ${await appleToken(env, "music")}` } });
+          const d = r.ok ? await r.json() : {};
+          const songs = d?.results?.songs?.data || [];
+          const best = songs.find((x) => x.attributes?.name?.toLowerCase() === song.title.toLowerCase() && (!song.artist || x.attributes?.artistName?.toLowerCase().includes(song.artist.toLowerCase().split(/[,&]/)[0].trim()))) || songs[0];
+          if (best) {
+            const a = best.attributes || {};
+            match = { id: best.id, name: a.name, artist: a.artistName, album: a.albumName, url: a.url, preview: a.previews?.[0]?.url || null,
+              artwork: a.artwork?.url ? a.artwork.url.replace("{w}", "600").replace("{h}", "600") : null, year: (a.releaseDate || "").slice(0, 4) || null };
+            await kv.put("song", JSON.stringify({ ...song, match }));
+          }
+        }
+      }
+      return out(200, { song, match, songKey }, { "cache-control": "no-store" });
+    }
+  } catch (e) {
+    return out(500, { error: { message: `Apple: ${e.message || "failed"}` } });
+  }
+  return out(404, { error: { message: "Not found." } });
 }

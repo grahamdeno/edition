@@ -136,3 +136,43 @@ export function onThisDay(items, now = Date.now()) {
   }
   return null;
 }
+
+/* ---- Apple Weather (WeatherKit, through the relay) ---- */
+
+const cToF = (c) => (c == null ? null : Math.round(c * 9 / 5 + 32));
+const kmhToMph = (k) => (k == null ? null : Math.round(k * 0.621371));
+/** "MostlyCloudy" → "Mostly cloudy" */
+export const conditionWord = (code) => String(code || "").replace(/([a-z])([A-Z])/g, "$1 $2").replace(/^./, (c) => c.toUpperCase()).replace(/ (.)/g, (m, c) => ` ${c.toLowerCase()}`) || "—";
+
+/** Apple Weather's answer, in the same shape as the free source's, plus the next hour. */
+export function fromWeatherKit(d, now = Date.now()) {
+  const c = d?.currentWeather || {}, day = d?.forecastDaily?.days?.[0] || {};
+  const w = {
+    now: cToF(c.temperature), feels: cToF(c.temperatureApparent), word: conditionWord(c.conditionCode),
+    wind: kmhToMph(c.windSpeed), windFrom: compass(c.windDirection || 0),
+    hi: cToF(day.temperatureMax), lo: cToF(day.temperatureMin), today: conditionWord(day.conditionCode),
+    rain: day.precipitationChance != null ? Math.round(day.precipitationChance * 100) : null,
+    gusts: kmhToMph(day.windGustSpeedMax || c.windGust || 0),
+    sunrise: day.sunrise || null, sunset: day.sunset || null, at: Date.now(), source: "apple",
+  };
+  const sum = d?.forecastNextHour?.summary || [];
+  const wet = sum.find((p) => p && p.condition && p.condition !== "clear");
+  if (wet) {
+    const kind = wet.condition === "precipitation" ? "Rain" : conditionWord(wet.condition);
+    const t = (iso) => new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+    const start = Date.parse(wet.startTime);
+    w.nextHour = start <= now + 60e3
+      ? `${kind} now${wet.endTime ? `, easing around ${t(wet.endTime)}` : " for the next hour"}`
+      : `${kind} starting around ${t(wet.startTime)}`;
+  } else if (sum.length) w.nextHour = "No rain in the next hour";
+  return w;
+}
+
+export async function fetchTides(station) {
+  const t = new URL("https://api.tidesandcurrents.noaa.gov/api/prod/datagetter");
+  Object.entries({ product: "predictions", station, date: "today", datum: "MLLW", interval: "hilo", units: "english", time_zone: "lst_ldt", format: "json", application: "Shoebox" })
+    .forEach(([k, v]) => t.searchParams.set(k, v));
+  const tr = await fetch(t);
+  const td = tr.ok ? await tr.json() : {};
+  return (td.predictions || []).map((p) => ({ t: p.t, type: p.type === "H" ? "High" : "Low" }));
+}
