@@ -39,11 +39,16 @@ jobs:
         if: env.HAS_KEY == 'true' && github.ref == 'refs/heads/main'
         run: |
           cd ios
+          set +e
           AUTH="-allowProvisioningUpdates -authenticationKeyPath $RUNNER_TEMP/asc.p8 -authenticationKeyID ${{ secrets.ASC_KEY_ID }} -authenticationKeyIssuerID ${{ secrets.ASC_ISSUER_ID }}"
+          report() { grep -E "error:|Error|failed|No profiles|Provisioning|certificate|requires a provisioning|not available|denied" "$1" | grep -v "^\s*$" | sort -u | head -25 | sed 's/^/::error::/'; tail -n 15 "$1"; }
           xcodebuild -project Shoebox.xcodeproj -scheme Shoebox -configuration Release \
             -destination 'generic/platform=iOS' -archivePath "$RUNNER_TEMP/Shoebox.xcarchive" \
-            CURRENT_PROJECT_VERSION=${{ github.run_number }} $AUTH archive | tail -n 60
-          test ${PIPESTATUS[0]} -eq 0
+            CURRENT_PROJECT_VERSION=${{ github.run_number }} $AUTH archive > archive.log 2>&1
+          code=$?
+          if [ $code -ne 0 ]; then echo "::error::archive failed"; report archive.log; exit $code; fi
           xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/Shoebox.xcarchive" \
-            -exportOptionsPlist ExportOptions.plist -exportPath "$RUNNER_TEMP/out" $AUTH | tail -n 40
-          exit ${PIPESTATUS[0]}
+            -exportOptionsPlist ExportOptions.plist -exportPath "$RUNNER_TEMP/out" $AUTH > export.log 2>&1
+          code=$?
+          if [ $code -ne 0 ]; then echo "::error::export/upload failed"; report export.log; exit $code; fi
+          echo "::notice::Uploaded build ${{ github.run_number }} to TestFlight"
