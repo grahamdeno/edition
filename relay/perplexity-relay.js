@@ -20,6 +20,8 @@
  *                       secret): allowed models only, capped size, a daily
  *                       budget per device and for the whole relay
  *   GET  /ai/usage      today's spend for this device
+ *   POST /stats/report  one install's anonymous counts for one day
+ *   GET  /stats         the last 30 days, totals and retention (owner devices only)
  *   GET  /photo?q=      Openverse photo search (kept for older app versions;
  *                       Shoebox no longer uses it)
  *
@@ -35,8 +37,8 @@
  */
 
 /** What this copy of the relay can do; the app checks it to say when an update is needed. */
-export const RELAY_VERSION = 6;
-export const RELAY_FEATURES = ["preview", "image", "photo", "agent", "push", "remind", "ical", "nhl", "inbox", "apple", "ai"];
+export const RELAY_VERSION = 7;
+export const RELAY_FEATURES = ["preview", "image", "photo", "agent", "push", "remind", "ical", "nhl", "inbox", "apple", "ai", "stats"];
 
 const ALLOWED_ORIGINS = ["https://shoebox.tangomike.app", "https://grahamdeno.github.io"];
 const UPSTREAM = "https://api.perplexity.ai";
@@ -85,6 +87,7 @@ export default {
     if (request.method === "GET" && pathname === "/preview") return preview(searchParams.get("url"), cors, searchParams.get("text") === "1");
     if (request.method === "GET" && pathname === "/version") return new Response(JSON.stringify({ version: RELAY_VERSION, features: RELAY_FEATURES, push: Boolean(env.SHOEBOX), email: env.EMAIL_ADDRESS || null, apple: Boolean(env.APPLE_P8), weatherkit: Boolean(env.APPLE_P8 && env.APPLE_WEATHER_SERVICE_ID), ai: Boolean(env.ANTHROPIC_API_KEY && env.SHOEBOX) }), { headers: { ...cors, "content-type": "application/json" } });
     if (pathname.startsWith("/ai/")) return aiRoute(request, env, pathname, cors);
+    if (pathname === "/stats" || pathname === "/stats/report") return statsRoute(request, env, pathname, cors);
     if (pathname.startsWith("/apple/") || pathname === "/song") return appleRoute(request, env, pathname, searchParams, cors);
     if (request.method === "GET" && pathname === "/nhl") return nhl(searchParams.get("date"), cors);
     if (pathname === "/inbox" || pathname === "/inbox/ack") return inboxRoute(request, env, pathname, cors);
@@ -824,4 +827,80 @@ async function aiRoute(request, env, pathname, cors) {
     return aiJson(502, { error: { message: "The relay's Anthropic key was rejected." } }, cors);
   }
   return aiJson(res.status, data, cors);
+}
+
+/* ---- Anonymous usage stats ----
+ * Each install sends one report a day: counts only (saves, verdicts,
+ * finished editions, kinds of problem), its random stats number and the day
+ * it started. Kept as day totals; the per-install mark exists only to count
+ * each install once and expires after 40 days. The owner reads it back.
+ */
+const STATS_DAYS = 30;
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Checks a report and keeps only what's expected: short names, whole numbers. */
+export function cleanReport(r) {
+  if (!r || typeof r !== "object") return null;
+  if (!/^[a-z0-9]{8,24}$/.test(r.install || "") || !DAY_RE.test(r.day || "") || !DAY_RE.test(r.first || "") || r.first > r.day) return null;
+  const tally = (o) => Object.fromEntries(Object.entries(o && typeof o === "object" ? o : {}).slice(0, 40)
+    .filter(([k, v]) => /^[a-z][a-z0-9_]{0,31}$/.test(k) && Number.isInteger(v) && v > 0 && v <= 10000));
+  return {
+    install: r.install, day: r.day, first: r.first,
+    version: String(r.version || "").replace(/[^0-9.]/g, "").slice(0, 12) || "?",
+    platform: ["web", "ios", "me"].includes(r.platform) ? r.platform : "web",
+    counts: tally(r.counts), errors: tally(r.errors),
+  };
+}
+
+/** Adds one report to a day's totals. */
+export function addReport(day, r) {
+  const d = day || { installs: 0, new: 0, platforms: {}, versions: {}, counts: {}, errors: {}, cohorts: {} };
+  const bump = (o, k, n = 1) => { o[k] = (o[k] || 0) + n; };
+  d.installs++;
+  if (r.first === r.day) d.new++;
+  bump(d.platforms, r.platform); bump(d.versions, r.version); bump(d.cohorts, r.first);
+  for (const [k, v] of Object.entries(r.counts)) bump(d.counts, k, v);
+  for (const [k, v] of Object.entries(r.errors)) bump(d.errors, k, v);
+  return d;
+}
+
+/** Of the installs that started on a day, how many came back 1, 7 and 30 days later. */
+export function retention(days) {
+  const at = (d, n) => { const t = new Date(`${d}T12:00:00Z`); t.setUTCDate(t.getUTCDate() + n); return t.toISOString().slice(0, 10); };
+  return Object.entries(days).filter(([, d]) => d && d.new).map(([day, d]) => {
+    const back = (n) => (days[at(day, n)] ? Math.round(((days[at(day, n)].cohorts[day] || 0) / d.new) * 100) : null);
+    return { day, new: d.new, d1: back(1), d7: back(7), d30: back(30) };
+  });
+}
+
+async function statsRoute(request, env, pathname, cors) {
+  const kv = env.SHOEBOX;
+  if (!kv) return aiJson(503, { error: { message: "Stats aren't set up on the relay." } }, cors);
+  if (request.method === "POST" && pathname === "/stats/report") {
+    const text = await request.text();
+    if (text.length > 4000) return aiJson(413, { error: { message: "Too large." } }, cors);
+    let r;
+    try { r = cleanReport(JSON.parse(text)); } catch { r = null; }
+    if (!r) return aiJson(400, { error: { message: "Bad report." } }, cors);
+    const seen = `sr:${r.day}:${r.install}`;
+    if (await kv.get(seen)) return aiJson(200, { ok: true, dup: true }, cors);
+    await kv.put(seen, "1", { expirationTtl: 40 * 86400 });
+    const key = `st:${r.day}`;
+    await kv.put(key, JSON.stringify(addReport(await kv.get(key, "json"), r)), { expirationTtl: 400 * 86400 });
+    return aiJson(200, { ok: true }, cors);
+  }
+  if (request.method === "GET" && pathname === "/stats") {
+    const device = request.headers.get("x-shoebox-device") || "", token = request.headers.get("x-shoebox-token") || "";
+    const rec = /^[a-z0-9]{1,40}$/.test(device) ? await kv.get(`aid:${device}`, "json") : null;
+    const owner = String(env.AI_OWNER_DEVICES || "").split(",").map((x) => x.trim()).includes(device);
+    if (!rec || !owner || rec.hash !== await sha256(token)) return aiJson(403, { error: { message: "Only the owner can read stats." } }, cors);
+    const days = {};
+    for (let k = 0; k < STATS_DAYS + 30; k++) {
+      const d = new Date(Date.now() - k * 864e5).toISOString().slice(0, 10);
+      const v = await kv.get(`st:${d}`, "json");
+      if (v) days[d] = v;
+    }
+    return aiJson(200, { days, retention: retention(days) }, cors);
+  }
+  return json(404, "Not found.", cors);
 }

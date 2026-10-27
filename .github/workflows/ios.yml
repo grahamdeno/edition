@@ -58,6 +58,7 @@ jobs:
         run: |
           printf '%s\n' "${{ secrets.ASC_KEY_P8 }}" | sed 's/\r$//' > "$RUNNER_TEMP/asc.p8"
           chmod 600 "$RUNNER_TEMP/asc.p8"
+          ls ipa/Payload/*.app/PrivacyInfo.xcprivacy >/dev/null 2>&1 && echo "::notice::Privacy manifest included" || echo "::warning::No privacy manifest in the app"
           mkdir -p ~/.appstoreconnect/private_keys && cp "$RUNNER_TEMP/asc.p8" ~/.appstoreconnect/private_keys/AuthKey_${{ secrets.ASC_KEY_ID }}.p8
       - name: Archive and send to TestFlight
         if: env.HAS_KEY == 'true' && github.ref == 'refs/heads/main'

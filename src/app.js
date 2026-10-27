@@ -36,10 +36,11 @@ import { tick, unlock, soundOn, setSound } from "./feel.js";
 import { I, LOGO } from "./icons.js";
 import { topicColor, dominantColor, tintInks, focusOf } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
+import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 
-export const VERSION = "4.21.0";
+export const VERSION = "4.22.0";
 const APP = "Shoebox";
-const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
+const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
 const KIND_LABEL = { link: "Link", note: "Note", quote: "Quote", photo: "Photo", pdf: "PDF", text: "Text", video: "Video", audio: "Audio", file: "File" };
 const ALL_FILTERS = [
@@ -155,6 +156,8 @@ async function boot() {
   schoolPictures();
   registerWorker();
   toNative({ type: "ready" });
+  track("open");
+  sendReport(ai.relayBase(), { version: VERSION, platform: personal() ? "me" : NATIVE ? "ios" : "web" });
   refreshCalendar();
   loadMorning();
   checkInbox();
@@ -336,6 +339,9 @@ async function rankQueue() {
 /* ================= Data helpers ================= */
 
 async function saveItem(item) {
+  const before = state.items.find((i) => i.id === item.id);
+  if (!before) track(item.suggested ? "story_added" : "save");
+  else if (before.status !== item.status) track(`status_${item.status}`);
   state.items = state.items.some((i) => i.id === item.id)
     ? state.items.map((i) => (i.id === item.id ? item : i))
     : [item, ...state.items];
@@ -1386,6 +1392,28 @@ function supportMail() {
   return `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 }
 
+/** Owner view (Shoebox Me): the last 30 days of anonymous stats, from the relay. */
+async function showUsage(box) {
+  try {
+    const u = await ai.ownerStats();
+    const days = Object.entries(u.days || {}).sort((a, b) => b[0].localeCompare(a[0])).slice(0, 30);
+    if (!days.length) { box.innerHTML = `<p class="note">No reports yet. Each install reports the day after it's used.</p>`; return; }
+    const sum = (k) => days.reduce((n, [, d]) => n + (d.counts[k] || 0), 0);
+    const last7 = days.slice(0, 7);
+    const avg = Math.round(last7.reduce((n, [, d]) => n + d.installs, 0) / last7.length);
+    const ret = (u.retention || []).filter((r) => r.d1 != null).slice(0, 8);
+    const errs = {};
+    days.forEach(([, d]) => Object.entries(d.errors || {}).forEach(([k, v]) => { errs[k] = (errs[k] || 0) + v; }));
+    box.innerHTML = `<p class="note"><b>${avg}</b> active a day (last 7 days) · <b>${days.reduce((n, [, d]) => n + d.new, 0)}</b> new installs in 30 days ·
+        <b>${sum("save")}</b> saves · <b>${sum("edition_finished")}</b> mornings finished</p>
+      <table class="usage"><thead><tr><th>Day</th><th>Active</th><th>New</th><th>Saves</th><th>Done</th></tr></thead><tbody>
+        ${days.slice(0, 14).map(([day, d]) => `<tr><td>${esc(day.slice(5))}</td><td>${d.installs}</td><td>${d.new}</td><td>${d.counts.save || 0}</td><td>${d.counts.edition_finished || 0}</td></tr>`).join("")}</tbody></table>
+      ${ret.length ? `<h3 class="sub">Came back (by start day)</h3><table class="usage"><thead><tr><th>Started</th><th>New</th><th>Day 1</th><th>Day 7</th><th>Day 30</th></tr></thead><tbody>
+        ${ret.map((r) => `<tr><td>${esc(r.day.slice(5))}</td><td>${r.new}</td><td>${r.d1}%</td><td>${r.d7 == null ? "–" : `${r.d7}%`}</td><td>${r.d30 == null ? "–" : `${r.d30}%`}</td></tr>`).join("")}</tbody></table>` : ""}
+      ${Object.keys(errs).length ? `<h3 class="sub">Problems, 30 days</h3><p class="note">${Object.entries(errs).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([k, v]) => `${esc(k.replace(/_/g, " "))}: ${v}`).join(" · ")}</p>` : ""}`;
+  } catch (e) { box.innerHTML = `<p class="note err">${esc(e.message || "Couldn't load stats.")}</p>`; }
+}
+
 /* ================= Welcome =================
  * A new phone starts empty, with four steps done for real in the app: save
  * one thing (with the same + everyone uses), set up the morning, choose
@@ -1422,7 +1450,7 @@ function welcomeHtml() {
   if (flag(ONBOARDED)) return "";
   const steps = welcomeSteps();
   const cur = steps.findIndex((x) => !x.done);
-  if (cur === -1) { setFlag(ONBOARDED, true); setTimeout(() => toast("You're set. Your first edition is below."), 300); return ""; }
+  if (cur === -1) { setFlag(ONBOARDED, true); track("welcome_done"); setTimeout(() => toast("You're set. Your first edition is below."), 300); return ""; }
   const done = steps.filter((x) => x.done).length;
   return `<section class="ask welcome" aria-labelledby="wel-h">
       <div class="ask-top">
@@ -1436,6 +1464,7 @@ function welcomeHtml() {
 }
 
 async function welcomeAction(what, btn) {
+  track(`welcome_${what.replace(/-/g, "_")}`);
   const st = $("#wel-st");
   const say = (msg, err) => { if (st) { st.textContent = msg; st.classList.toggle("err", !!err); } };
   if (what === "add") { openAdd(); return; }
@@ -1472,6 +1501,7 @@ function aiAskHtml() {
 
 function setAi(on) {
   ai.settings.setConsent(on);
+  track(on ? "ai_on" : "ai_off");
   if (on) {
     state.items = state.items.map((i) => ({ ...i, enrichTries: 0 }));
     enrichPending();
@@ -1805,7 +1835,7 @@ function endHtml(s) {
     else tally.later++;
   }
   const first = state.wonDay !== dayKey();
-  if (first) { state.wonDay = dayKey(); db.meta.set("wonDay", state.wonDay); }
+  if (first) { state.wonDay = dayKey(); db.meta.set("wonDay", state.wonDay); track("edition_finished"); }
   return `<section class="end win ${first ? "first" : ""}" aria-label="Today is done">
     <h2>You cleared today.</h2>
     <p>Nothing more until tomorrow morning.</p>
@@ -3554,6 +3584,15 @@ function openSettings(focus = "") {
       <a class="row" href="${supportMail()}"><span class="rk">Contact support</span><span class="sv">support@tangomike.app</span></a>
       <a class="row" href="privacy" target="_blank" rel="noopener"><span class="rk">Privacy</span></a>
     </div>
+    <div class="group">
+      <div class="row"><span class="rk">Anonymous usage stats</span>
+        <div class="seg" role="group" aria-label="Anonymous usage stats"><button type="button" data-stats="1" aria-pressed="${statsOn()}">On</button><button type="button" data-stats="0" aria-pressed="${!statsOn()}">Off</button></div></div>
+      <p class="note">Once a day: counts only (how many saves, finished mornings, kinds of problem), never what you saved. It helps make Shoebox better.</p>
+    </div>
+    ${me ? `<details class="group" id="set-usage">
+      <summary><span>Usage (owner)</span></summary>
+      <div id="set-usage-box"><p class="note">Loading…</p></div>
+    </details>` : ""}
     <details class="group">
       <summary><span>Something wrong?</span><span class="sv">${problems.length ? `${problems.length} logged` : "None"}</span></summary>
       <p class="note" id="set-pr-n"></p>
@@ -3638,6 +3677,11 @@ function openSettings(focus = "") {
     const st2 = $("#set-more-st", wrap);
     try { await navigator.clipboard.writeText($("#set-song-key", wrap).textContent); say(st2, "Song key copied."); } catch { say(st2, "Couldn't copy; select it and copy."); }
   });
+  wrap.querySelectorAll("[data-stats]").forEach((b) => b.addEventListener("click", () => {
+    setStatsOn(b.dataset.stats === "1");
+    wrap.querySelectorAll("[data-stats]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+  }));
+  $("#set-usage", wrap)?.addEventListener("toggle", (ev) => { if (ev.currentTarget.open) showUsage($("#set-usage-box", wrap)); });
   $("#set-mail-check", wrap)?.addEventListener("click", () => checkInbox({ statusEl: $("#set-mail-st", wrap) }));
   if (focus) {
     const g = $(`#${focus}`, wrap);
