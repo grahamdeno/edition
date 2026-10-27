@@ -36,7 +36,7 @@ import { I, LOGO } from "./icons.js";
 import { topicColor, dominantColor, tintInks, focusOf } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "4.9.0";
+export const VERSION = "4.10.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 
@@ -892,11 +892,83 @@ function sectionHead(title, note = "") {
 
 function todayHtml() {
   const s = todaySections();
-  let h = stripHtml(s) + calendarHtml();
+  let h = stripHtml(s) + schoolAskHtml() + calendarHtml();
   if (s.fresh.length) h += sectionHead("New", `${s.fresh.filter(isOpen).length || "All"} to sort`) + s.fresh.map((i) => postHtml(i)).join("");
   if (s.six.length) h += sectionHead("Today's six", `${s.six.filter(isOpen).length} of ${s.six.length} left`) + s.six.map((i) => postHtml(i)).join("");
   if (s.sugg.length) h += sectionHead("Top stories") + s.sugg.map((i) => postHtml(i)).join("");
   return h + endHtml(s);
+}
+
+/* ================= School newsletter =================
+ * On Mondays and Fridays, Today asks whether a newsletter came from school.
+ * Paste its link (Outlook's Safe Links are unwrapped) or its text, and
+ * Shoebox pulls out only what matters for your son, written as a short post
+ * from the school with the dates and to-dos underneath. Needs an Anthropic key;
+ * a link also needs the relay to read the page.
+ */
+const SCHOOL_KEY = "edition.school", SCHOOL_ASKED = "edition.schoolAsked";
+const SCHOOL_DEFAULT = { on: true, days: [1, 5], child: "your son", school: "Myrtle Grove Middle",
+  about: "My son is in 8th grade at Myrtle Grove Middle School. He plays in the band, and plays soccer and lacrosse." };
+function schoolSettings() { try { return { ...SCHOOL_DEFAULT, ...JSON.parse(localStorage.getItem(SCHOOL_KEY) || "{}") }; } catch { return { ...SCHOOL_DEFAULT }; } }
+function setSchoolSettings(v) { try { localStorage.setItem(SCHOOL_KEY, JSON.stringify(v)); } catch { /* private mode */ } }
+const schoolAsked = () => { try { return localStorage.getItem(SCHOOL_ASKED) === dayKey(); } catch { return false; } };
+const markSchoolAsked = () => { try { localStorage.setItem(SCHOOL_ASKED, dayKey()); } catch { /* private mode */ } };
+
+function schoolAskHtml() {
+  const c = schoolSettings();
+  if (!state.schoolForce && (!c.on || !c.days.includes(new Date().getDay()) || schoolAsked())) return "";
+  return `<section class="ask" aria-labelledby="ask-h">
+      <div class="ask-top"><span class="av av-school" aria-hidden="true">${esc((c.school || "S").charAt(0))}</span>
+        <div><h2 id="ask-h">Newsletter from ${esc(c.school || "school")}?</h2><p>Paste the link or the text. You'll get what matters for ${esc(c.child)}.</p></div></div>
+      <label class="sr-only" for="ask-in">Newsletter link or text</label>
+      <textarea id="ask-in" rows="2" placeholder="Paste the link or the newsletter">${esc(state.schoolDraft || "")}</textarea>
+      <div class="ask-acts"><button class="btn primary" type="button" data-school="go">Pull what matters</button>
+        <button class="btn" type="button" data-school="skip">None this time</button></div>
+      <span class="st" id="ask-st" role="status"></span>
+    </section>`;
+}
+
+/** Read a newsletter (link or text) and post what matters. Returns true when a post was made. */
+async function pullNewsletter(raw, statusEl) {
+  const set = (msg, err) => { if (statusEl) { statusEl.textContent = msg; statusEl.classList.toggle("err", !!err); } };
+  const input = String(raw || "").trim();
+  if (!input) { set("Paste the newsletter's link or text first.", true); return false; }
+  if (!ai.settings.enabled()) { set("This needs your Anthropic key (Settings › AI).", true); return false; }
+  const c = schoolSettings();
+  const first = input.split(/\s+/)[0];
+  const isLink = /^https?:\/\/\S+$/i.test(input);
+  let url = isLink ? ai.unwrapLink(first) : "", text = isLink ? "" : input, image = null;
+  if (isLink) {
+    if (!ai.relayBase()) { set("Reading a link needs the relay (Settings › Relay). Or paste the newsletter's text instead.", true); return false; }
+    set("Reading the newsletter…");
+    try {
+      const res = await withTimeout(fetch(`${ai.relayBase()}/preview?text=1&url=${encodeURIComponent(url)}`), 20000);
+      const data = res.ok ? await res.json() : {};
+      text = [data.title, data.description, data.text].filter(Boolean).join("\n\n");
+      image = (await usableImages(candidatesOf(data), { timeout: 6000 }))[0] || null;
+    } catch (e) { noteError(e, { quiet: true, where: "school: read page" }); }
+    if (text.length < 300) { set("That page didn't give up its text (it may need a sign-in or build itself in the browser). Copy the newsletter's text and paste it here instead.", true); return false; }
+  }
+  set("Picking out what matters…");
+  let out;
+  try { out = await ai.schoolPost({ text, about: c.about, school: c.school }); } catch (e) {
+    noteError(e, { quiet: true, where: "school newsletter" });
+    set(e.message || "Couldn't read it.", true);
+    return false;
+  }
+  if (!out.headline && !out.items.length) { set(`Nothing in this one for ${c.child}.`); markSchoolAsked(); return false; }
+  const item = createItem({ kind: KIND.LINK, url: url || undefined, title: out.headline || "This week at school", summary: out.body, tags: out.tags }, { id: db.newId(), source: "school" });
+  Object.assign(item, {
+    school: { name: out.school || c.school, body: out.body, items: out.items },
+    enrichedAt: Date.now(), picSettled: Date.now(), hook: out.body,
+    ...(image ? { imageUrl: image.src, imageAlt: image.alt || undefined, imageCands: [image] } : { coverOff: !url }),
+    ...(url ? {} : { kind: KIND.NOTE, text: out.body }),
+  });
+  await saveItem(item);
+  state.schoolDraft = "";
+  state.schoolForce = false;
+  markSchoolAsked();
+  return true;
 }
 
 /* ================= Today's calendar =================
@@ -1101,6 +1173,7 @@ function tideHtml(waiting) {
 /** Who wrote it and when, in plain words. */
 function byline(item) {
   if (item.suggested) return { who: APP, when: friendlyWhen(item.created) };
+  if (item.school) return { who: item.school.name || "School", when: friendlyWhen(item.created) };
   return { who: "You", when: friendlyWhen(item.created) };
 }
 
@@ -1117,6 +1190,7 @@ function postHtml(item, { compact = false } = {}) {
   // The words at the top: your reason, else Shoebox's line about it (marked as a guess), else nothing.
   let say = "";
   if (item.suggested) say = `<p class="body">${esc(item.suggestReason || item.summary || "Picked from what you finish.")}</p>`;
+  else if (item.school) say = `<p class="school-head">${esc(item.title)}</p><p class="body">${esc(item.school.body || "")}</p>`;
   else if (item.kind === KIND.NOTE) say = `<p class="say">${esc(item.text || item.title)}</p>`;
   else if (item.why) say = `<p class="say">${esc(item.why)}</p>`;
   else if (item.hook && !words) say = `<p class="guess"><span class="sr-only">${APP}'s guess: </span>${esc(item.hook)}</p>`;
@@ -1124,17 +1198,19 @@ function postHtml(item, { compact = false } = {}) {
   const quote = item.kind === KIND.QUOTE ? `<figure class="quote ${String(item.text || "").length > 160 ? "long" : ""}"><blockquote>“${esc(item.text || item.title)}”</blockquote>${item.author ? `<figcaption>${esc(item.author)}</figcaption>` : ""}</figure>${item.why ? `<p class="why-line"><span>Why you kept it</span>${esc(item.why)}</p>` : ""}` : "";
   const points = !compact && item.points && item.points.length && [KIND.LINK, KIND.PDF, KIND.TEXT].includes(item.kind)
     ? `<div class="quick"><h3>Quick read</h3><ul>${item.points.slice(0, 3).map((p) => `<li>${esc(p)}</li>`).join("")}</ul></div>` : "";
+  const coming = item.school && item.school.items?.length ? `<div class="quick coming"><h3>For ${esc(schoolSettings().child || "your son")}</h3><ul>${item.school.items.map((i) =>
+    `<li>${i.date ? `<b>${esc(shortDate(fromDateInput(i.date)))}</b> · ` : ""}${esc(i.text)}</li>`).join("")}</ul></div>` : "";
   const busy = state.enriching.has(item.id) ? `<p class="busy" role="status">Reading it…</p>` : "";
   const replies = repliesHtml(item, compact);
   const tintStyle = item.tint && tintInks(item.tint) ? ` style="--t:${esc(tintInks(item.tint).t)}"` : "";
   return `<article class="post${compact ? " compact" : ""}${settled ? " settled" : ""}${item.tint ? " tinted" : ""}" id="p-${esc(item.id)}" data-id="${esc(item.id)}"${tintStyle}
       aria-label="${esc(b.who)}, ${esc(b.when)}${item.title && !words ? ": " + esc(item.title) : ""}">
-    <div class="rail">${item.suggested ? `<span class="av av-sb" aria-hidden="true">${LOGO}</span>` : avatarHtml()}${replies ? '<span class="line" aria-hidden="true"></span>' : ""}</div>
+    <div class="rail">${item.suggested ? `<span class="av av-sb" aria-hidden="true">${LOGO}</span>` : item.school ? `<span class="av av-school" aria-hidden="true">${esc((item.school.name || "S").charAt(0))}</span>` : avatarHtml()}${replies ? '<span class="line" aria-hidden="true"></span>' : ""}</div>
     <div class="main">
       <div class="meta"><span class="who">${esc(b.who)},</span> <span class="when">${esc(b.when)}</span>${tag}<button class="act icon more" type="button" data-edit="${esc(item.id)}" aria-label="Edit">${I.menu}</button></div>
       ${say}${quote}${why}
       ${mediaHtml(item, compact)}
-      ${busy}${points}
+      ${busy}${item.school ? coming : points}
     </div>
     <div class="acts-row">${settled ? stampHtml(item, settled) : actionsHtml(item, open)}</div>
   </article>${replies}`;
@@ -1256,6 +1332,7 @@ function bindScreen() {
 /* What each render needs wired: the search box and arrow keys on the tabs. */
 function bindTimeline(tl) {
   const q = $("#all-q", tl);
+  $("#ask-in", tl)?.addEventListener("input", (e) => { state.schoolDraft = e.target.value; });
   if (q) q.addEventListener("input", () => {
     state.allQuery = q.value; state.allShown = PAGE;
     clearTimeout(q._t);
@@ -1274,6 +1351,14 @@ async function onTimelineClick(e) {
   const hit = (sel) => t.closest(sel);
   let b;
   if ((b = hit("[data-tab]"))) { selectTab(b.dataset.tab); return; }
+  if ((b = hit("[data-school=go]"))) {
+    b.disabled = true;
+    const ok = await pullNewsletter($("#ask-in")?.value, $("#ask-st"));
+    b.disabled = false;
+    if (ok) { tick(true); render({ top: true }); toast("Posted to the top of New."); }
+    return;
+  }
+  if ((b = hit("[data-school=skip]"))) { markSchoolAsked(); state.schoolDraft = ""; state.schoolForce = false; render({ top: false }); return; }
   if ((b = hit("[data-act]"))) { runAct(b.dataset.act, b); return; }
   if ((b = hit("[data-backnow]"))) {
     const cur = byId(b.dataset.backnow);
@@ -2416,6 +2501,29 @@ async function applyCapPicture(item) {
 
 /* ================= Settings (sheet) ================= */
 
+function bindSchoolSettings(wrap) {
+  const st = $("#set-sc-st", wrap);
+  const read = () => ({ ...schoolSettings(),
+    school: $("#set-sc-school", wrap).value.trim() || SCHOOL_DEFAULT.school,
+    child: $("#set-sc-child", wrap).value.trim() || "your son",
+    about: $("#set-sc-about", wrap).value.trim() || SCHOOL_DEFAULT.about });
+  wrap.querySelectorAll("[data-school-on]").forEach((b) => b.addEventListener("click", () => {
+    const on = b.dataset.schoolOn === "1";
+    setSchoolSettings({ ...read(), on });
+    wrap.querySelectorAll("[data-school-on]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+    render({ top: false });
+  }));
+  $("#set-sc-save", wrap).addEventListener("click", () => { setSchoolSettings(read()); st.textContent = "Saved."; render({ top: false }); });
+  $("#set-sc-now", wrap).addEventListener("click", () => {
+    setSchoolSettings(read());
+    state.schoolForce = true;
+    closeSheet();
+    state.tab = "today";
+    render({ top: true });
+    requestAnimationFrame(() => $("#ask-in")?.focus());
+  });
+}
+
 function bindCalendarSettings(wrap) {
   const st = $("#set-cal-st", wrap);
   const say = (msg, err) => { st.textContent = msg; st.classList.toggle("err", !!err); };
@@ -2525,6 +2633,22 @@ function openSettings() {
       <p class="note">When something you set aside comes back, at 9:00. Needs the relay${push.needsHomeScreen() ? "; on iPhone, open Shoebox from your Home Screen" : ""}.</p>
     </details>
     <details class="group">
+      <summary><span>School newsletter</span><span class="sv">${schoolSettings().on ? "Mon, Fri" : "Off"}</span></summary>
+      <div class="row"><span class="rk">Ask me</span>
+        <div class="seg" role="group" aria-label="Ask me"><button type="button" data-school-on="1" aria-pressed="${schoolSettings().on}">Mon and Fri</button><button type="button" data-school-on="0" aria-pressed="${!schoolSettings().on}">Off</button></div></div>
+      <div class="two">
+        <div class="field"><label for="set-sc-school">School</label><input id="set-sc-school" type="text" autocomplete="off" value="${esc(schoolSettings().school)}"></div>
+        <div class="field"><label for="set-sc-child">Called</label><input id="set-sc-child" type="text" autocomplete="off" placeholder="your son" value="${esc(schoolSettings().child)}"></div>
+      </div>
+      <div class="field"><label for="set-sc-about">What matters <span class="hint">(grade, activities)</span></label>
+        <textarea id="set-sc-about" rows="3">${esc(schoolSettings().about)}</textarea></div>
+      <div class="two">
+        <button class="btn primary" type="button" id="set-sc-save">Save</button>
+        <button class="btn" type="button" id="set-sc-now">Add one now</button>
+      </div>
+      <span class="st" id="set-sc-st" role="status"></span>
+    </details>
+    <details class="group">
       <summary><span>Calendar</span><span class="sv">${calUrls().length ? "On" : "Off"}</span></summary>
       <div class="field"><label for="set-cal">Calendar addresses <span class="hint">(one per line)</span></label>
         <textarea id="set-cal" rows="3" autocapitalize="off" autocomplete="off" spellcheck="false" placeholder="https://calendar.google.com/calendar/ical/…/basic.ics">${esc(calUrls().join("\n"))}</textarea></div>
@@ -2605,6 +2729,7 @@ function openSettings() {
   $("#set-pr-clear", wrap).addEventListener("click", () => { clearProblems(); refreshProblems(wrap); });
   bindPushSettings(wrap);
   bindCalendarSettings(wrap);
+  bindSchoolSettings(wrap);
   const pSt = $("#set-pplx-st", wrap);
   $("#set-pplx-save", wrap).addEventListener("click", async () => {
     ai.settings.setPplxKey($("#set-pplx", wrap).value.trim());
