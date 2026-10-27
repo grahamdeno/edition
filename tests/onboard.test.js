@@ -81,3 +81,18 @@ test("coach forget lets one tip show again", () => {
   c.forget("dbl");
   assert.ok(!c.seen("dbl"));
 });
+
+import { mixStories, followOrder } from "../src/onboard.js";
+
+test("shared stories mix one from each topic, strongest first, tagged by topic", () => {
+  const lists = [
+    { topic: "science", picks: [{ url: "a", tags: ["space"] }, { url: "b" }, { url: "c" }] },
+    { topic: "local:wilmington", picks: [{ url: "a" }, { url: "d" }] },
+    { topic: "tech", picks: [] },
+  ];
+  const out = mixStories(lists, 3, new Set(["c"]));
+  assert.deepEqual(out.map((p) => p.url), ["a", "d", "b"]);
+  assert.deepEqual(out[0].tags, ["science", "space"]);
+  assert.deepEqual(out[1].tags, ["local"]);
+  assert.deepEqual(followOrder({ topics: { tech: 3, science: 4.5, rust: 9, sports: -1 } }), ["science", "tech"]);
+});

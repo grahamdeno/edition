@@ -908,3 +908,34 @@ export async function cpmaiQuestions({ count = 3, seed = 0, recent = [] } = {}) 
   const out = parseJson(textOf(await call({ content: prompt, system: "You write accurate certification practice questions. Reply with JSON only.", maxTokens: 2500, model: QUIZ_MODEL })));
   return cleanQuestions(out, count);
 }
+
+/**
+ * The day's shared top stories for one topic chip ("science"), or local news
+ * for a place. Found once a day on the relay for everyone who follows the
+ * topic, so it costs nothing extra per person. While someone else's search
+ * is running, the relay says to come back; this waits and asks again.
+ */
+export async function topicStories(topic, { place = "" } = {}, retried = false) {
+  if (!settings.consented()) throw new AiError("AI is off. Turn it on in Settings › AI.");
+  const base = relayBase();
+  if (!safeGet(DEVICE_STORE) || !safeGet(TOKEN_STORE)) await register(base);
+  for (let tries = 0; tries < 4; tries++) {
+    let res;
+    try {
+      res = await fetch(`${base}/ai/stories`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-shoebox-device": safeGet(DEVICE_STORE), "x-shoebox-token": safeGet(TOKEN_STORE) },
+        body: JSON.stringify({ topic, place }),
+      });
+    } catch { throw new AiError("Couldn't reach Shoebox's AI. Check your connection.", 0); }
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 401 && data?.error?.code === "register" && !retried) {
+      safeSet(DEVICE_STORE, ""); safeSet(TOKEN_STORE, "");
+      return topicStories(topic, { place }, true);
+    }
+    if (res.status === 202) { await new Promise((r) => setTimeout(r, Math.min(30, data.retry || 20) * 1000)); continue; }
+    if (!res.ok || data.error) throw new AiError(data?.error?.message || `Top stories failed (${res.status}).`, data.status || res.status);
+    return data.picks || [];
+  }
+  return [];
+}

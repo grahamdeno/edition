@@ -37,8 +37,8 @@
  */
 
 /** What this copy of the relay can do; the app checks it to say when an update is needed. */
-export const RELAY_VERSION = 11;
-export const RELAY_FEATURES = ["preview", "image", "photo", "agent", "push", "remind", "ical", "nhl", "inbox", "apple", "ai", "stats"];
+export const RELAY_VERSION = 12;
+export const RELAY_FEATURES = ["preview", "image", "photo", "agent", "push", "remind", "ical", "nhl", "inbox", "apple", "ai", "stats", "stories"];
 
 const ALLOWED_ORIGINS = ["https://shoebox.tangomike.app", "https://grahamdeno.github.io"];
 const UPSTREAM = "https://api.perplexity.ai";
@@ -877,7 +877,7 @@ async function aiRoute(request, env, pathname, cors, ctx = null) {
     const ip = request.headers.get("cf-connecting-ip") || "unknown";
     const rk = `air:${ip}:${today}`;
     const n = await spent(kv, rk);
-    if (n >= 10) return aiJson(429, { error: { message: "Too many new installs from this network today." } }, cors);
+    if (n >= 5) return aiJson(429, { error: { message: "Too many new installs from this network today." } }, cors);
     await kv.put(rk, String(n + 1), { expirationTtl: 2 * 86400 });
     const device = randomId(10), token = randomId(24);
     await kv.put(`aid:${device}`, JSON.stringify({ hash: await sha256(token), at: Date.now() }));
@@ -891,15 +891,25 @@ async function aiRoute(request, env, pathname, cors, ctx = null) {
   const owner = String(env.AI_OWNER_DEVICES || "").split(",").map((x) => x.trim()).includes(device);
   const deviceCap = (parseFloat(env.AI_DEVICE_DAILY_CENTS) || 25) * 100;
   const allCap = (parseFloat(env.AI_DAILY_CENTS) || 500) * 100;
-  const dk = `aiq:${device}:${today}`, ak = `aiq:all:${today}`;
-  const [mine, all] = await Promise.all([spent(kv, dk), spent(kv, ak)]);
+  const ip = request.headers.get("cf-connecting-ip") || "unknown";
+  const ipCap = (parseFloat(env.AI_NETWORK_DAILY_CENTS) || 75) * 100;
+  const dk = `aiq:${device}:${today}`, ak = `aiq:all:${today}`, nk = `aiq:ip:${ip}:${today}`;
+  const [mine, all, net] = await Promise.all([spent(kv, dk), spent(kv, ak), spent(kv, nk)]);
+  /** Charge a cost to this install, its network, and the whole relay. */
+  const charge = (cost, { device: toDevice = true } = {}) => Promise.all([
+    toDevice ? kv.put(dk, String(mine + cost), { expirationTtl: 3 * 86400 }) : null,
+    toDevice ? kv.put(nk, String(net + cost), { expirationTtl: 2 * 86400 }) : null,
+    kv.put(ak, String(all + cost), { expirationTtl: 3 * 86400 }),
+  ]);
 
   if (request.method === "GET" && pathname === "/ai/usage") {
     return aiJson(200, { device, owner, cents: mine / 100, limit: owner ? null : deviceCap / 100 }, cors);
   }
+  if (request.method === "POST" && pathname === "/ai/stories") return storiesRoute(request, env, { kv, today, owner, ctx, cors, charge, over: all >= allCap, mineOver: !owner && (mine >= deviceCap || net >= ipCap) });
   if (request.method !== "POST" || pathname !== "/ai/messages") return json(404, "Not found.", cors);
   if (all >= allCap) return aiJson(429, { error: { message: "Shoebox's AI is resting for today. It's back tomorrow." } }, cors);
   if (!owner && mine >= deviceCap) return aiJson(429, { error: { message: "You've used today's AI allowance. It resets tomorrow." } }, cors);
+  if (!owner && net >= ipCap) return aiJson(429, { error: { message: "This network has used today's AI allowance. It resets tomorrow." } }, cors);
 
   const text = await request.text();
   if (text.length > AI_MAX_BODY) return aiJson(413, { error: { message: "That's too large to send." } }, cors);
@@ -922,11 +932,7 @@ async function aiRoute(request, env, pathname, cors, ctx = null) {
     }
     const data = await res.json().catch(() => ({}));
     if (res.ok) {
-      const cost = aiCost(body.model, data.usage);
-      await Promise.all([
-        kv.put(dk, String(mine + cost), { expirationTtl: 3 * 86400 }),
-        kv.put(ak, String(all + cost), { expirationTtl: 3 * 86400 }),
-      ]);
+      await charge(aiCost(body.model, data.usage));
       return [200, data];
     }
     if (res.status === 401 || res.status === 403) return [502, { error: { message: "The relay's Anthropic key was rejected." } }];
@@ -936,27 +942,111 @@ async function aiRoute(request, env, pathname, cors, ctx = null) {
   // A web search can take over a minute, longer than a phone waits for a silent connection.
   // So those answers start at once and send a space every 10 seconds (JSON ignores leading
   // spaces) until Claude's answer follows; an error comes as {"error":…,"status":…}.
-  if (Array.isArray(body.tools) && body.tools.length) {
-    const { readable, writable } = new TransformStream();
-    const w = writable.getWriter(), enc = new TextEncoder();
-    const beat = setInterval(() => { w.write(enc.encode(" ")).catch(() => {}); }, 10000);
-    const work = (async () => {
-      try {
-        const [status, data] = await ask();
-        await w.write(enc.encode(JSON.stringify(status === 200 ? data : { ...data, status })));
-      } catch (e) {
-        await w.write(enc.encode(JSON.stringify({ error: { message: "The relay hit a problem." }, status: 500 }))).catch(() => {});
-      } finally {
-        clearInterval(beat);
-        await w.close().catch(() => {});
-      }
-    })();
-    if (ctx && ctx.waitUntil) ctx.waitUntil(work);
-    w.write(enc.encode(" ")).catch(() => {});
-    return new Response(readable, { status: 200, headers: { ...cors, "content-type": "application/json", "cache-control": "no-store" } });
-  }
+  if (Array.isArray(body.tools) && body.tools.length) return slowAnswer(ask, ctx, cors);
   const [status, data] = await ask();
   return aiJson(status, data, cors);
+}
+
+/** A long job (web search): answer at once and send a space every 10 seconds until the JSON follows. */
+function slowAnswer(job, ctx, cors) {
+  const { readable, writable } = new TransformStream();
+  const w = writable.getWriter(), enc = new TextEncoder();
+  const beat = setInterval(() => { w.write(enc.encode(" ")).catch(() => {}); }, 10000);
+  const work = (async () => {
+    try {
+      const [status, data] = await job();
+      await w.write(enc.encode(JSON.stringify(status === 200 ? data : { ...data, status })));
+    } catch (e) {
+      await w.write(enc.encode(JSON.stringify({ error: { message: "The relay hit a problem." }, status: 500 }))).catch(() => {});
+    } finally {
+      clearInterval(beat);
+      await w.close().catch(() => {});
+    }
+  })();
+  if (ctx && ctx.waitUntil) ctx.waitUntil(work);
+  w.write(enc.encode(" ")).catch(() => {});
+  return new Response(readable, { status: 200, headers: { ...cors, "content-type": "application/json", "cache-control": "no-store" } });
+}
+
+/* ---- Shared top stories ----
+ * The day's top stories for each topic chip are found once and shared by
+ * everyone who follows that topic, so the cost doesn't grow with the number
+ * of people. Local news is per place and counts against the asker's allowance.
+ */
+export const STORY_TOPICS = {
+  world: "world news", us: "United States national news", tech: "technology", science: "science",
+  business: "business and the economy", sports: "sports", history: "history: discoveries, anniversaries and new findings about the past",
+  health: "health and medicine", arts: "arts, books, film and music",
+};
+const STORY_MODEL = "claude-haiku-5-5", STORY_COUNT = 4, STORY_DAYS_BACK = 3;
+const NOT_NEWS_SITES = ["reddit.com", "quora.com", "pinterest.com", "x.com", "twitter.com", "facebook.com", "instagram.com", "tiktok.com",
+  "linkedin.com", "news.google.com", "msn.com", "yahoo.com", "amazon.com"];
+export function storyKey(topic, place = "") {
+  const t = String(topic || "").toLowerCase();
+  if (t === "local") {
+    const p = String(place || "").replace(/[^A-Za-z .,'-]/g, "").replace(/\s+/g, " ").trim().slice(0, 40);
+    return p ? { id: `local:${p.toLowerCase()}`, about: `local news in and around ${p}`, local: true } : null;
+  }
+  return STORY_TOPICS[t] ? { id: t, about: STORY_TOPICS[t], local: false } : null;
+}
+export function storyPrompt(about, now = Date.now()) {
+  return `Today is ${new Date(now).toDateString()}. Find the ${STORY_COUNT} top stories of the last ${STORY_DAYS_BACK} days in ${about}: ` +
+    `the most important, most-covered news, the way a good front page would lead with it.\n` +
+    `- One story each: no two picks about the same event.\n` +
+    `- Link the original reporting from an established outlet or the primary source, not an aggregator, a forum or a rewrite.\n` +
+    `- Skip opinion columns, listicles, how-to guides, product pages, press-release reposts and anything older than ${STORY_DAYS_BACK} days.\n` +
+    `- Order by how big the story is, biggest first.\n\n` +
+    `Search, then reply with JSON only: {"picks":[{"title":string,"url":string,"why":string (one plain sentence, max 120 chars: what happened and why it matters; no hype),"tags":[1-3 lowercase words],"minutes":integer}]}`;
+}
+export function readPicks(data) {
+  const text = (data?.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n");
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+  const src = fenced ? fenced[1] : text;
+  const a = src.indexOf("{"), b = src.lastIndexOf("}");
+  let out = {};
+  try { out = JSON.parse(src.slice(a, b + 1)); } catch { return []; }
+  const clip = (x, n) => String(x || "").trim().slice(0, n);
+  return (out.picks || []).filter((p) => p && /^https?:\/\//.test(p.url || "")).slice(0, STORY_COUNT).map((p) => ({
+    title: clip(p.title, 160), url: String(p.url).slice(0, 600), why: clip(p.why, 200),
+    tags: (Array.isArray(p.tags) ? p.tags : []).map((t) => String(t).toLowerCase().replace(/[^a-z0-9 -]/g, "").trim()).filter(Boolean).slice(0, 3),
+    minutes: Math.max(1, Math.min(60, parseInt(p.minutes, 10) || 4)),
+  }));
+}
+
+async function storiesRoute(request, env, { kv, today, ctx, cors, charge, over, mineOver }) {
+  const { topic, place } = await request.json().catch(() => ({}));
+  const k = storyKey(topic, place);
+  if (!k) return aiJson(400, { error: { message: "Unknown topic." } }, cors);
+  const key = `ts:${today}:${k.id}`;
+  const cached = await kv.get(key, "json");
+  if (cached) return aiJson(200, { ...cached, topic: k.id, shared: true }, cors);
+  if (over) return aiJson(429, { error: { message: "Shoebox's AI is resting for today. It's back tomorrow." } }, cors);
+  if (k.local && mineOver) return aiJson(429, { error: { message: "You've used today's AI allowance. It resets tomorrow." } }, cors);
+  // One search per topic a day: whoever asks first runs it; anyone asking meanwhile is told to come back.
+  const lock = `tsl:${today}:${k.id}`;
+  if (await kv.get(lock)) return aiJson(202, { pending: true, retry: 20 }, cors);
+  await kv.put(lock, "1", { expirationTtl: 180 });
+  const job = async () => {
+    const body = {
+      model: STORY_MODEL, max_tokens: 2500,
+      system: "You are the front-page editor for a calm personal news app. Pick the stories that matter most today. Write plainly.",
+      messages: [{ role: "user", content: storyPrompt(k.about) }],
+      tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 5, blocked_domains: NOT_NEWS_SITES }],
+    };
+    let res;
+    try {
+      res = await fetch(ANTHROPIC_URL, { method: "POST", headers: { "content-type": "application/json", "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" }, body: JSON.stringify(body) });
+    } catch { await kv.delete(lock); return [502, { error: { message: "The relay couldn't reach Claude." } }]; }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) { await kv.delete(lock); return [res.status === 401 || res.status === 403 ? 502 : res.status, { error: { message: data?.error?.message || "Claude couldn't search right now." } }]; }
+    await charge(aiCost(STORY_MODEL, data.usage), { device: k.local });
+    const picks = readPicks(data);
+    const out = { picks, at: Date.now() };
+    if (picks.length) await kv.put(key, JSON.stringify(out), { expirationTtl: 36 * 3600 });
+    await kv.delete(lock);
+    return [200, { ...out, topic: k.id, shared: false }];
+  };
+  return slowAnswer(job, ctx, cors);
 }
 
 /* ---- Anonymous usage stats ----

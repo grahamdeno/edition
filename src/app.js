@@ -37,9 +37,9 @@ import { I, LOGO } from "./icons.js";
 import { topicColor, dominantColor, tintInks, focusOf } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
-import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone } from "./onboard.js";
+import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone, mixStories, followOrder } from "./onboard.js";
 
-export const VERSION = "4.36.0";
+export const VERSION = "4.37.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -582,6 +582,19 @@ async function backfillHooks() {
   }
 }
 
+/** Today's stories from the shared per-topic searches, up to three, for the topics followed (four at most). */
+async function sharedPicks(known) {
+  const topics = followOrder(state.suggest).slice(0, 4);
+  if (!topics.length) return [];
+  const place = placeOf(morningSettings())?.name || "";
+  const lists = await Promise.all(topics.map(async (t) => {
+    if (t === "local" && !place) return { topic: t, picks: [] };
+    const picks = await ai.topicStories(t, { place: t === "local" ? place : "" }).catch((e) => { noteError(e, { quiet: true, where: `stories: ${t}` }); return []; });
+    return { topic: t === "local" ? `local:${place}` : t, picks };
+  }));
+  return mixStories(lists, 3, known);
+}
+
 async function findNew(statusEl) {
   const set = (msg, err) => { if (statusEl) { statusEl.textContent = msg; statusEl.classList.toggle("err", !!err); } };
   if (!ai.settings.canDiscover()) { set("Turn on AI in Settings first.", true); return 0; }
@@ -589,7 +602,9 @@ async function findNew(statusEl) {
   try {
     const known = new Set(state.items.map((i) => i.url).filter(Boolean));
     const profile = withFollows(interestProfile(discoveryItems(state.items)), state.suggest, { place: placeOf(morningSettings())?.name || "" });
-    const picks = await ai.discover(profile, { known, guide: suggestionGuide(state.suggest), vocab: vocab(), blocked: state.suggest?.blocked || [] });
+    // Topics followed in Build my morning share one search a day with everyone; otherwise a search of their own.
+    let picks = await sharedPicks(known).catch((e) => { noteError(e, { quiet: true, where: "shared stories" }); return []; });
+    if (!picks.length) picks = await ai.discover(profile, { known, guide: suggestionGuide(state.suggest), vocab: vocab(), blocked: state.suggest?.blocked || [] });
     const fresh = await tagPicks(screenSuggestions(picks.filter((p) => !known.has(p.url)), state.suggest));
     for (const p of fresh) {
       const item = createItem(
