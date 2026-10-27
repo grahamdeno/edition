@@ -917,3 +917,13 @@ input.time { font: 600 1rem var(--sans); color: var(--fg); background: var(--sof
 .feat > div { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .feat span { font-size: 0.875rem; color: var(--muted); }
 .feat .btn { flex: none; }
+
+/* ===== Larger text and touch targets (Dynamic Type, VoiceOver) ===== */
+.i { width: max(20px, 1.2rem); height: max(20px, 1.2rem); }
+.seg button { min-height: 44px; }
+.chips.kinds .chip { position: relative; }
+.chips.kinds .chip::after { content: ""; position: absolute; inset: -6px 0; }
+.chips.kinds { padding: 6px 0; margin-top: -10px; }
+details.adv > summary, .group details.adv > summary, .ag-more summary { min-height: 44px; }
+.me-row { flex-wrap: wrap; }
+.row .sv { min-width: 0; overflow-wrap: anywhere; text-align: right; }
