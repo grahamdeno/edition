@@ -38,6 +38,8 @@ When everything is settled, the end of Today shows what you cleared as a collage
 
 **Pictures.** Photos run edge to edge. A link shows a picture from its own page: the relay reads every photo on the page, Shoebox drops anything small, strip-shaped or broken, and the AI picks the one that best represents it (or the first, without a key). When you save a link in Add, the candidates show as a picker so you can choose, use your own photo, or have no picture at all. Edit offers the same picker later. Each picture tints its post faintly with its main colour. Stock photos are no longer searched for.
 
+**Add.** Paste or type into the box, or use **Paste** and **Photo or file** under it. Once Shoebox knows what it is, the same fields as Edit appear: Picture (a row of the page's photos), Title (filled in from the page), Why you're saving it, Your note, Tags (with your most used tags one tap away) and Minutes. Anything you type there, the AI leaves alone; blank tags and minutes are filled in for you. Several things at once share the reason and tags. Save stays pinned at the bottom.
+
 **Your photo.** Settings › Your photo sets the face on your posts. It stays on the phone.
 
 **Appearance.** Settings › Appearance: Match phone (default), Light or Dark. The choice is applied before the first paint, so the app never flashes the other look.

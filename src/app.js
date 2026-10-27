@@ -33,7 +33,7 @@ import { I, LOGO } from "./icons.js";
 import { topicColor, dominantColor, tintInks } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "4.4.1";
+export const VERSION = "4.5.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 
@@ -59,6 +59,7 @@ const state = {
   capText: "",
   capFiles: [],
   capWhy: "",
+  capForm: {},       // the other Add fields: title, note, author, tags, minutes (and which you typed)
   capPic: null,      // the picture picker in Add: { url, status, list, choice, ownFile, ownUrl }
   enriching: new Set(),
   reader: null,      // { mode: "single", ids: [id], index: 0, total: 1 }
@@ -414,10 +415,10 @@ async function enrichPending() {
         } else if (cur) {
           const upd = {
             ...cur,
-            title: cur.editedAt ? cur.title : out.title || cur.title,
+            title: cur.editedAt || cur.titleMine ? cur.title : out.title || cur.title,
             summary: out.summary || cur.summary,
-            tags: tags.length ? tags : cur.tags,
-            minutes: out.minutes || cur.minutes,
+            tags: cur.tagsMine || !tags.length ? cur.tags : tags,
+            minutes: cur.minutesMine ? cur.minutes : out.minutes || cur.minutes,
             intent: out.intent || cur.intent,
             points: out.points.length ? out.points : cur.points,
             transcript: out.transcript || cur.transcript,
@@ -1594,6 +1595,7 @@ function openEdit(id) {
       state.tagAliases = released;
       await db.meta.set("tagAliases", released);
     }
+    if (typed.join() !== (cur.tags || []).join()) next.tagsMine = true;
     next.tags = typed;
     const m = Math.round(+val("minutes"));
     next.minutes = Number.isFinite(m) && m > 0 ? Math.min(m, 600) : cur.minutes;
@@ -1760,28 +1762,45 @@ async function deleteItem(id) {
 /* ================= Add (sheet) ================= */
 
 function openAdd() {
+  const F = state.capForm;
+  const field = (key, label, { area = false, type = "text", hint = "", ph = "", rows = 2, attrs = "" } = {}) => `<div class="field" data-f="${key}" hidden>
+      <label for="cap-${key}">${label}${hint ? ` <span class="hint">${hint}</span>` : ""}</label>
+      ${area
+        ? `<textarea id="cap-${key}" rows="${rows}" placeholder="${esc(ph)}" ${attrs}>${esc(key === "why" ? state.capWhy : F[key] || "")}</textarea>`
+        : `<input id="cap-${key}" type="${type}" autocomplete="off" placeholder="${esc(ph)}" value="${esc(F[key] ?? "")}" ${attrs}>`}
+    </div>`;
   const wrap = sheet(`
     <div class="sheet-head"><h2>Add</h2><button class="x" type="button" data-close aria-label="Close">${I.close}</button></div>
     <div class="cap">
       <label class="sr-only" for="cap-text">Link, note, quote or anything</label>
-      <textarea id="cap-text" placeholder="Paste a link or a quote, or type a thought.">${esc(state.capText)}</textarea>
+      <textarea id="cap-text" rows="2" placeholder="Paste a link or a quote, or type a thought.">${esc(state.capText)}</textarea>
+      <div class="cap-src">
+        <button class="chip" type="button" id="cap-paste">${I.paste}<span>Paste</span></button>
+        <button class="chip" type="button" id="cap-attach">${I.attach}<span>Photo or file</span></button>
+      </div>
     </div>
-    <div class="field why-field"><label for="cap-why">Why are you saving this? <span>Optional. It's the first thing you'll see when it comes back.</span></label>
-      <input id="cap-why" type="text" autocomplete="off" maxlength="140" placeholder="Read this before the roadmap review" value="${esc(state.capWhy)}"></div>
     <div class="tray" id="cap-tray"></div>
+    <ul class="detect" id="cap-detect" aria-live="polite"></ul>
     <div class="cap-pics" id="cap-pics" hidden></div>
     <input type="file" id="cap-own" accept="image/*" hidden>
-    <ul class="detect" id="cap-detect" aria-live="polite"></ul>
-    <span class="st" id="cap-st" role="status"></span>
-    <div class="cap-bar">
-      <button class="round" type="button" id="cap-paste" aria-label="Paste from clipboard">${I.paste}</button>
-      <button class="save" type="button" id="cap-save">Save</button>
-      <button class="round" type="button" id="cap-attach" aria-label="Attach photos or files">${I.attach}</button>
+    ${field("title", "Title", { ph: "Fills in from the page" })}
+    ${field("author", "Who said it")}
+    ${field("why", "Why you're saving it", { area: true, hint: "(top of the post)", ph: "Read this before the roadmap review", attrs: 'maxlength="140"' })}
+    ${field("note", "Your note", { area: true, ph: "Anything you want to remember about it" })}
+    <div class="two cap-tm" data-f="tags" hidden>
+      ${field("tags", "Tags", { ph: ai.settings.enabled() ? "Blank: AI picks" : "scrum, ai", attrs: 'autocapitalize="off"' }).replace(' hidden>', ">")}
+      ${field("minutes", "Minutes", { type: "number", ph: "Auto", attrs: 'inputmode="numeric" min="1"' }).replace(' hidden>', ">")}
+    </div>
+    <div class="chips tag-chips cap-tagpick" id="cap-tagpick" hidden></div>
+    <div class="cap-foot">
+      <span class="st" id="cap-st" role="status"></span>
+      <button class="btn primary save" type="button" id="cap-save">Save</button>
     </div>
     <input type="file" id="in-any" multiple hidden>`, { label: "Add" });
   wrap.classList.add("adding");
   const ta = $("#cap-text", wrap);
-  ta.addEventListener("input", () => { state.capText = ta.value; updateDetect(); });
+  const grow = (el, max) => { el.style.height = "auto"; el.style.height = `${Math.min(el.scrollHeight + 2, max)}px`; };
+  ta.addEventListener("input", () => { state.capText = ta.value; grow(ta, 240); updateDetect(); });
   ta.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) saveCapture(); });
   ta.addEventListener("paste", (e) => {
     const files = Array.from(e.clipboardData?.files || []);
@@ -1789,8 +1808,29 @@ function openAdd() {
     e.preventDefault();
     stageFiles(files);
   });
-  $("#cap-why", wrap).addEventListener("input", (e) => { state.capWhy = e.target.value; });
-  $("#cap-why", wrap).addEventListener("keydown", (e) => { if (e.key === "Enter") saveCapture(); });
+  const why = $("#cap-why", wrap);
+  why.addEventListener("input", () => { state.capWhy = why.value; grow(why, 160); });
+  for (const k of ["title", "author", "note", "tags", "minutes"]) {
+    const el = $(`#cap-${k}`, wrap);
+    el.addEventListener("input", () => {
+      F[k] = el.value;
+      if (k === "title") F.titleTyped = true;
+      if (k === "tags") renderTagPick();
+      if (el.tagName === "TEXTAREA") grow(el, 200);
+    });
+    if (el.tagName === "INPUT") el.addEventListener("keydown", (e) => { if (e.key === "Enter") saveCapture(); });
+  }
+  [why, $("#cap-note", wrap)].forEach((el) => el.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) saveCapture(); }));
+  $("#cap-tagpick", wrap).addEventListener("click", (e) => {
+    const b = e.target.closest("[data-tag]");
+    if (!b) return;
+    const el = $("#cap-tags", wrap);
+    const list = el.value.split(",").map((t) => t.trim()).filter(Boolean);
+    const at = list.findIndex((t) => normTag(t) === b.dataset.tag);
+    if (at >= 0) list.splice(at, 1); else list.push(b.dataset.tag);
+    el.value = F.tags = list.join(", ");
+    renderTagPick();
+  });
   $("#cap-save", wrap).addEventListener("click", saveCapture);
   $("#cap-attach", wrap).addEventListener("click", () => { unlock(); $("#in-any", wrap).click(); });
   $("#cap-paste", wrap).addEventListener("click", pasteIntoBox);
@@ -1807,7 +1847,19 @@ function openAdd() {
   input.addEventListener("change", () => { stageFiles(Array.from(input.files || [])); input.value = ""; });
   renderTray();
   updateDetect();
-  $("#cap-text", wrap).focus();
+  renderTagPick();
+  [ta, why, $("#cap-note", wrap)].forEach((el) => el.value && grow(el, 240));
+  ta.focus();
+}
+
+/** Your most used tags, one tap to add or remove. */
+function renderTagPick() {
+  const box = $("#cap-tagpick");
+  if (!box) return;
+  const on = new Set(String(state.capForm.tags || "").split(",").map(normTag).filter(Boolean));
+  const top = vocab().slice(0, 8);
+  box.innerHTML = top.map((t) => `<button class="chip" type="button" data-tag="${esc(t)}" aria-pressed="${on.has(t)}">${esc(t)}</button>`).join("");
+  box.hidden = !top.length || $("[data-f=tags]")?.hidden;
 }
 
 /** What will be saved, line by line, so there are no surprises. */
@@ -1821,12 +1873,20 @@ function updateDetect() {
   const list = $("#cap-detect");
   if (!list) return;
   const drafts = stagedDrafts();
+  const one = drafts.length === 1 ? drafts[0] : null;
   list.innerHTML = drafts.map((d) => {
-    const detail = d.kind === KIND.NOTE || d.kind === KIND.QUOTE ? "" : d.fileName || (d.videoId ? "" : d.url) || "";
-    return `<li>${I.arrow}<span class="what">${esc(describeDraft(d))}</span><span class="d">${esc(detail)}</span></li>`;
+    const detail = one || d.kind === KIND.NOTE || d.kind === KIND.QUOTE ? "" : d.fileName || (d.videoId ? "" : d.url) || "";
+    return `<li>${I.arrow}<span class="what">${esc(describeDraft(d))}</span>${detail ? `<span class="d">${esc(detail)}</span>` : ""}</li>`;
   }).join("");
+  // The same fields as Edit, once there's something to describe. Several at once share why and tags.
+  const words = one && (one.kind === KIND.NOTE || one.kind === KIND.QUOTE);
+  const show = { why: drafts.length > 0, tags: drafts.length > 0, title: one && !words, author: one && one.kind === KIND.QUOTE, note: one && !words };
+  for (const [k, on] of Object.entries(show)) { const el = $(`[data-f=${k}]`); if (el) el.hidden = !on; }
+  const tags = $("#cap-tags");
+  if (tags) tags.closest(".cap-tm").classList.toggle("solo", !one);
+  renderTagPick();
   const save = $("#cap-save");
-  save.classList.toggle("ready", drafts.length > 0);
+  save.disabled = !drafts.length;
   save.textContent = drafts.length > 1 ? `Save ${drafts.length} items` : "Save";
   schedulePreview();
 }
@@ -1906,17 +1966,47 @@ async function saveCapture() {
     out.push(await captureFile(f.file, "drop"));
     if (f.url) URL.revokeObjectURL(f.url);
   }
-  const why = (state.capWhy || "").trim().slice(0, 140);
-  if (why) for (const it of out) if (it) { it.why = why; await db.items.put(it); }
   for (let k = 0; k < out.length; k++) out[k] = await applyCapPicture(out[k]);
+  await applyCapFields(out);
   if (state.capPic?.ownUrl) URL.revokeObjectURL(state.capPic.ownUrl);
   state.capText = "";
   state.capFiles = [];
   state.capWhy = "";
+  state.capForm = {};
   state.capPic = null;
   closeSheet();
   afterCapture(out);
 }
+/** Put what you filled in on Add onto what was saved. What you typed, the AI leaves alone. */
+async function applyCapFields(out) {
+  const F = state.capForm, list = out.filter(Boolean), one = list.length === 1 ? list[0] : null;
+  const why = (state.capWhy || "").trim().slice(0, 140);
+  const typed = canonTags(String(F.tags || "").split(","), {}, MAX_TAGS);
+  if (typed.length) {
+    const released = releaseTags(state.tagAliases, typed);
+    if (Object.keys(released).length !== Object.keys(state.tagAliases).length) { state.tagAliases = released; await db.meta.set("tagAliases", released); }
+  }
+  const m = Math.round(+F.minutes);
+  for (const it of list) {
+    if (why) it.why = why;
+    if (typed.length) { it.tags = typed; it.tagsMine = true; }
+    if (it === one) {
+      const words = it.kind === KIND.NOTE || it.kind === KIND.QUOTE;
+      const title = String(F.title || "").trim();
+      if (!words && F.titleTyped && title) { it.title = title.slice(0, 140); it.titleMine = true; }
+      const note = String(F.note || "").trim();
+      if (!words && note) {
+        if (it.kind === KIND.LINK) it.text = [it.text, note].filter(Boolean).join("\n\n");
+        else it.note = note;
+      }
+      const author = String(F.author || "").trim();
+      if (it.kind === KIND.QUOTE && author) it.author = author.slice(0, 80);
+      if (Number.isFinite(m) && m > 0) { it.minutes = Math.min(m, 600); it.minutesMine = true; }
+    }
+    await db.items.put(it);
+  }
+}
+
 /* ================= Choosing a picture =================
  * The same picker in Add and in Edit: the page's own pictures (only ones
  * that loaded and are big enough), your own photo, or no picture.
@@ -1958,7 +2048,11 @@ async function loadPreview(url) {
     if (res.ok) {
       const data = await res.json();
       list = await usableImages(candidatesOf(data), { timeout: 6000 });
-      if (state.capPic && state.capPic.url === url) state.capPic.page = { title: data.title, description: data.description, site: data.site };
+      if (state.capPic && state.capPic.url === url) {
+        state.capPic.page = { title: data.title, description: data.description, site: data.site };
+        const t = $("#cap-title");
+        if (t && data.title && !state.capForm.titleTyped) { t.value = state.capForm.title = String(data.title).slice(0, 140); }
+      }
     }
   } catch (e) { noteError(e, { quiet: true, where: "add: page pictures" }); }
   const p = state.capPic;
