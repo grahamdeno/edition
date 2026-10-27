@@ -703,3 +703,16 @@ details.group[open] { padding-bottom: 14px; }
 .cq-o:disabled { opacity: 1; }
 .cq-why { margin: 8px 0 0; font-size: 0.9rem; color: var(--muted); }
 .cq-why b { color: var(--fg); }
+
+/* Song of the day, Apple Weather */
+.song { display: flex; gap: 12px; align-items: center; margin-top: 6px; }
+.song .art { width: 84px; height: 84px; border-radius: 12px; object-fit: cover; flex: none; background: var(--soft); }
+.song-t { min-width: 0; }
+.song-t .ttl { margin: 0; font: 400 1.4rem/1.2 var(--serif); }
+.song-acts { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.song-acts .btn { display: inline-flex; align-items: center; gap: 6px; text-decoration: none; }
+.song-acts .i { width: 16px; height: 16px; }
+.wx-next { color: var(--fg); font-weight: 500; }
+.wx-attr { margin: 6px 0 0; font-size: 0.75rem; }
+.wx-attr a { color: var(--faint); text-decoration: none; }
+.post.daily .rail { align-self: start; }

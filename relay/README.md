@@ -33,6 +33,21 @@ Forward any email to your own address (for example `shoebox@yourdomain.com`) and
 
 Mail waits at the relay for up to 30 days until Shoebox collects it, then it's deleted there.
 
+## Your Apple key (Song of the day, Apple Weather, Maps)
+
+The relay signs Apple's access tokens with your key. Its Key ID (79QU7DSTN9) and Team ID (7MHDTK68M2) are built in; only the key file itself is secret.
+
+1. In Cloudflare, open the Worker › **Settings** › **Variables and Secrets** › **Add**.
+2. Type **Secret**, name `APPLE_P8`, value: open your `AuthKey_79QU7DSTN9.p8` in a text editor and paste everything, including the BEGIN and END lines. Save.
+3. For Apple Weather, add a text variable `APPLE_WEATHER_SERVICE_ID` with your WeatherKit Services ID (for example `com.grahamdeno.shoebox.weather`). Until it's set, the weather card uses the free source.
+4. Deploy. In Shoebox, Settings › Relay › Save and test.
+
+**Song of the day Shortcut** (Shortcuts app on your iPhone):
+
+1. New Shortcut › **Find Music** › Filter: *Play Count* is greater than 0 › Sort by *Last Played*, *Oldest First* › Limit 1.
+2. **Get Contents of URL**: your relay address + `/song`, Method **POST**, Header `x-song-key` = the Song key from Shoebox (Settings › Mornings), Request Body **JSON** with `title` = Music's *Name*, `artist` = *Artist*, `lastPlayed` = *Last Played*.
+3. Automation › **Time of Day** 6:00 AM, Daily › Run Immediately › run this Shortcut.
+
 ## Updating
 
 When this folder changes, copy `perplexity-relay.js` over the one in your `shoebox-relay` repository (or ask Claude to). Cloudflare redeploys on its own. The address stays the same.

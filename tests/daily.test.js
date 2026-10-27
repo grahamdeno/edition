@@ -40,3 +40,16 @@ test("a Jung quote each day, with its source", () => {
   assert.equal(compass(225), "SW");
   assert.equal(weatherWord(63), "Rain");
 });
+
+import { fromWeatherKit, conditionWord } from "../src/daily.js";
+test("Apple Weather maps to the card: Fahrenheit, mph, chance, next hour", () => {
+  const now = Date.parse("2026-10-27T12:00:00Z");
+  const w = fromWeatherKit({
+    currentWeather: { temperature: 18, temperatureApparent: 17.2, conditionCode: "MostlyCloudy", windSpeed: 16, windDirection: 225 },
+    forecastDaily: { days: [{ temperatureMax: 23.3, temperatureMin: 15, precipitationChance: 0.4, conditionCode: "Drizzle", sunrise: "2026-10-27T11:26:00Z", sunset: "2026-10-27T22:22:00Z", windGustSpeedMax: 30 }] },
+    forecastNextHour: { summary: [{ condition: "clear", startTime: "2026-10-27T12:00:00Z" }, { condition: "precipitation", startTime: "2026-10-27T12:25:00Z", endTime: "2026-10-27T13:00:00Z" }] },
+  }, now);
+  assert.deepEqual([w.now, w.feels, w.word, w.wind, w.windFrom, w.hi, w.lo, w.rain, w.gusts, w.source], [64, 63, "Mostly cloudy", 10, "SW", 74, 59, 40, 19, "apple"]);
+  assert.match(w.nextHour, /^Rain starting around/);
+  assert.equal(conditionWord("HeavyRain"), "Heavy rain");
+});

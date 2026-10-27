@@ -37,7 +37,7 @@ import { I, LOGO } from "./icons.js";
 import { topicColor, dominantColor, tintInks, focusOf } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "4.14.1";
+export const VERSION = "4.15.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 
@@ -982,7 +982,7 @@ function todayHtml() {
  * can be turned off in Settings › Mornings. Read fresh each day; never saved.
  */
 const MORNING_KEY = "edition.morning", MORNING_CACHE = "edition.morningCache";
-const MORNING_DEFAULT = { weather: true, zip: "28409", cam: "", hockey: true, teams: ["CAR", "WSH"], jung: true, otd: true, cpmai: true };
+const MORNING_DEFAULT = { weather: true, zip: "28409", cam: "", hockey: true, teams: ["CAR", "WSH"], jung: true, otd: true, cpmai: true, song: true };
 function morningSettings() { try { return { ...MORNING_DEFAULT, ...JSON.parse(localStorage.getItem(MORNING_KEY) || "{}") }; } catch { return { ...MORNING_DEFAULT }; } }
 function setMorningSettings(v) { try { localStorage.setItem(MORNING_KEY, JSON.stringify(v)); } catch { /* private mode */ } }
 function morningCache() {
@@ -999,8 +999,34 @@ async function loadMorning() {
   let c = morningCache(), changed = false;
   try {
     const place = daily.PLACES[m.zip] || daily.PLACES["28409"];
-    if (m.weather && (!c.weather || Date.now() - c.weather.at > 60 * 60e3)) {
-      try { c.weather = await withTimeout(daily.fetchWeather(place), 15000); changed = true; } catch (e) { noteError(e, { quiet: true, where: "weather" }); }
+    const relay = ai.relayBase();
+    if (relay && (!c.relayInfo || Date.now() - c.relayInfo.at > 6 * 3600e3)) {
+      try { const r = await withTimeout(fetch(`${relay}/version`), 10000); c.relayInfo = { ...(r.ok ? await r.json() : {}), at: Date.now() }; changed = true; } catch { /* older relay */ }
+    }
+    if (m.weather && (!c.weather || Date.now() - c.weather.at > 30 * 60e3)) {
+      let w = null;
+      // Apple Weather when the relay has the Apple key and Services ID; the free source otherwise.
+      if (relay && c.relayInfo?.weatherkit) {
+        try {
+          const r = await withTimeout(fetch(`${relay}/apple/weather?lat=${place.lat}&lon=${place.lon}&tz=${encodeURIComponent(Intl.DateTimeFormat().resolvedOptions().timeZone || "America/New_York")}`), 15000);
+          if (r.ok) w = daily.fromWeatherKit(await r.json());
+        } catch (e) { noteError(e, { quiet: true, where: "Apple Weather" }); }
+      }
+      if (!w) { try { w = await withTimeout(daily.fetchWeather({ ...place, tide: null }), 15000); } catch (e) { noteError(e, { quiet: true, where: "weather" }); } }
+      if (w && place.tide) { try { w.tides = await withTimeout(daily.fetchTides(place.tide), 10000); } catch { /* tides are a bonus */ } }
+      if (w) { c.weather = w; changed = true; }
+    }
+    if (m.song && relay && c.relayInfo?.apple && (!c.songAt || Date.now() - c.songAt > 30 * 60e3)) {
+      try {
+        const r = await withTimeout(fetch(`${relay}/apple/song`, { headers: { "x-inbox-key": inboxKey() } }), 15000);
+        if (r.ok) {
+          const d = await r.json();
+          c.song = d.song && d.song.at && Date.now() - d.song.at < 30 * 3600e3 ? { ...d.song, match: d.match } : null;
+          c.songAt = Date.now();
+          try { localStorage.setItem("edition.songKey", d.songKey || ""); } catch { /* full */ }
+          changed = true;
+        }
+      } catch (e) { noteError(e, { quiet: true, where: "song of the day" }); }
     }
     if (m.hockey && ai.relayBase() && (!c.gamesAt || (!c.games?.length && Date.now() - c.gamesAt > 2 * 3600e3))) {
       try {
@@ -1043,10 +1069,21 @@ function morningHtml() {
       `<span class="who">Weather,</span> <span class="when">${esc(place.name)} ${esc(m.zip)}</span>`,
       `<p class="wx-now"><span class="deg">${w.now}°</span><span class="wx-word">${esc(w.word)}<small>Feels like ${w.feels}°</small></span></p>
        <p class="wx-line">High ${w.hi}° · Low ${w.lo}°${w.rain != null ? ` · Rain ${w.rain}%` : ""} · Wind ${esc(w.windFrom)} ${w.wind} mph${w.gusts > w.wind + 5 ? `, gusts ${w.gusts}` : ""}</p>
+       ${w.nextHour ? `<p class="wx-line wx-next">${esc(w.nextHour)}</p>` : ""}
        <p class="wx-line">Sunrise ${hm(w.sunrise)} · Sunset ${hm(w.sunset)}</p>
        ${w.tides?.length ? `<p class="wx-line">Tides: ${w.tides.map((t) => `${t.type} ${hm(t.t.replace(" ", "T"))}`).join(" · ")}</p>` : ""}
        <figure class="wx-pic"><img alt="${m.cam ? "Camera view" : `Weather radar around ${esc(place.name)}`}" src="${esc(pic)}" referrerpolicy="no-referrer" loading="lazy" onerror="this.closest('figure')?.remove()">
-         <figcaption>${m.cam ? "Your camera" : `Radar, ${esc(place.radar)} ${esc(place.name)} (National Weather Service)`}</figcaption></figure>`));
+         <figcaption>${m.cam ? "Your camera" : `Radar, ${esc(place.radar)} ${esc(place.name)} (National Weather Service)`}</figcaption></figure>
+       ${w.source === "apple" ? `<p class="wx-attr"><a href="https://weatherkit.apple.com/legal-attribution.html" target="_blank" rel="noopener"> Weather</a></p>` : ""}`));
+  }
+  if (m.song && c.song) {
+    const sg = c.song, mt = sg.match || {};
+    const last = sg.lastPlayed ? (() => { const t = Date.parse(sg.lastPlayed); return Number.isFinite(t) ? `last played ${friendlyWhen(t)}` : ""; })() : "";
+    cards.push(card("song", `<span class="av av-day" aria-hidden="true">${I.music}</span>`, `<span class="who">Song of the day</span>`,
+      `<div class="song">${mt.artwork ? `<img class="art" alt="" src="${esc(mt.artwork)}" referrerpolicy="no-referrer" onerror="this.remove()">` : ""}
+        <div class="song-t"><p class="ttl">${esc(mt.name || sg.title)}</p><p class="wx-line">${esc(mt.artist || sg.artist || "")}${mt.year ? ` · ${esc(mt.year)}` : ""}</p>${last ? `<p class="wx-line">You ${esc(last)}</p>` : ""}</div></div>
+       <div class="song-acts">${mt.preview ? `<button class="btn sm" type="button" data-preview="${esc(mt.preview)}">${I.play}<span>Preview</span></button>` : ""}
+         ${mt.url ? `<a class="btn sm primary" href="${esc(mt.url)}" target="_blank" rel="noopener">Open in Apple Music</a>` : ""}</div>`));
   }
   if (m.hockey) for (const g of c.games || []) {
     if (!g.done) continue;
@@ -1089,6 +1126,18 @@ function morningHtml() {
       }).join("")));
   }
   return cards.length ? sectionHead("This morning") + cards.join("") : "";
+}
+
+/** Play or stop a song's 30-second preview. */
+let previewAudio = null;
+function playPreview(btn) {
+  const src = btn.dataset.preview;
+  const label = $("span", btn);
+  if (previewAudio && !previewAudio.paused && previewAudio.src === src) { previewAudio.pause(); label.textContent = "Preview"; return; }
+  if (previewAudio) previewAudio.pause();
+  previewAudio = new Audio(src);
+  previewAudio.addEventListener("ended", () => { label.textContent = "Preview"; });
+  previewAudio.play().then(() => { label.textContent = "Stop"; }).catch(() => { label.textContent = "Preview"; });
 }
 
 /** A tap on a CPMAI option: pick it; once enough are picked, show the answer. */
@@ -1724,6 +1773,7 @@ async function onTimelineClick(e) {
   const hit = (sel) => t.closest(sel);
   let b;
   if ((b = hit("[data-tab]"))) { selectTab(b.dataset.tab); return; }
+  if ((b = hit("[data-preview]"))) { playPreview(b); return; }
   if ((b = hit("[data-cq]"))) { const [k, i] = b.dataset.cq.split(":").map(Number); answerCpmai(k, i); return; }
   if ((b = hit("[data-school=go]"))) {
     b.disabled = true;
@@ -3020,7 +3070,7 @@ function openSettings() {
     </details>
     <details class="group">
       <summary><span>Mornings</span></summary>
-      ${[["weather", "Weather and radar"], ["hockey", "Last night's games"], ["jung", "Jung quote"], ["otd", "On this day"], ["cpmai", "CPMAI practice"]].map(([k, label]) =>
+      ${[["weather", "Weather and radar"], ["song", "Song of the day"], ["hockey", "Last night's games"], ["jung", "Jung quote"], ["otd", "On this day"], ["cpmai", "CPMAI practice"]].map(([k, label]) =>
         `<div class="row"><span class="rk">${label}</span><div class="seg" role="group" aria-label="${label}"><button type="button" data-mo="${k}:1" aria-pressed="${morningSettings()[k]}">On</button><button type="button" data-mo="${k}:0" aria-pressed="${!morningSettings()[k]}">Off</button></div></div>`).join("")}
       <div class="two">
         <div class="field"><label for="set-mo-teams">Teams</label><input id="set-mo-teams" type="text" autocomplete="off" autocapitalize="characters" value="${esc(morningSettings().teams.join(", "))}"></div>
@@ -3030,6 +3080,10 @@ function openSettings() {
         <input id="set-mo-cam" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://…/latest.jpg" value="${esc(morningSettings().cam)}"></div>
       <button class="btn" type="button" id="set-mo-save">Save</button>
       <span class="st" id="set-mo-st" role="status"></span>
+      <h3 class="sub">Song of the day: your Shortcut</h3>
+      <p class="note">Song key: <b id="set-song-key">${esc((() => { try { return localStorage.getItem("edition.songKey") || "appears once the relay has your Apple key"; } catch { return ""; } })())}</b>
+        <button class="btn sm" type="button" id="set-song-copy">Copy</button></p>
+      <p class="note">In Shortcuts: Find Music where Play Count is greater than 0, sort by Last Played, oldest first, limit 1. Then Get Contents of URL: <b>${esc(ai.relayBase() || "your relay")}/song</b>, method POST, header <b>x-song-key</b> = your key, JSON body title (Name), artist (Artist), lastPlayed (Last Played). Run it from a daily 6:00 AM automation.</p>
     </details>
     <details class="group">
       <summary><span>Email in</span><span class="sv">${(() => { try { return localStorage.getItem("edition.inboxAddress") ? "On" : "Off"; } catch { return "Off"; } })()}</span></summary>
@@ -3150,6 +3204,9 @@ function openSettings() {
     $("#set-mo-st", wrap).textContent = "Saved.";
     render({ top: false });
     loadMorning();
+  });
+  $("#set-song-copy", wrap).addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText($("#set-song-key", wrap).textContent); $("#set-mo-st", wrap).textContent = "Song key copied."; } catch { $("#set-mo-st", wrap).textContent = "Couldn't copy; select it and copy."; }
   });
   $("#set-mail-check", wrap).addEventListener("click", () => checkInbox({ statusEl: $("#set-mail-st", wrap) }));
   const pSt = $("#set-pplx-st", wrap);
