@@ -51,25 +51,12 @@ jobs:
           report() { grep -E "error:|Error|failed|No profiles|rovisioning|ertificate|not available|denied" "$1" | sort -u | head -25 | sed 's/^/::error::/'; tail -n 15 "$1"; }
           # Automatic signing needs one registered iPhone for its development profile.
           ASC_KEY_ID=${{ secrets.ASC_KEY_ID }} ASC_ISSUER_ID=${{ secrets.ASC_ISSUER_ID }} ASC_KEY_PATH=$RUNNER_TEMP/asc.p8 ruby register-device.rb || exit 1
-          NEW="$(xcode-select -p | sed 's#/Contents/Developer##')"
-          OLD="$(ls -d /Applications/Xcode_16*.app | sort -V | tail -1)"
-          # 1. Xcode 16 signs in with the key (Xcode 26.6 can't) and sets up signing: App IDs,
-          #    the App Group, a development certificate and profiles, all saved on this Mac.
-          sudo xcode-select -s "$OLD"
-          xcodebuild -project Shoebox.xcodeproj -scheme Shoebox -configuration Release -destination 'generic/platform=iOS' \
-            -archivePath "$RUNNER_TEMP/prep.xcarchive" $AUTH archive > prep.log 2>&1
-          code=$?
-          if [ $code -ne 0 ]; then echo "::error::signing setup failed"; report prep.log; exit $code; fi
-          # 2. Xcode 26 builds the real archive (Apple requires its SDK), using what step 1 saved.
-          sudo xcode-select -s "$NEW"
           xcodebuild -project Shoebox.xcodeproj -scheme Shoebox -configuration Release \
             -destination 'generic/platform=iOS' -archivePath "$RUNNER_TEMP/Shoebox.xcarchive" \
-            CURRENT_PROJECT_VERSION=${{ github.run_number }} \
+            CURRENT_PROJECT_VERSION=${{ github.run_number }} $AUTH \
             archive > archive.log 2>&1
           code=$?
           if [ $code -ne 0 ]; then echo "::error::archive failed"; report archive.log; exit $code; fi
-          # 3. Xcode 16 signs it for the App Store (Apple's cloud-managed certificate).
-          sudo xcode-select -s "$OLD"
           xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/Shoebox.xcarchive" \
             -exportOptionsPlist ExportOptions.plist -exportPath "$RUNNER_TEMP/out" $AUTH > export.log 2>&1
           code=$?
