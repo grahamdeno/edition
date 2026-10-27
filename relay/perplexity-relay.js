@@ -37,7 +37,7 @@
  */
 
 /** What this copy of the relay can do; the app checks it to say when an update is needed. */
-export const RELAY_VERSION = 13;
+export const RELAY_VERSION = 14;
 export const RELAY_FEATURES = ["preview", "image", "photo", "agent", "push", "remind", "ical", "nhl", "inbox", "apple", "ai", "stats", "stories"];
 
 const ALLOWED_ORIGINS = ["https://shoebox.tangomike.app", "https://grahamdeno.github.io"];
@@ -782,7 +782,7 @@ async function appleRoute(request, env, pathname, params, cors) {
     const kv = env.SHOEBOX;
     if (!kv) return out(501, { error: { message: "Needs the relay's storage." } });
     const want = await kv.get("song-key");
-    if (!want || request.headers.get("x-song-key") !== want) return out(403, { error: { message: "Wrong song key. Copy it from Shoebox: Settings › Mornings." } });
+    if (!want || request.headers.get("x-song-key") !== want) return out(403, { error: { message: "Wrong song key. Copy it from Shoebox: Settings › Daily cards › Song of the day." } });
     const b = await request.json().catch(() => ({}));
     const song = { title: String(b.title || b.name || "").slice(0, 200), artist: String(b.artist || "").slice(0, 200), album: String(b.album || "").slice(0, 200),
       lastPlayed: String(b.lastPlayed || b.last_played || "").slice(0, 60), plays: Number(b.plays || b.playCount || 0) || null, at: Date.now() };
@@ -808,9 +808,16 @@ async function appleRoute(request, env, pathname, params, cors) {
       // The app (owner of the inbox) reads the song of the day, and gets the key for its Shortcut.
       const kv = env.SHOEBOX;
       if (!kv) return out(501, { error: { message: "Needs the relay's storage." } });
+      // Allowed: the phone that owns the shared inbox, or any of the owner's own installs (AI_OWNER_DEVICES).
       const owner = await kv.get("inbox-key"), key = request.headers.get("x-inbox-key") || "";
-      if (!/^[\w-]{24,80}$/.test(key) || (owner && owner !== key)) return out(403, { error: { message: "Not this phone's relay." } });
-      if (!owner) await kv.put("inbox-key", key);
+      const device = request.headers.get("x-shoebox-device") || "", token = request.headers.get("x-shoebox-token") || "";
+      let ownDevice = false;
+      if (device && String(env.AI_OWNER_DEVICES || "").split(",").map((x) => x.trim()).includes(device)) {
+        const rec = await kv.get(`aid:${device}`, "json");
+        ownDevice = Boolean(rec && rec.hash === await sha256(token));
+      }
+      if (!ownDevice && (!/^[\w-]{24,80}$/.test(key) || (owner && owner !== key))) return out(403, { error: { message: "Song of the day is only for the owner's phones." } });
+      if (!owner && !ownDevice) await kv.put("inbox-key", key);
       let songKey = await kv.get("song-key");
       if (!songKey) { songKey = b64u.enc(crypto.getRandomValues(new Uint8Array(18))); await kv.put("song-key", songKey); }
       const song = await kv.get("song", "json");

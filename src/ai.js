@@ -939,3 +939,9 @@ export async function topicStories(topic, { place = "" } = {}, retried = false) 
   }
   return [];
 }
+
+/** This install's AI sign-up headers (empty when it hasn't signed up), for owner-only relay calls. */
+export function ownerHeaders() {
+  const d = safeGet(DEVICE_STORE), t = safeGet(TOKEN_STORE);
+  return d && t ? { "x-shoebox-device": d, "x-shoebox-token": t } : {};
+}

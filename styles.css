@@ -1031,3 +1031,4 @@ details.adv > summary, .group details.adv > summary, .ag-more summary { min-heig
 .btn.flash .i { width: 18px; height: 18px; }
 @keyframes ok-pop { 0% { transform: scale(0.92); opacity: 0.4; } 60% { transform: scale(1.03); opacity: 1; } 100% { transform: none; } }
 @media (prefers-reduced-motion: reduce) { .st.ok { animation: none; } }
+.note.err { color: var(--warn); }

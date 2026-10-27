@@ -39,7 +39,7 @@ import { problems, noteError as logError, onFirstProblem, clearProblems, formatP
 import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone, mixStories, followOrder } from "./onboard.js";
 
-export const VERSION = "4.39.0";
+export const VERSION = "4.40.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -1210,14 +1210,14 @@ async function loadMorning() {
     }
     if (m.song && relay && c.relayInfo?.apple && (!c.songAt || Date.now() - c.songAt > 30 * 60e3)) {
       try {
-        const r = await withTimeout(fetch(`${relay}/apple/song`, { headers: { "x-inbox-key": inboxKey() } }), 15000);
+        const r = await withTimeout(fetch(`${relay}/apple/song`, { headers: { "x-inbox-key": inboxKey(), ...ai.ownerHeaders() } }), 15000);
+        const d = await r.json().catch(() => ({}));
         if (r.ok) {
-          const d = await r.json();
           c.song = d.song && d.song.at && Date.now() - d.song.at < 30 * 3600e3 ? { ...d.song, match: d.match } : null;
           c.songAt = Date.now();
-          try { localStorage.setItem("edition.songKey", d.songKey || ""); } catch { /* full */ }
+          try { localStorage.setItem("edition.songKey", d.songKey || ""); localStorage.setItem("edition.songLast", String(d.song?.at || "")); localStorage.removeItem("edition.songErr"); } catch { /* full */ }
           changed = true;
-        }
+        } else { try { localStorage.setItem("edition.songErr", d?.error?.message || `The relay said ${r.status}.`); } catch { /* full */ } }
       } catch (e) { noteError(e, { quiet: true, where: "song of the day" }); }
     }
     if (m.hockey && ai.relayBase() && (!c.gamesAt || (!c.games?.length && Date.now() - c.gamesAt > 2 * 3600e3))) {
@@ -4156,9 +4156,21 @@ function openSettings(panel = "", { fromCard = false } = {}) {
       ${me ? `<div class="field"><label for="set-mo-teams">Teams</label><input id="set-mo-teams" type="text" autocomplete="off" autocapitalize="characters" value="${esc(m.teams.join(", "))}"></div>
       <button class="btn" type="button" id="set-mo-teams-save">Save teams</button>
       <h3 class="sub">Song of the day: your Shortcut</h3>
-      <p class="note">Song key: <b id="set-song-key">${esc((() => { try { return localStorage.getItem("edition.songKey") || "appears once the relay has your Apple key"; } catch { return ""; } })())}</b>
-        <button class="btn sm" type="button" id="set-song-copy">Copy</button></p>
-      <p class="note">In Shortcuts: Find Music where Play Count is greater than 0, sort by Last Played, oldest first, limit 1. Then Get Contents of URL: <b>${esc(ai.relayBase())}/song</b>, method POST, header <b>x-song-key</b> = your key, JSON body title (Name), artist (Artist), lastPlayed (Last Played). Run it from a daily 6:00 AM automation.</p>` : ""}
+      ${(() => {
+        const got = (k) => { try { return localStorage.getItem(k) || ""; } catch { return ""; } };
+        const key = got("edition.songKey"), err = got("edition.songErr"), last = +got("edition.songLast");
+        return `<p class="note">A Shortcut on this iPhone sends one song from your library each morning. Set it up once with these two:</p>
+        <p class="note">Address</p><div class="mail-addr"><b id="set-song-url">${esc(ai.relayBase())}/song</b><button class="btn sm" type="button" id="set-song-url-copy">Copy</button></div>
+        <p class="note">Song key</p><div class="mail-addr"><b id="set-song-key">${esc(key || (err ? "Not available" : "Open Today once, then come back"))}</b>${key ? `<button class="btn sm" type="button" id="set-song-copy">Copy</button>` : ""}</div>
+        ${err ? `<p class="note err">${esc(err)}</p>` : ""}
+        <ol class="sg-steps">
+          <li>In Shortcuts, tap <b>+</b>. Add <b>Find Music</b>: Filter <b>Play Count</b> is greater than 0, Sort by <b>Last Played</b>, Order <b>Oldest First</b>, Limit on, <b>1</b>.</li>
+          <li>Add <b>Get Contents of URL</b>. Paste the address. Tap the arrow to show more: Method <b>POST</b>. Headers: add one, key <b>x-song-key</b>, value: paste the song key. Request Body <b>JSON</b>, with three Text fields: <b>title</b> = Music › Name, <b>artist</b> = Music › Artist, <b>lastPlayed</b> = Music › Last Played Date.</li>
+          <li>Tap <b>▶</b> to test. It should show <b>{"ok":true}</b>.</li>
+          <li>Automation › <b>+</b> › Time of Day, 6:00 AM, Daily, Run Immediately › this Shortcut.</li>
+        </ol>
+        <p class="note" id="set-song-last">${last ? `Last song arrived ${esc(new Date(last).toLocaleString("en-US", { weekday: "short", hour: "numeric", minute: "2-digit" }))}.` : "No song has arrived yet."}</p>`;
+      })()}` : ""}
       <span class="st" id="set-more-st" role="status"></span>
       </div>` },
     newsletters: { title: "Newsletters", value: sc.on ? "Mon, Fri" : "Off", body: `
@@ -4369,6 +4381,10 @@ function openSettings(panel = "", { fromCard = false } = {}) {
   $("#set-song-copy", wrap)?.addEventListener("click", async () => {
     const st2 = $("#set-more-st", wrap);
     try { await navigator.clipboard.writeText($("#set-song-key", wrap).textContent); say(st2, "Song key copied."); } catch { say(st2, "Couldn't copy; select it and copy."); }
+  });
+  $("#set-song-url-copy", wrap)?.addEventListener("click", async () => {
+    const st2 = $("#set-more-st", wrap);
+    try { await navigator.clipboard.writeText($("#set-song-url", wrap).textContent); say(st2, "Address copied."); } catch { say(st2, "Couldn't copy; select it and copy."); }
   });
   wrap.querySelectorAll("[data-stories]").forEach((b) => b.addEventListener("click", () => {
     setFlag("edition.storiesAuto", b.dataset.stories === "1");
