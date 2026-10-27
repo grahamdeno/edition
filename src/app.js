@@ -39,7 +39,7 @@ import { problems, noteError as logError, onFirstProblem, clearProblems, formatP
 import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone } from "./onboard.js";
 
-export const VERSION = "4.33.0";
+export const VERSION = "4.34.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -1810,7 +1810,7 @@ const coach = makeCoach(coachStore);
 const COACH = [
   { key: "dbl", sel: "[data-dbl]", text: "Double-tap a photo to love it." },
   { key: "stories", sel: ".post .av-sb", host: ".post", text: "Top stories come from the topics you follow. Tap Not for me and say why, and tomorrow's picks change." },
-  { key: "daybar", sel: ".daybar details.db", text: "Tap the bar to see each event. Online meetings get a Join button." },
+  { key: "daybar", sel: ".daybar details.db", text: "This is a view of your schedule today. Tap the bar to see each event, and online meetings get a Join button." },
   { key: "more", sel: ".daily .more[data-panel], .daybar .more[data-panel]", text: "Tap ••• on any card to change it right where you see it." },
 ];
 const inView = (el) => { const r = el.getBoundingClientRect(); return r.height > 0 && r.top >= 70 && r.bottom <= innerHeight - 90; };
@@ -3604,6 +3604,9 @@ function openAdd() {
         <button class="chip" type="button" id="cap-paste">${I.paste}<span>Paste</span></button>
         <button class="chip" type="button" id="cap-attach">${I.attach}<span>Photo or file</span></button>
       </div>
+      ${!flag(FIRST_SAVE) && !state.capText ? `<div class="cap-try" id="cap-try"><p>Nothing handy? Try one of these for your first save.</p>
+        <div class="cap-try-b"><button class="btn sm" type="button" data-try="https://apod.nasa.gov/apod/astropix.html">Today's space photo from NASA</button>
+        <button class="btn sm" type="button" data-try="https://en.wikipedia.org/wiki/Special:Random">A random Wikipedia article</button></div></div>` : ""}
     </div>
     <div class="tray" id="cap-tray"></div>
     <ul class="detect" id="cap-detect" aria-live="polite"></ul>
@@ -3622,7 +3625,12 @@ function openAdd() {
   wrap.classList.add("adding");
   const ta = $("#cap-text", wrap);
   const grow = (el, max) => { el.style.height = "auto"; el.style.height = `${Math.min(el.scrollHeight + 2, max)}px`; };
-  ta.addEventListener("input", () => { state.capText = ta.value; grow(ta, 240); updateDetect(); });
+  ta.addEventListener("input", () => { state.capText = ta.value; grow(ta, 240); updateDetect(); if (ta.value.trim()) $("#cap-try", wrap)?.remove(); });
+  wrap.querySelectorAll("[data-try]").forEach((b) => b.addEventListener("click", () => {
+    track("first_add_try");
+    ta.value = b.dataset.try;
+    ta.dispatchEvent(new Event("input"));
+  }));
   ta.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) saveCapture(); });
   ta.addEventListener("paste", (e) => {
     const files = Array.from(e.clipboardData?.files || []);
@@ -4631,7 +4639,20 @@ function sheet(html, { tall = false, label = "", guard = null } = {}) {
   wrap.querySelectorAll("[data-close]").forEach((b) => b.addEventListener("click", closeSheet));
   const panel = $(".sheet", wrap), body = $(".sheet-body", panel);
   const foot = $(".sheet-foot", body);
-  if (foot) panel.appendChild(foot);
+  if (foot) {
+    panel.appendChild(foot);
+    // A footer can hide what's below; when there is more, say so and let a tap scroll to it.
+    const hint = document.createElement("button");
+    hint.type = "button"; hint.className = "more-hint"; hint.setAttribute("aria-label", "More below");
+    hint.innerHTML = `<span>More below</span><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>`;
+    hint.addEventListener("click", () => body.scrollBy({ top: body.clientHeight * 0.7, behavior: reduced() ? "auto" : "smooth" }));
+    foot.prepend(hint);
+    const check = () => panel.classList.toggle("more-below", body.scrollTop + body.clientHeight < body.scrollHeight - 12);
+    body.addEventListener("scroll", check, { passive: true });
+    new MutationObserver(() => requestAnimationFrame(check)).observe(body, { subtree: true, childList: true, attributes: true, attributeFilter: ["hidden", "style", "class"] });
+    new ResizeObserver(check).observe(body);
+    requestAnimationFrame(check);
+  }
   document.body.appendChild(wrap);
   // A swipe never scrolls the page behind: outside the body, or past its top or end, iOS would hand
   // the swipe to the page, so it's stopped here. The body itself scrolls normally.
@@ -4757,6 +4778,8 @@ function toast(msg, { action, onAction, onExpire, high = false, sticky = false }
   clearTimeout(toastTimer);
   const el = document.createElement("div");
   el.className = "toast" + (high || state.reader ? " high" : "");
+  // The very first message sits a third of the way down, where the eye already is; the rest a little below the middle.
+  if (!flag("edition.toastSeen")) { el.classList.add("first"); setFlag("edition.toastSeen", true); }
   el.setAttribute("role", "status");
   el.innerHTML = `<span>${esc(msg)}</span>${action ? `<button type="button">${esc(action)}</button>` : ""}`;
   el._onExpire = onExpire || null;
