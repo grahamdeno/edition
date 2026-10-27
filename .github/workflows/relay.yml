@@ -1,0 +1,62 @@
+# Deploys the relay (relay/perplexity-relay.js) to Cloudflare whenever it changes on main,
+# so nobody has to paste code into the dashboard. Needs, in the repo's settings:
+#   secrets CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID
+#   variable SHOEBOX_KV_ID      the KV namespace the relay already uses
+#   variable RELAY_WORKER_NAME  the Worker's name, if it isn't shoebox-relay
+#   variable RELAY_DOMAIN       optional, e.g. shoebox-api.tangomike.app
+# Secrets set in Cloudflare (ANTHROPIC_API_KEY, APPLE_P8, ...) and dashboard variables are kept.
+name: Relay
+on:
+  push:
+    branches: [main]
+    paths: ["relay/**", ".github/workflows/relay.yml"]
+  workflow_dispatch:
+concurrency:
+  group: relay
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      HAS_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check the relay
+        run: node --check relay/perplexity-relay.js
+      - name: Deploy settings
+        if: env.HAS_TOKEN == 'true'
+        env:
+          KV_ID: ${{ vars.SHOEBOX_KV_ID }}
+          NAME: ${{ vars.RELAY_WORKER_NAME }}
+          DOMAIN: ${{ vars.RELAY_DOMAIN }}
+        run: |
+          [ -n "$KV_ID" ] || { echo "::error::Set the repo variable SHOEBOX_KV_ID"; exit 1; }
+          node -e '
+            const c = {
+              name: process.env.NAME || "shoebox-relay",
+              main: "perplexity-relay.js",
+              compatibility_date: "2026-10-01",
+              keep_vars: true,
+              workers_dev: true,
+              kv_namespaces: [{ binding: "SHOEBOX", id: process.env.KV_ID }],
+              triggers: { crons: ["*/15 * * * *"] },
+            };
+            if (process.env.DOMAIN) c.routes = [{ pattern: process.env.DOMAIN, custom_domain: true }];
+            require("fs").writeFileSync("relay/wrangler.deploy.json", JSON.stringify(c, null, 2));
+          '
+          cat relay/wrangler.deploy.json
+      - name: Deploy
+        if: env.HAS_TOKEN == 'true'
+        working-directory: relay
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx -y wrangler@4 deploy -c wrangler.deploy.json
+      - name: Check it answers
+        if: env.HAS_TOKEN == 'true' && vars.RELAY_DOMAIN != ''
+        run: |
+          sleep 5
+          curl -sS -H "origin: https://shoebox.tangomike.app" "https://${{ vars.RELAY_DOMAIN }}/version" | tee /dev/stderr | grep -q '"version"'

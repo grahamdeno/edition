@@ -37,7 +37,7 @@ import { I, LOGO } from "./icons.js";
 import { topicColor, dominantColor, tintInks, focusOf } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "4.18.0";
+export const VERSION = "4.19.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 
@@ -128,6 +128,7 @@ document.addEventListener("focusout", () => setTimeout(() => { if (!document.doc
 
 async function boot() {
   const migrated = await db.migrateFromLocalStorage(migrateLegacy).catch(() => 0);
+  ai.migrateAiSettings();
   state.items = await db.items.all();
   state.edition = await db.meta.get("edition", null);
   state.suggest = await db.meta.get("suggest", null) || emptySuggestProfile();
@@ -538,8 +539,8 @@ async function backfillHooks() {
 
 async function findNew(statusEl) {
   const set = (msg, err) => { if (statusEl) { statusEl.textContent = msg; statusEl.classList.toggle("err", !!err); } };
-  if (!ai.settings.canDiscover()) { set("Add a Perplexity or Anthropic key in Settings first.", true); return 0; }
-  set(ai.settings.pplxEnabled() ? "Finding today's top stories with Perplexity…" : "Finding today's top stories…");
+  if (!ai.settings.canDiscover()) { set("Turn on AI in Settings first.", true); return 0; }
+  set("Finding today's top stories…");
   try {
     const known = new Set(state.items.map((i) => i.url).filter(Boolean));
     const picks = await ai.discover(interestProfile(discoveryItems(state.items)), { known, guide: suggestionGuide(state.suggest), vocab: vocab(), blocked: state.suggest?.blocked || [] });
@@ -557,7 +558,7 @@ async function findNew(statusEl) {
     if (fresh.length) picturePending();
     return fresh.length;
   } catch (e) {
-    noteError(e, { quiet: true, where: ai.settings.pplxEnabled() ? "discover (Perplexity)" : "discover (Claude)" });
+    noteError(e, { quiet: true, where: "discover" });
     set(e.message || "Search failed.", true);
     return 0;
   }
@@ -970,7 +971,7 @@ function sectionHead(title, note = "") {
 
 function todayHtml() {
   const s = todaySections();
-  let h = stripHtml(s) + calendarHtml() + morningHtml() + schoolAskHtml();
+  let h = stripHtml(s) + aiAskHtml() + calendarHtml() + morningHtml() + schoolAskHtml();
   if (s.school.length) h += sectionHead("From school", `${s.school.filter(isOpen).length || "All"} to do`) + s.school.map((i) => postHtml(i)).join("");
   if (s.fresh.length) h += sectionHead("New", `${s.fresh.filter(isOpen).length || "All"} to sort`) + s.fresh.map((i) => postHtml(i)).join("");
   if (s.six.length) h += sectionHead("Today's six", `${s.six.filter(isOpen).length} of ${s.six.length} left`) + s.six.map((i) => postHtml(i)).join("");
@@ -1299,6 +1300,39 @@ function setSchoolSettings(v) { try { localStorage.setItem(SCHOOL_KEY, JSON.stri
 const schoolAsked = () => { try { return localStorage.getItem(SCHOOL_ASKED) === dayKey(); } catch { return false; } };
 const markSchoolAsked = () => { try { localStorage.setItem(SCHOOL_ASKED, dayKey()); } catch { /* private mode */ } };
 
+/** support@tangomike.app serves several apps: the subject says which, so mail can be sorted by app. */
+export const SUPPORT_EMAIL = "support@tangomike.app";
+function supportMail() {
+  const where = NATIVE ? "iPhone app" : "web";
+  const subject = `[${APP} ${VERSION} ${where}] `;
+  const body = `\n\n---\n${APP} ${VERSION} (${where})\n${navigator.userAgent}`;
+  return `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+}
+
+/* Apple's rule 5.1.2(i): say plainly what goes to which AI company, and ask first. */
+export const AI_DISCLOSURE = "Shoebox uses Claude, an AI model made by Anthropic, to read, tag and rank what you save, find pictures, and turn newsletters into posts. "
+  + "When AI is on, the text of your saves, your notes and photos you add are sent to Anthropic through Shoebox's server for that. "
+  + "Anthropic doesn't use them to train its models, and Shoebox's server doesn't keep them. You can turn AI off any time in Settings.";
+
+function aiAskHtml() {
+  if (ai.settings.asked()) return "";
+  return `<section class="ask" aria-labelledby="ai-ask-h">
+      <div class="ask-top"><span class="av av-school av-ai" aria-hidden="true">AI</span>
+        <div><h2 id="ai-ask-h">Turn on AI?</h2><p>${esc(AI_DISCLOSURE)}</p></div></div>
+      <div class="ask-acts"><button class="btn primary" type="button" data-ai-ask="1">Turn on AI</button>
+        <button class="btn" type="button" data-ai-ask="0">Not now</button></div>
+    </section>`;
+}
+
+function setAi(on) {
+  ai.settings.setConsent(on);
+  if (on) {
+    state.items = state.items.map((i) => ({ ...i, enrichTries: 0 }));
+    enrichPending();
+    toast("AI is on. Reading your saves now.");
+  }
+}
+
 function schoolAskHtml() {
   const c = schoolSettings();
   if (!state.schoolForce && (!c.on || !c.days.includes(new Date().getDay()) || schoolAsked())) return "";
@@ -1318,7 +1352,7 @@ async function pullNewsletter(raw, statusEl) {
   const set = (msg, err) => { if (statusEl) { statusEl.textContent = msg; statusEl.classList.toggle("err", !!err); } };
   const input = String(raw || "").trim();
   if (!input) { set("Paste the newsletter's link or text first.", true); return false; }
-  if (!ai.settings.enabled()) { set("This needs your Anthropic key (Settings › AI).", true); return false; }
+  if (!ai.settings.enabled()) { set("This needs AI. Turn it on in Settings › AI.", true); return false; }
   const c = schoolSettings();
   const first = input.split(/\s+/)[0];
   const isLink = /^https?:\/\/\S+$/i.test(input);
@@ -1851,6 +1885,7 @@ async function onTimelineClick(e) {
     if (ok) { tick(true); render({ top: true }); toast(`${state.schoolCount} post${state.schoolCount === 1 ? "" : "s"} from school, under From school on Today.`); }
     return;
   }
+  if ((b = hit("[data-ai-ask]"))) { setAi(b.dataset.aiAsk === "1"); render({ top: false }); return; }
   if ((b = hit("[data-school=skip]"))) { markSchoolAsked(); state.schoolDraft = ""; state.schoolForce = false; render({ top: false }); return; }
   if ((b = hit("[data-act]"))) { runAct(b.dataset.act, b); return; }
   if ((b = hit("[data-backnow]"))) {
@@ -3187,29 +3222,12 @@ function openSettings() {
     </div>
     <details class="group">
       <summary><span>AI</span><span class="sv">${ai.settings.enabled() ? "On" : "Off"}</span></summary>
-      <div class="field"><label for="set-key">Anthropic API key</label>
-        <input id="set-key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-ant-…" value="${esc(ai.settings.key())}"></div>
-      <div class="two">
-        <button class="btn primary" type="button" id="set-save">Save and test</button>
-        <button class="btn" type="button" id="set-clear">Remove</button>
-      </div>
+      <div class="row"><span class="rk">Use AI</span>
+        <div class="seg" role="group" aria-label="Use AI">
+          <button type="button" data-ai="1" aria-pressed="${ai.settings.consented()}">On</button><button type="button" data-ai="0" aria-pressed="${!ai.settings.consented()}">Off</button></div></div>
+      <p class="note">${esc(AI_DISCLOSURE)}</p>
+      <p class="note" id="set-ai-use"></p>
       <span class="st" id="set-st" role="status"></span>
-      <p class="note">Stays on this phone. Each AI action is billed to your account.</p>
-    </details>
-    <details class="group">
-      <summary><span>Relay</span><span class="sv">${ai.relayBase() ? "On" : "Off"}</span></summary>
-      <div class="field"><label for="set-relay">Relay address</label>
-        <input id="set-relay" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://edition-relay.you.workers.dev" value="${esc(ai.settings.relay())}"></div>
-      <div class="field"><label for="set-pplx">Perplexity key <span class="hint">(optional, for discovery)</span></label>
-        <input id="set-pplx" type="password" autocomplete="off" spellcheck="false" placeholder="pplx-…" value="${esc(ai.settings.pplxKey())}"></div>
-      <div class="two">
-        <button class="btn primary" type="button" id="set-pplx-save">Save and test</button>
-        <button class="btn" type="button" id="set-pplx-clear">Remove key</button>
-      </div>
-      <span class="st" id="set-pplx-st" role="status"></span>
-      <p class="note">Your Cloudflare relay: link pictures, Perplexity, notifications and your calendar. Setup is one button in the repo's relay folder.</p>
-      <p class="note"><b>How to update:</b> in Cloudflare, open Workers › your relay › Edit code, replace everything with the latest
-        <a href="https://raw.githubusercontent.com/grahamdeno/edition/main/relay/perplexity-relay.js" target="_blank" rel="noopener">relay file</a>, and Deploy. The address stays the same.</p>
     </details>
     <details class="group" id="set-push-g">
       <summary><span>Notifications</span><span class="sv" id="set-push-sv">${push.enabled() ? "On" : "Off"}</span></summary>
@@ -3308,32 +3326,23 @@ function openSettings() {
         <button class="btn" type="button" id="set-pr-clear">Clear</button>
       </div>
     </details>
+    <p class="version"><a href="${supportMail()}">Contact support</a></p>
     <p class="version">${APP} ${VERSION} · ${c.inbox} new · ${c.queued} queued · ${c.done} done · ${c.archived} let go</p>`, { label: "Settings" });
 
   const st = $("#set-st", wrap);
   const say = (el, msg, err) => { el.textContent = msg; el.classList.toggle("err", !!err); };
-  $("#set-save", wrap).addEventListener("click", async () => {
-    ai.settings.setKey($("#set-key", wrap).value.trim());
-    ai.settings.setModel(""); // always the default model; clears any old override
-    if (!ai.settings.enabled()) { say(st, "No key saved."); return; }
-    say(st, "Testing…");
-    try {
-      await ai.testKey();
-      say(st, "Key works. Reading your saves now.");
-      state.items = state.items.map((i) => ({ ...i, enrichTries: 0 }));
-      $("#set-discover", wrap).disabled = false;
-      enrichPending();
-    } catch (e) {
-      noteError(e, { quiet: true, where: "settings: Anthropic test" });
-      say(st, e.message, true);
-      refreshProblems(wrap);
-    }
-  });
-  $("#set-clear", wrap).addEventListener("click", () => {
-    ai.settings.setKey("");
-    $("#set-key", wrap).value = "";
-    say(st, `Key removed. ${APP} works without AI.`);
-  });
+  wrap.querySelectorAll("[data-ai]").forEach((b) => b.addEventListener("click", () => {
+    const on = b.dataset.ai === "1";
+    setAi(on);
+    wrap.querySelectorAll("[data-ai]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+    $("#set-discover", wrap).disabled = !on;
+    say(st, on ? "AI is on." : `AI is off. ${APP} works without it.`);
+    const sv = b.closest("details")?.querySelector(".sv"); if (sv) sv.textContent = on ? "On" : "Off";
+    render({ top: false });
+  }));
+  if (ai.settings.consented() && ai.settings.device()) {
+    ai.usage().then((u) => { const el = $("#set-ai-use", wrap); if (el) el.textContent = `Today: ${u.cents.toFixed(1)}¢ of AI${u.limit ? ` (daily allowance ${u.limit}¢)` : ""}. Install id: ${u.device}.`; }).catch(() => {});
+  }
   renderSuggestProfile(wrap);
   renderTagList(wrap);
   refreshProblems(wrap);
@@ -3362,55 +3371,6 @@ function openSettings() {
     try { await navigator.clipboard.writeText($("#set-song-key", wrap).textContent); $("#set-mo-st", wrap).textContent = "Song key copied."; } catch { $("#set-mo-st", wrap).textContent = "Couldn't copy; select it and copy."; }
   });
   $("#set-mail-check", wrap).addEventListener("click", () => checkInbox({ statusEl: $("#set-mail-st", wrap) }));
-  const pSt = $("#set-pplx-st", wrap);
-  $("#set-pplx-save", wrap).addEventListener("click", async () => {
-    ai.settings.setPplxKey($("#set-pplx", wrap).value.trim());
-    const relay = ai.relayBase($("#set-relay", wrap).value);
-    ai.settings.setRelay(relay);
-    $("#set-relay", wrap).value = relay;
-    if (!relay && !ai.settings.pplxEnabled()) { say(pSt, "Nothing saved yet. Add the relay address."); return; }
-    say(pSt, "Testing…");
-    const notes = [];
-    // The relay on its own: it reads link pages for pictures, no Perplexity key needed.
-    if (relay) {
-      try {
-        const res = await withTimeout(fetch(`${relay}/preview?url=${encodeURIComponent("https://example.com/")}`), 15000);
-        if (res.status === 403) throw new Error("The relay answered but refused this app. Check ALLOWED_ORIGINS in the relay code.");
-        if (!res.ok) throw new Error(`The relay answered with an error (${res.status}). Check the address.`);
-        const data = await res.json();
-        const ver = await withTimeout(fetch(`${relay}/version`), 10000).then((r) => (r.ok ? r.json() : null)).catch(() => null);
-        notes.push(!ver ? "Relay works, but it's an older copy: update it (below) for the calendar, notifications and photo search."
-          : !ver.push ? "Relay works. Notifications need its storage: redeploy with the Deploy button."
-          : "Relay works and is up to date.");
-        state.items = state.items.map((i) => (i.imageCands ? i : { ...i, pageTries: 0 }));
-        picturePending();
-      } catch (e) {
-        noteError(e, { quiet: true, where: "settings: relay test" });
-        say(pSt, e.message === "Failed to fetch" || e.message === "Timed out" ? "Couldn't reach the relay. Check the address, and that the Worker is deployed." : e.message, true);
-        refreshProblems(wrap);
-        return;
-      }
-    }
-    if (ai.settings.pplxEnabled()) {
-      try {
-        await ai.testPplxKey();
-        notes.push("Perplexity key works. Top stories use Perplexity.");
-        $("#set-discover", wrap).disabled = false;
-      } catch (e) {
-        noteError(e, { quiet: true, where: "settings: Perplexity test" });
-        say(pSt, [...notes, e.message].join(" "), true);
-        refreshProblems(wrap);
-        return;
-      }
-    }
-    say(pSt, notes.join(" "));
-  });
-  $("#set-pplx-clear", wrap).addEventListener("click", () => {
-    ai.settings.setPplxKey("");
-    $("#set-pplx", wrap).value = "";
-    $("#set-discover", wrap).disabled = !ai.settings.canDiscover();
-    say(pSt, ai.settings.enabled() ? "Key removed. Claude does the searching." : "Key removed.");
-  });
   const edSt = $("#set-ed-st", wrap);
   $("#set-rebuild", wrap).addEventListener("click", async () => {
     say(edSt, ai.settings.enabled() ? "Ranking your queue…" : "Rebuilding…");
@@ -3679,7 +3639,7 @@ async function diagnostics() {
     navigator.userAgent,
     `Home Screen app: ${matchMedia("(display-mode: standalone)").matches || navigator.standalone ? "yes" : "no"}; window ${innerWidth}x${innerHeight}; screen height ${fit.screen}; app height ${fit.used}${fit.short ? " (page was short, sized to screen)" : ""}; bottom inset ${getComputedStyle(document.documentElement).getPropertyValue("--safe-b").trim() || "env"}; offline copy: ${navigator.serviceWorker?.controller ? "yes" : "no"}`,
     `Items: ${c.inbox} inbox, ${c.queued} queued, ${c.done} done, ${c.archived} let go; storage ${est ? `${mb(est.usage)} of ${mb(est.quota)}` : "unknown"}`,
-    `Anthropic key: ${ai.settings.enabled() ? "set" : "none"}; Perplexity key: ${ai.settings.pplxEnabled() ? "set" : "none"}; relay: ${relay ? new URL(relay).host : "none"}`,
+    `AI: ${ai.settings.enabled() ? "on" : "off"}${ai.settings.key() ? " (older key still set)" : ""}; relay: ${relay ? new URL(relay).host : "none"}`,
     `Problems (${problems.length}):`,
     ...(problems.length ? problems.slice().reverse().map(formatProblem) : ["- none"]),
   ].join("\n");

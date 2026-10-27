@@ -15,6 +15,11 @@
  *   POST /remind        keep a reminder: { id, token, at, title, body, url, sub }
  *   DELETE /remind/:id  forget one (?token= must match)
  *   (every 15 minutes)  send the reminders that are due, then forget them
+ *   POST /ai/register   a device id and token for AI calls
+ *   POST /ai/messages   Claude calls, with Shoebox's own key (ANTHROPIC_API_KEY
+ *                       secret): allowed models only, capped size, a daily
+ *                       budget per device and for the whole relay
+ *   GET  /ai/usage      today's spend for this device
  *   GET  /photo?q=      Openverse photo search (kept for older app versions;
  *                       Shoebox no longer uses it)
  *
@@ -30,10 +35,10 @@
  */
 
 /** What this copy of the relay can do; the app checks it to say when an update is needed. */
-export const RELAY_VERSION = 5;
-export const RELAY_FEATURES = ["preview", "image", "photo", "agent", "push", "remind", "ical", "nhl", "inbox", "apple"];
+export const RELAY_VERSION = 6;
+export const RELAY_FEATURES = ["preview", "image", "photo", "agent", "push", "remind", "ical", "nhl", "inbox", "apple", "ai"];
 
-const ALLOWED_ORIGINS = ["https://grahamdeno.github.io"];
+const ALLOWED_ORIGINS = ["https://shoebox.tangomike.app", "https://grahamdeno.github.io"];
 const UPSTREAM = "https://api.perplexity.ai";
 const PATHS = new Set(["/v1/agent"]);
 
@@ -45,7 +50,7 @@ function corsHeaders(origin) {
   return {
     "access-control-allow-origin": allowed(origin) ? origin : ALLOWED_ORIGINS[0],
     "access-control-allow-methods": "GET, POST, DELETE, OPTIONS",
-    "access-control-allow-headers": "authorization, content-type",
+    "access-control-allow-headers": "authorization, content-type, x-shoebox-device, x-shoebox-token",
     "access-control-expose-headers": "retry-after",
     "access-control-max-age": "86400",
     vary: "origin",
@@ -78,7 +83,8 @@ export default {
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
     const { pathname, searchParams } = new URL(request.url);
     if (request.method === "GET" && pathname === "/preview") return preview(searchParams.get("url"), cors, searchParams.get("text") === "1");
-    if (request.method === "GET" && pathname === "/version") return new Response(JSON.stringify({ version: RELAY_VERSION, features: RELAY_FEATURES, push: Boolean(env.SHOEBOX), email: env.EMAIL_ADDRESS || null, apple: Boolean(env.APPLE_P8), weatherkit: Boolean(env.APPLE_P8 && env.APPLE_WEATHER_SERVICE_ID) }), { headers: { ...cors, "content-type": "application/json" } });
+    if (request.method === "GET" && pathname === "/version") return new Response(JSON.stringify({ version: RELAY_VERSION, features: RELAY_FEATURES, push: Boolean(env.SHOEBOX), email: env.EMAIL_ADDRESS || null, apple: Boolean(env.APPLE_P8), weatherkit: Boolean(env.APPLE_P8 && env.APPLE_WEATHER_SERVICE_ID), ai: Boolean(env.ANTHROPIC_API_KEY && env.SHOEBOX) }), { headers: { ...cors, "content-type": "application/json" } });
+    if (pathname.startsWith("/ai/")) return aiRoute(request, env, pathname, cors);
     if (pathname.startsWith("/apple/") || pathname === "/song") return appleRoute(request, env, pathname, searchParams, cors);
     if (request.method === "GET" && pathname === "/nhl") return nhl(searchParams.get("date"), cors);
     if (pathname === "/inbox" || pathname === "/inbox/ack") return inboxRoute(request, env, pathname, cors);
@@ -698,4 +704,124 @@ async function appleRoute(request, env, pathname, params, cors) {
     return out(500, { error: { message: `Apple: ${e.message || "failed"}` } });
   }
   return out(404, { error: { message: "Not found." } });
+}
+
+/* ---- AI proxy ----
+ * The app never holds an Anthropic key. Each install registers once for a
+ * random device id and token (only the token's hash is kept). Every call is
+ * checked against a short list of models and size limits, then charged to
+ * a daily budget for that device and one for the whole relay, in hundredths
+ * of a cent, from the usage Anthropic reports back.
+ *
+ * Settings (Cloudflare › Worker › Settings › Variables):
+ *   ANTHROPIC_API_KEY      secret, required
+ *   AI_DEVICE_DAILY_CENTS  per device per day, default 25
+ *   AI_DAILY_CENTS         whole relay per day, default 500
+ *   AI_OWNER_DEVICES       comma-separated device ids with no device limit
+ */
+
+const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
+// Hundredths of a cent per million tokens: [input, output].
+export const AI_PRICES = { "claude-haiku-5-5": [1000, 5000], "claude-sonnet-5-5": [20000, 100000] };
+const AI_MAX_TOKENS = 4000;
+const AI_MAX_BODY = 12e6; // pictures ride along as base64
+const SEARCH_COST = 100; // one web search, in hundredths of a cent ($10 per 1,000)
+
+/** What a reply cost, in hundredths of a cent. */
+export function aiCost(model, usage = {}) {
+  const [inP, outP] = AI_PRICES[model] || AI_PRICES["claude-sonnet-5-5"];
+  const input = (usage.input_tokens || 0) + (usage.cache_creation_input_tokens || 0) * 1.25 + (usage.cache_read_input_tokens || 0) * 0.1;
+  const searches = usage.server_tool_use?.web_search_requests || 0;
+  return Math.ceil((input * inP + (usage.output_tokens || 0) * outP) / 1e6 + searches * SEARCH_COST);
+}
+
+/** Refuses anything the app doesn't send: other models, big replies, tools other than web search. */
+export function checkAiBody(body) {
+  if (!body || typeof body !== "object") return "Bad request.";
+  if (!AI_PRICES[body.model]) return "That model isn't available.";
+  if (!Number.isInteger(body.max_tokens) || body.max_tokens < 1 || body.max_tokens > AI_MAX_TOKENS) return "max_tokens is out of range.";
+  if (!Array.isArray(body.messages) || !body.messages.length || body.messages.length > 4) return "Bad messages.";
+  if (body.tools != null && (!Array.isArray(body.tools) || body.tools.some((t) => !/^web_search_/.test(t?.type || "")))) return "That tool isn't available.";
+  if (body.stream) return "Streaming isn't available.";
+  const allowed = new Set(["model", "max_tokens", "messages", "system", "tools", "temperature"]);
+  if (Object.keys(body).some((k) => !allowed.has(k))) return "Unexpected field.";
+  return "";
+}
+
+async function sha256(text) {
+  const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function randomId(bytes) {
+  return [...crypto.getRandomValues(new Uint8Array(bytes))].map((b) => b.toString(36).padStart(2, "0")).join("").slice(0, bytes * 2);
+}
+
+const dayOf = (t = Date.now()) => new Date(t).toISOString().slice(0, 10);
+const aiJson = (status, body, cors) => new Response(JSON.stringify(body), { status, headers: { ...cors, "content-type": "application/json" } });
+
+async function spent(kv, key) { return parseInt(await kv.get(key), 10) || 0; }
+
+async function aiRoute(request, env, pathname, cors) {
+  const kv = env.SHOEBOX;
+  if (!env.ANTHROPIC_API_KEY || !kv) return aiJson(503, { error: { message: "AI isn't set up on the relay yet." } }, cors);
+  const today = dayOf();
+
+  if (request.method === "POST" && pathname === "/ai/register") {
+    // A few installs a day per network address; App Attest replaces this before launch.
+    const ip = request.headers.get("cf-connecting-ip") || "unknown";
+    const rk = `air:${ip}:${today}`;
+    const n = await spent(kv, rk);
+    if (n >= 10) return aiJson(429, { error: { message: "Too many new installs from this network today." } }, cors);
+    await kv.put(rk, String(n + 1), { expirationTtl: 2 * 86400 });
+    const device = randomId(10), token = randomId(24);
+    await kv.put(`aid:${device}`, JSON.stringify({ hash: await sha256(token), at: Date.now() }));
+    return aiJson(200, { device, token }, cors);
+  }
+
+  const device = request.headers.get("x-shoebox-device") || "";
+  const token = request.headers.get("x-shoebox-token") || "";
+  const rec = device && /^[a-z0-9]{1,40}$/.test(device) ? await kv.get(`aid:${device}`, "json") : null;
+  if (!rec || rec.hash !== await sha256(token)) return aiJson(401, { error: { message: "This install isn't registered.", code: "register" } }, cors);
+  const owner = String(env.AI_OWNER_DEVICES || "").split(",").map((x) => x.trim()).includes(device);
+  const deviceCap = (parseFloat(env.AI_DEVICE_DAILY_CENTS) || 25) * 100;
+  const allCap = (parseFloat(env.AI_DAILY_CENTS) || 500) * 100;
+  const dk = `aiq:${device}:${today}`, ak = `aiq:all:${today}`;
+  const [mine, all] = await Promise.all([spent(kv, dk), spent(kv, ak)]);
+
+  if (request.method === "GET" && pathname === "/ai/usage") {
+    return aiJson(200, { device, owner, cents: mine / 100, limit: owner ? null : deviceCap / 100 }, cors);
+  }
+  if (request.method !== "POST" || pathname !== "/ai/messages") return json(404, "Not found.", cors);
+  if (all >= allCap) return aiJson(429, { error: { message: "Shoebox's AI is resting for today. It's back tomorrow." } }, cors);
+  if (!owner && mine >= deviceCap) return aiJson(429, { error: { message: "You've used today's AI allowance. It resets tomorrow." } }, cors);
+
+  const text = await request.text();
+  if (text.length > AI_MAX_BODY) return aiJson(413, { error: { message: "That's too large to send." } }, cors);
+  let body;
+  try { body = JSON.parse(text); } catch { return aiJson(400, { error: { message: "Bad request." } }, cors); }
+  const bad = checkAiBody(body);
+  if (bad) return aiJson(400, { error: { message: bad } }, cors);
+
+  let res;
+  try {
+    res = await fetch(ANTHROPIC_URL, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    return aiJson(502, { error: { message: "The relay couldn't reach Claude." } }, cors);
+  }
+  const data = await res.json().catch(() => ({}));
+  if (res.ok) {
+    const cost = aiCost(body.model, data.usage);
+    await Promise.all([
+      kv.put(dk, String(mine + cost), { expirationTtl: 3 * 86400 }),
+      kv.put(ak, String(all + cost), { expirationTtl: 3 * 86400 }),
+    ]);
+  } else if (res.status === 401 || res.status === 403) {
+    return aiJson(502, { error: { message: "The relay's Anthropic key was rejected." } }, cors);
+  }
+  return aiJson(res.status, data, cors);
 }

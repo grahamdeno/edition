@@ -24,25 +24,45 @@ export const DEFAULT_MODEL = "claude-haiku-5-5";
 const MAX_PDF_BYTES = 20 * 1024 * 1024;
 const MAX_IMAGE_EDGE = 1568;
 
-const KEY_STORE = "edition.apiKey";
+const KEY_STORE = "edition.apiKey"; // older versions: the reader's own key (used only until the relay has one)
 const MODEL_STORE = "edition.model";
 const PPLX_STORE = "edition.perplexityKey";
 const RELAY_STORE = "edition.perplexityRelay";
+const CONSENT_STORE = "edition.aiConsent";
+const DEVICE_STORE = "edition.aiDevice";
+const TOKEN_STORE = "edition.aiToken";
+
+/** Shoebox's own relay. A relay address saved by an older version still wins. */
+export const DEFAULT_RELAY = "https://shoebox-api.tangomike.app";
 
 export const settings = {
   key: () => safeGet(KEY_STORE),
   setKey: (k) => safeSet(KEY_STORE, k),
   model: () => safeGet(MODEL_STORE) || DEFAULT_MODEL,
   setModel: (m) => safeSet(MODEL_STORE, m),
-  enabled: () => Boolean(safeGet(KEY_STORE)),
+  /** AI is on once the reader has agreed to send their saves to Anthropic. */
+  enabled: () => safeGet(CONSENT_STORE) === "1",
+  consented: () => safeGet(CONSENT_STORE) === "1",
+  asked: () => safeGet(CONSENT_STORE) !== "",
+  setConsent: (on) => safeSet(CONSENT_STORE, on ? "1" : "0"),
   pplxKey: () => safeGet(PPLX_STORE),
   setPplxKey: (k) => safeSet(PPLX_STORE, k),
-  pplxEnabled: () => Boolean(safeGet(PPLX_STORE)),
-  relay: () => safeGet(RELAY_STORE),
+  pplxEnabled: () => false, // top stories now come through Claude's web search
+  relay: () => safeGet(RELAY_STORE) || DEFAULT_RELAY,
   setRelay: (u) => safeSet(RELAY_STORE, u),
-  /** Discovery works with either key: Perplexity when set, Claude's web search otherwise. */
-  canDiscover: () => Boolean(safeGet(PPLX_STORE) || safeGet(KEY_STORE)),
+  canDiscover: () => safeGet(CONSENT_STORE) === "1",
+  device: () => safeGet(DEVICE_STORE),
 };
+
+/**
+ * Older versions asked for an Anthropic key. Someone who set one already
+ * chose to use AI, so that counts as agreeing; the key itself is kept only
+ * until the relay answers with its own.
+ */
+export function migrateAiSettings() {
+  if (!safeGet(CONSENT_STORE) && safeGet(KEY_STORE)) safeSet(CONSENT_STORE, "1");
+  if (safeGet(PPLX_STORE)) safeSet(PPLX_STORE, "");
+}
 
 function safeGet(k) { try { return localStorage.getItem(k) || ""; } catch { return ""; } }
 function safeSet(k, v) {
@@ -54,8 +74,7 @@ export class AiError extends Error {
 }
 
 async function call({ content, system, maxTokens = 600, tools, model = null }) {
-  const key = settings.key();
-  if (!key) throw new AiError("No API key set.");
+  if (!settings.consented()) throw new AiError("AI is off. Turn it on in Settings › AI.");
   const body = {
     model: model || settings.model(),
     max_tokens: maxTokens,
@@ -63,6 +82,50 @@ async function call({ content, system, maxTokens = 600, tools, model = null }) {
   };
   if (system) body.system = system;
   if (tools) body.tools = tools;
+  try {
+    const data = await viaRelay(body);
+    if (settings.key()) settings.setKey(""); // the relay works: no reason to keep a key on the phone
+    return data;
+  } catch (e) {
+    // A relay without AI yet (older copy, or no key set there): fall back to a key from an older version.
+    if (settings.key() && (e.status === 404 || e.status === 503)) return direct(body, settings.key());
+    throw e;
+  }
+}
+
+async function register(base) {
+  const res = await fetch(`${base}/ai/register`, { method: "POST" }).catch(() => null);
+  if (!res) throw new AiError("Couldn't reach Shoebox's AI. Check your connection.", 0);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.device) throw new AiError(data?.error?.message || `Couldn't start AI (${res.status}).`, res.status);
+  safeSet(DEVICE_STORE, data.device);
+  safeSet(TOKEN_STORE, data.token);
+}
+
+async function viaRelay(body, retried = false) {
+  const base = relayBase();
+  if (!safeGet(DEVICE_STORE) || !safeGet(TOKEN_STORE)) await register(base);
+  let res;
+  try {
+    res = await fetch(`${base}/ai/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-shoebox-device": safeGet(DEVICE_STORE), "x-shoebox-token": safeGet(TOKEN_STORE) },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    // Status 0: the request never got an answer (offline, or the app was closed mid-call).
+    throw new AiError("Couldn't reach Shoebox's AI. Check your connection.", 0);
+  }
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 401 && data?.error?.code === "register" && !retried) {
+    safeSet(DEVICE_STORE, ""); safeSet(TOKEN_STORE, "");
+    return viaRelay(body, true);
+  }
+  if (!res.ok) throw new AiError(data?.error?.message || `AI request failed (${res.status}).`, res.status);
+  return data;
+}
+
+async function direct(body, key) {
   let res;
   try {
     res = await fetch(API_URL, {
@@ -76,7 +139,6 @@ async function call({ content, system, maxTokens = 600, tools, model = null }) {
       body: JSON.stringify(body),
     });
   } catch {
-    // Status 0: the request never got an answer (offline, or the app was closed mid-call).
     throw new AiError("Couldn't reach the API. Check your connection.", 0);
   }
   const data = await res.json().catch(() => ({}));
@@ -85,6 +147,13 @@ async function call({ content, system, maxTokens = 600, tools, model = null }) {
     throw new AiError(res.status === 401 ? "The API key was rejected." : msg, res.status);
   }
   return data;
+}
+
+/** Today's AI spend for this install, from the relay. */
+export async function usage() {
+  const res = await fetch(`${relayBase()}/ai/usage`, { headers: { "x-shoebox-device": safeGet(DEVICE_STORE), "x-shoebox-token": safeGet(TOKEN_STORE) } });
+  if (!res.ok) throw new AiError(`Couldn't read usage (${res.status}).`, res.status);
+  return res.json();
 }
 
 /** All text blocks of a response, joined. */
@@ -383,7 +452,6 @@ export async function rank(queue, profile) {
  * Returns [{ title, url, why, tags, minutes }], most prominent first.
  */
 export async function discover(profile, { count = 3, known = new Set(), guide = "", vocab = [], blocked = [] } = {}) {
-  if (settings.pplxEnabled()) return pplxDiscover(profile, { count, known, guide, vocab, blocked });
   return claudeDiscover(profile, { count, guide, vocab, blocked });
 }
 
