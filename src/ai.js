@@ -658,34 +658,40 @@ async function imageForModel(blob) {
 }
 
 /* ---- School newsletter ----
- * From a newsletter's text, what matters for one child, written as a short,
- * catchy post from the school, with the dates and to-dos underneath.
+ * Not a summary: every piece of the newsletter that matters for one child
+ * becomes its own short, catchy post from the school, with its details kept.
  */
-export async function schoolPost({ text, about, school = "", today = new Date() }) {
+export async function schoolPosts({ text, about, school = "", today = new Date() }) {
   const prompt = [
     `Today is ${today.toDateString()}. This is a school newsletter${school ? ` from ${school}` : ""}.`,
     `The parent cares about one child: ${about}`,
     "",
-    "Keep only what matters for that child: their grade, their activities and teams, and whole-school dates, deadlines and closings that affect them.",
+    "Go through it piece by piece. Keep each piece that matters for that child: their grade, their activities and teams, and whole-school dates, deadlines, closings and requests that affect them.",
     "Leave out other grades, other sports and clubs, staff news, fundraising pitches and general filler.",
+    "Do not summarise or merge: each kept piece becomes its own post, with its specifics (what, when, where, what to bring or do, who to contact, links) kept.",
     "",
     "Return JSON: {",
     '"school": string (the school\'s short name, e.g. "Myrtle Grove Middle"),',
-    '"headline": string (a catchy line a parent would stop scrolling for, max 70 chars; specific, no clickbait, no emoji),',
-    '"body": string (1 to 3 short sentences, max 260 chars, like a lively school social post to this parent: the one or two things that matter most this week; at most one exclamation mark; no emoji, no hashtags),',
-    '"items": array of up to 8 {"date": "YYYY-MM-DD" or null, "text": string (max 110 chars: what, when, where, what to bring or do)}, soonest first, undated last,',
-    '"tags": array of 1-3 lowercase topic words',
+    '"posts": array of up to 12 {',
+    '  "headline": string (a catchy line a parent would stop scrolling for, max 70 chars; specific, no clickbait, no emoji),',
+    '  "body": string (1 to 3 short sentences, max 300 chars, written like a lively school social post: the details of this one piece; at most one exclamation mark; no emoji, no hashtags),',
+    '  "date": "YYYY-MM-DD" or null (the day it happens or is due),',
+    '  "tags": array of 1-2 lowercase topic words',
+    "} in the newsletter's order",
     "}",
-    'If nothing in it matters for this child, return {"school": string, "headline": "", "body": "", "items": [], "tags": []}.',
+    'If nothing in it matters for this child, return {"school": string, "posts": []}.',
     "",
     "Newsletter:",
     String(text || "").slice(0, 30000),
   ].join("\n");
-  const out = parseJson(textOf(await call({ content: prompt, system: ENRICH_SYSTEM, maxTokens: 1500 })));
-  const items = (Array.isArray(out.items) ? out.items : []).slice(0, 8)
-    .map((i) => ({ date: /^\d{4}-\d{2}-\d{2}$/.test(i?.date || "") ? i.date : null, text: clip(i?.text, 140) }))
-    .filter((i) => i.text);
-  return { school: clip(out.school, 60), headline: clip(out.headline, 90), body: clip(out.body, 300), items, tags: cleanTags(out.tags) };
+  const out = parseJson(textOf(await call({ content: prompt, system: ENRICH_SYSTEM, maxTokens: 3000 })));
+  const posts = (Array.isArray(out.posts) ? out.posts : []).slice(0, 12).map((p) => ({
+    headline: clip(p?.headline, 90),
+    body: clip(p?.body, 340),
+    date: /^\d{4}-\d{2}-\d{2}$/.test(p?.date || "") ? p.date : null,
+    tags: cleanTags(p?.tags),
+  })).filter((p) => p.headline || p.body);
+  return { school: clip(out.school, 60), posts };
 }
 
 /** Outlook Safe Links and similar wrappers, unwrapped to the real address. */
