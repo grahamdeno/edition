@@ -737,9 +737,11 @@ async function imageForModel(blob) {
  * Not a summary: every piece of the newsletter that matters for one child
  * becomes its own short, catchy post from the school, with its details kept.
  */
-export async function schoolPosts({ text, about, school = "", today = new Date() }) {
+export async function schoolPosts({ text, about, school = "", today = new Date(), files = [] }) {
+  const docs = (files || []).slice(0, 6);
   const prompt = [
     `Today is ${today.toDateString()}. This is a school newsletter${school ? ` from ${school}` : ""}.`,
+    docs.length ? `It came by email with ${docs.length} attachment${docs.length === 1 ? "" : "s"} (${docs.map((f) => f.name).join(", ")}), shown above: read every page and picture of them as part of the newsletter. Flyers, calendars and forms often hold the dates and to-dos.` : null,
     `The parent cares about one child: ${about}`,
     "",
     "Go through it piece by piece. Keep each piece that matters for that child: their grade, their activities and teams, and whole-school dates, deadlines, closings and requests that affect them.",
@@ -753,21 +755,28 @@ export async function schoolPosts({ text, about, school = "", today = new Date()
     '  "body": string (1 to 3 short sentences, max 300 chars, written like a lively school social post: the details of this one piece; at most one exclamation mark; no emoji, no hashtags),',
     '  "date": "YYYY-MM-DD" or null (the day it happens or is due),',
     '  "tags": array of 1-2 lowercase topic words,',
-    '  "photo_query": string (2 to 4 concrete words naming a photograph that would suit this post, something a camera could take: e.g. "middle school band concert", "youth lacrosse game", "school bus morning"; no names, no text)',
+    '  "photo_query": string (2 to 4 concrete words naming a photograph that would suit this post, something a camera could take: e.g. "middle school band concert", "youth lacrosse game", "school bus morning"; no names, no text),',
+    '  "source": string (the attachment\'s file name if this piece came from an attachment, else "email")',
     "} in the newsletter's order",
     "}",
     'If nothing in it matters for this child, return {"school": string, "posts": []}.',
     "",
     "Newsletter:",
-    String(text || "").slice(0, 30000),
-  ].join("\n");
-  const out = parseJson(textOf(await call({ content: prompt, system: ENRICH_SYSTEM, maxTokens: 3000 })));
+    String(text || "").slice(0, 30000) || "(no text: everything is in the attachments)",
+  ].filter((l) => l !== null).join("\n");
+  const content = docs.length
+    ? [...docs.map((f) => (f.type === "application/pdf"
+        ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: f.data }, title: f.name }
+        : { type: "image", source: { type: "base64", media_type: f.type, data: f.data } })), { type: "text", text: prompt }]
+    : prompt;
+  const out = parseJson(textOf(await call({ content, system: ENRICH_SYSTEM, maxTokens: 3500 })));
   const posts = (Array.isArray(out.posts) ? out.posts : []).slice(0, 12).map((p) => ({
     headline: clip(p?.headline, 90),
     body: clip(p?.body, 340),
     date: /^\d{4}-\d{2}-\d{2}$/.test(p?.date || "") ? p.date : null,
     tags: cleanTags(p?.tags),
     query: clip(String(p?.photo_query || "").replace(/["']/g, ""), 60),
+    source: p?.source && p.source !== "email" && docs.some((f) => f.name === p.source) ? p.source : "",
   })).filter((p) => p.headline || p.body);
   return { school: clip(out.school, 60), posts };
 }

@@ -329,3 +329,16 @@ test("study deck: any topic uses the everyday model; CPMAI keeps its exam prompt
   assert.equal(sent[0].model, "claude-sonnet-5-5");
   assert.deepEqual(await studyQuestions({ topic: "  " }), []);
 });
+
+test("a newsletter's attachments go to Claude as a document and a picture, and posts say which file they came from", async () => {
+  const { schoolPosts } = await import("../src/ai.js");
+  const sent = stubApi({ school: "MGMS", posts: [{ headline: "Band concert", body: "Thursday 7 PM.", date: "2026-10-29", tags: ["band"], photo_query: "band concert", source: "Flyer.pdf" }, { headline: "No school", body: "Tuesday.", tags: [], source: "email" }] });
+  const out = await schoolPosts({ text: "See the flyer.", about: "8th grade band", files: [{ name: "Flyer.pdf", type: "application/pdf", data: "JVBERg==" }, { name: "poster.jpg", type: "image/jpeg", data: "/9j/" }] });
+  const content = sent[0].messages[0].content;
+  assert.equal(content[0].type, "document");
+  assert.equal(content[0].source.media_type, "application/pdf");
+  assert.equal(content[1].type, "image");
+  assert.match(content[2].text, /2 attachments \(Flyer\.pdf, poster\.jpg\)/);
+  assert.equal(out.posts[0].source, "Flyer.pdf");
+  assert.equal(out.posts[1].source, "");
+});
