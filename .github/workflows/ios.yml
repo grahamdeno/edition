@@ -1,0 +1,49 @@
+# Builds Shoebox for iPhone on a cloud Mac. Every change to ios/ is compiled;
+# with the App Store Connect key in the repo's secrets, it's signed and sent
+# to TestFlight (install from the TestFlight app on the iPhone).
+name: iPhone app
+on:
+  push:
+    branches: [main, ios]
+    paths: ["ios/**", ".github/workflows/ios.yml"]
+  workflow_dispatch:
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: macos-15
+    env:
+      HAS_KEY: ${{ secrets.ASC_KEY_P8 != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pick Xcode
+        run: sudo xcode-select -s "$(ls -d /Applications/Xcode_16*.app | sort -V | tail -1)" && xcodebuild -version
+      - name: Make the Xcode project
+        run: brew install xcodegen && cd ios && xcodegen generate
+      - name: Compile (simulator, unsigned)
+        run: |
+          cd ios
+          set +e
+          xcodebuild -project Shoebox.xcodeproj -scheme Shoebox -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build > build.log 2>&1
+          code=$?
+          # Surface our own warnings and errors as annotations, so they can be read without the full log.
+          grep -E "ios/(App|Share|Widget|Shared)/.*(warning|error):" build.log | sed -E 's#^.*/ios/##' | sort -u | head -40 | sed 's/^/::warning::/'
+          tail -n 25 build.log
+          exit $code
+      - name: Signing key
+        if: env.HAS_KEY == 'true' && github.ref == 'refs/heads/main'
+        run: echo "${{ secrets.ASC_KEY_P8 }}" > "$RUNNER_TEMP/asc.p8"
+      - name: Archive and send to TestFlight
+        if: env.HAS_KEY == 'true' && github.ref == 'refs/heads/main'
+        run: |
+          cd ios
+          AUTH="-allowProvisioningUpdates -authenticationKeyPath $RUNNER_TEMP/asc.p8 -authenticationKeyID ${{ secrets.ASC_KEY_ID }} -authenticationKeyIssuerID ${{ secrets.ASC_ISSUER_ID }}"
+          xcodebuild -project Shoebox.xcodeproj -scheme Shoebox -configuration Release \
+            -destination 'generic/platform=iOS' -archivePath "$RUNNER_TEMP/Shoebox.xcarchive" \
+            CURRENT_PROJECT_VERSION=${{ github.run_number }} $AUTH archive | tail -n 60
+          test ${PIPESTATUS[0]} -eq 0
+          xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/Shoebox.xcarchive" \
+            -exportOptionsPlist ExportOptions.plist -exportPath "$RUNNER_TEMP/out" $AUTH | tail -n 40
+          exit ${PIPESTATUS[0]}
