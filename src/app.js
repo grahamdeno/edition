@@ -38,19 +38,34 @@ import { topicColor, dominantColor, tintInks, focusOf } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 
-export const VERSION = "4.26.0";
+export const VERSION = "4.27.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
 const KIND_LABEL = { link: "Link", note: "Note", quote: "Quote", photo: "Photo", pdf: "PDF", text: "Text", video: "Video", audio: "Audio", file: "File" };
+/*
+ * All saves is where you come to find something ("that video about…"), or to
+ * pick something to read now. So: search first and across everything; then
+ * what you'd reach for, in the order you'd reach for it; then what kind of
+ * thing it was, which is often what you remember.
+ */
 const ALL_FILTERS = [
-  { label: "Kept", id: STATUS.QUEUED },
-  { label: "New", id: STATUS.INBOX },
-  { label: "Set aside", id: STATUS.ASIDE },
-  { label: "Loved", id: "loved" },
-  { label: "Done", id: STATUS.DONE },
-  { label: "Let go", id: STATUS.ARCHIVED },
-  { label: "Everything", id: "all" },
+  { label: "Everything", id: "all", test: () => true },
+  { label: "To read", id: "toread", test: (i) => i.status === STATUS.QUEUED || i.status === STATUS.INBOX },
+  { label: "Loved", id: "loved", test: (i) => Boolean(i.loved) },
+  { label: "Coming back", id: STATUS.ASIDE, test: (i) => i.status === STATUS.ASIDE },
+  { label: "Finished", id: STATUS.DONE, test: (i) => i.status === STATUS.DONE },
+  { label: "Let go", id: STATUS.ARCHIVED, test: (i) => i.status === STATUS.ARCHIVED },
+];
+const isVideoLink = (i) => i.kind === KIND.LINK && /youtube\.com|youtu\.be|vimeo\.com|tiktok\.com/i.test(i.url || "");
+const ALL_KINDS = [
+  { label: "Articles", id: "articles", test: (i) => i.kind === KIND.LINK && !isVideoLink(i) && !i.school && !i.email },
+  { label: "Videos", id: "videos", test: (i) => i.kind === KIND.VIDEO || isVideoLink(i) },
+  { label: "Photos", id: "photos", test: (i) => i.kind === KIND.PHOTO && !i.school },
+  { label: "Notes and quotes", id: "words", test: (i) => (i.kind === KIND.NOTE || i.kind === KIND.QUOTE) && !i.school && !i.email },
+  { label: "Files", id: "files", test: (i) => [KIND.PDF, KIND.TEXT, KIND.FILE, KIND.AUDIO].includes(i.kind) },
+  { label: "School", id: "school", test: (i) => Boolean(i.school) },
+  { label: "Email", id: "email", test: (i) => Boolean(i.email) && !i.school },
 ];
 const PAGE = 30;
 const IDLE_MS = 3000;
@@ -60,6 +75,7 @@ const state = {
   edition: null,
   tab: "today",
   allFilter: 0,
+  allKind: "",
   allQuery: "",
   allShown: PAGE,
   capText: "",
@@ -899,8 +915,12 @@ function todaySections() {
   const sugg = state.items.filter((i) => i.suggested && !sixIds.has(i.id) && isNew(i))
     .sort((a, b) => b.created - a.created).slice(0, SUGGESTIONS_PER_DAY);
   // School posts: every one not done, each day, apart from New and the six. Settled ones stay till tomorrow, stamped.
+  // School posts: the newest newsletter's posts first (in its own order), then the rest by their date.
+  const newest = Math.max(0, ...state.items.filter((i) => i.school && i.status === STATUS.INBOX).map((i) => i.created));
+  const batch = (i) => i.status === STATUS.INBOX && newest - i.created < 10 * 60e3;
   const school = state.items.filter((i) => i.school && (schoolToday([i]).length || (state.recent.has(i.id))))
-    .sort((a, b) => (a.school.date || "9999").localeCompare(b.school.date || "9999") || a.created - b.created);
+    .sort((a, b) => (batch(b) - batch(a)) || (batch(a) ? b.created - a.created : 0)
+      || (a.school.date || "9999").localeCompare(b.school.date || "9999") || a.created - b.created);
   return { fresh, six, sugg, school, edition: v };
 }
 
@@ -1038,6 +1058,22 @@ async function turnOnNativeCalendar() {
   } catch (e) { return { ok: false, msg: e.message }; }
 }
 
+/** Weather pictures for the small weather card. */
+const wxSvg = (d) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+const CLOUD = '<path d="M7 18.5h10a3.5 3.5 0 0 0 .4-7A5 5 0 0 0 7.8 10 4.3 4.3 0 0 0 7 18.5z"/>';
+const WX_ICONS = {
+  sun: wxSvg('<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.2M12 19.3v2.2M4.6 4.6l1.6 1.6M17.8 17.8l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.6 19.4l1.6-1.6M17.8 6.2l1.6-1.6"/>'),
+  moon: wxSvg('<path d="M19.5 14.5A8 8 0 0 1 9.5 4.5a8 8 0 1 0 10 10z"/>'),
+  partly: wxSvg('<path d="M8.5 3v1.6M3.3 8.2h1.6M4.8 4.6l1.1 1.1M13 4.6l-1.1 1.1"/><path d="M6.2 10.5a3.3 3.3 0 0 1 5.9-2.4"/><path d="M8.5 19.5h9a3 3 0 0 0 .3-6 4.4 4.4 0 0 0-8.4-.9 3.5 3.5 0 0 0-.9 6.9z"/>'),
+  cloud: wxSvg(CLOUD),
+  rain: wxSvg('<path d="M7 15.5h10a3.5 3.5 0 0 0 .4-7A5 5 0 0 0 7.8 7 4.3 4.3 0 0 0 7 15.5z"/><path d="M8.5 18.5l-1 2.5M12.5 18.5l-1 2.5M16.5 18.5l-1 2.5"/>'),
+  storm: wxSvg('<path d="M7 15.5h10a3.5 3.5 0 0 0 .4-7A5 5 0 0 0 7.8 7 4.3 4.3 0 0 0 7 15.5z"/><path d="M12.5 14.5l-2 3.5h3l-2 3.5"/>'),
+  snow: wxSvg('<path d="M7 15.5h10a3.5 3.5 0 0 0 .4-7A5 5 0 0 0 7.8 7 4.3 4.3 0 0 0 7 15.5z"/><path d="M8.5 19h.01M12 20.5h.01M15.5 19h.01"/>'),
+  fog: wxSvg('<path d="M4 10h16M6 14h12M4 18h16M8 6h8"/>'),
+  wind: wxSvg('<path d="M3 9h11a2.5 2.5 0 1 0-2.5-2.5M3 13h15a2.5 2.5 0 1 1-2.5 2.5M3 17h8"/>'),
+};
+const WX_MIN = '<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 15l6-6 6 6"/></svg>';
+
 /** The ••• on a card: opens that card's settings right there. */
 const cardMore = (panel, label) => `<button class="act icon more" type="button" data-panel="${panel}" aria-label="${esc(label)} settings">${I.menu}</button>`;
 
@@ -1140,10 +1176,11 @@ function morningHtml() {
   if (m.weather && !place && flag(ONBOARDED)) {
     cards.push(`<div class="wx-mini"><span class="wx-ic-s" aria-hidden="true">${I.sun}</span><span>Weather: add your ZIP code and it shows here each morning.</span>
       <button class="btn sm ghost" type="button" data-day="wx-setup">Add</button></div>`);
-  } else if (m.weather && c.weather && c.wxHidden) {
+  } else if (m.weather && c.weather && (m.wxSmall || c.wxHidden)) {
+    // Small: the picture and the temperature. Tap for the whole card.
     const w = c.weather;
-    cards.push(`<div class="wx-mini"><span class="wx-ic-s" aria-hidden="true">${I.sun}</span><span>${w.now}° · ${esc(w.word)} · High ${w.hi}° · Low ${w.lo}°${w.rain != null ? ` · Rain ${w.rain}%` : ""}</span>
-      <button class="btn sm ghost" type="button" data-day="wx-show">Show</button></div>`);
+    cards.push(`<button class="wx-small" type="button" data-day="wx-big" aria-label="Weather: ${w.now} degrees, ${esc(w.word)}. Show the full weather.">
+        <span class="wx-ico wx-${daily.weatherKind(w)}" aria-hidden="true">${WX_ICONS[daily.weatherKind(w)]}</span><span class="deg">${w.now}°</span></button>`);
   } else if (m.weather && c.weather) {
     const w = c.weather;
     const yt = daily.youtubeId(m.cam);
@@ -1154,7 +1191,7 @@ function morningHtml() {
       : pic ? `<figure class="wx-pic"><img alt="${m.cam ? "Camera view" : `Weather radar around ${esc(place.name)}`}" src="${esc(pic)}" referrerpolicy="no-referrer" loading="lazy" onerror="this.closest('figure')?.remove()">
          <figcaption>${m.cam ? "Your camera" : `Radar, ${esc(place.radar)} ${esc(place.name)} (National Weather Service)`}</figcaption></figure>` : "";
     cards.push(card("wx", `<span class="av av-day wx-ic" aria-hidden="true">${I.sun}</span>`,
-      `<span class="who">Weather,</span> <span class="when">${esc(place.name)}${m.zip ? ` ${esc(m.zip)}` : ""}</span>${cardMore("weather", "Weather")}`,
+      `<span class="who">Weather,</span> <span class="when">${esc(place.name)}${m.zip ? ` ${esc(m.zip)}` : ""}</span><button class="act icon more wx-min" type="button" data-day="wx-small" aria-label="Make the weather small">${WX_MIN}</button>${cardMore("weather", "Weather")}`,
       `<p class="wx-now"><span class="deg">${w.now}°</span><span class="wx-word">${esc(w.word)}<small>Feels like ${w.feels}°</small></span></p>
        <p class="wx-line">High ${w.hi}° · Low ${w.lo}°${w.rain != null ? ` · Rain ${w.rain}%` : ""} · Wind ${esc(w.windFrom)} ${w.wind} mph${w.gusts > w.wind + 5 ? `, gusts ${w.gusts}` : ""}</p>
        ${w.nextHour ? `<p class="wx-line wx-next">${esc(w.nextHour)}</p>` : ""}
@@ -1242,8 +1279,8 @@ async function dayAction(what) {
   const [act, arg] = what.split(":");
   const c = morningCache();
   if (act === "wx-setup") { openSettings("weather", { fromCard: true }); return; }
-  if (act === "wx-hide") c.wxHidden = true;
-  else if (act === "wx-show") c.wxHidden = false;
+  if (act === "wx-small" || act === "wx-hide") { setMorningSettings({ ...morningSettings(), wxSmall: true }); delete c.wxHidden; }
+  else if (act === "wx-big" || act === "wx-show") { setMorningSettings({ ...morningSettings(), wxSmall: false }); delete c.wxHidden; }
   else if (act === "cq-done" && c.cpmai) {
     c.cpmai.done = true; c.cpmai.right = +arg || 0;
     try { const all = JSON.parse(localStorage.getItem("edition.cpmaiScores") || "{}"); all[dayKey()] = [c.cpmai.right, c.cpmai.questions.length]; localStorage.setItem("edition.cpmaiScores", JSON.stringify(all)); } catch { /* full */ }
@@ -1942,25 +1979,33 @@ function firstWords(s, n) {
 }
 
 function allHtml() {
-  const f = ALL_FILTERS[state.allFilter];
+  const f = ALL_FILTERS[state.allFilter] || ALL_FILTERS[0];
+  const kind = ALL_KINDS.find((k) => k.id === state.allKind);
   const q = state.allQuery.trim().toLowerCase();
   const match = (i) => !q || [i.title, i.text, i.url, i.summary, i.fileName, i.author, i.transcript, i.why, i.site,
     ...(i.points || []), ...(i.tags || []), ...(i.replies || []).map((r) => r.text)].some((s) => s && String(s).toLowerCase().includes(q));
-  const rows = state.items
-    .filter((i) => f.id === "all" || (f.id === "loved" ? i.loved : i.status === f.id))
-    .filter(match)
-    .sort((a, b) => (f.id === STATUS.ASIDE ? (a.until || 0) - (b.until || 0) : 0)
-      || (b.loved && f.id === "loved" ? b.loved - (a.loved || 0) : 0) || (b.doneAt || b.archivedAt || b.created) - (a.doneAt || a.archivedAt || a.created));
-  const waiting = !q && (f.id === STATUS.QUEUED || f.id === "all") ? fading(state.items, state.edition, { limit: 8 }) : [];
+  const mine = state.items.filter((i) => !i.suggested || i.status !== STATUS.INBOX);
+  // A search looks through everything: you remember the thing, not where it sits.
+  const inView = q ? mine : mine.filter(f.test);
+  const rows = inView.filter((i) => !kind || kind.test(i)).filter(match)
+    .sort((a, b) => (!q && f.id === STATUS.ASIDE ? (a.until || 0) - (b.until || 0) : 0)
+      || (!q && f.id === "loved" ? (b.loved || 0) - (a.loved || 0) : 0) || (b.doneAt || b.archivedAt || b.created) - (a.doneAt || a.archivedAt || a.created));
+  const kinds = ALL_KINDS.map((k) => ({ ...k, n: inView.filter(k.test).length })).filter((k) => k.n || k.id === state.allKind);
+  const waiting = !q && !kind && (f.id === "toread" || f.id === "all") ? fading(state.items, state.edition, { limit: 8 }) : [];
   const shown = rows.slice(0, state.allShown);
+  const title = q ? `Results for “${state.allQuery.trim()}”` : kind ? `${f.id === "all" ? "" : `${f.label}: `}${kind.label}` : f.label;
   return `<div class="find-wrap">${I.search}<label class="sr-only" for="all-q">Search everything you saved</label>
       <input class="find" id="all-q" type="search" placeholder="Search everything you saved" value="${esc(state.allQuery)}" enterkeyhint="search" autocomplete="off"></div>
-    <div class="chips" role="group" aria-label="Show">
-      ${ALL_FILTERS.map((x, i) => `<button class="chip" type="button" data-filter="${i}" aria-pressed="${state.allFilter === i}">${x.label}</button>`).join("")}
-    </div>
+    ${q ? "" : `<div class="chips" role="group" aria-label="Show">
+      ${ALL_FILTERS.map((x, i) => { const n = x.id === "all" ? 0 : mine.filter(x.test).length;
+        return x.id === "all" || n || state.allFilter === i ? `<button class="chip" type="button" data-filter="${i}" aria-pressed="${state.allFilter === i}">${x.label}${n ? ` <span class="n">${n}</span>` : ""}</button>` : ""; }).join("")}
+    </div>`}
+    ${kinds.length > 1 || state.allKind ? `<div class="chips kinds" role="group" aria-label="Kind">
+      ${kinds.map((k) => `<button class="chip sm" type="button" data-kind="${k.id}" aria-pressed="${state.allKind === k.id}">${k.label}</button>`).join("")}
+    </div>` : ""}
     ${waiting.length ? `${sectionHead("Fading", `Untouched ${FADE_DAYS / 7} weeks fades`)}<div class="tide">${tideHtml(waiting)}</div>` : ""}
-    ${sectionHead(f.id === "all" ? "Everything" : f.label, `${rows.length} item${rows.length === 1 ? "" : "s"}`)}
-    ${shown.length ? shown.map((i) => postHtml(i, { compact: true })).join("") : `<p class="empty">${q ? "Nothing matches." : "Nothing here yet."}</p>`}
+    ${sectionHead(title, `${rows.length} item${rows.length === 1 ? "" : "s"}`)}
+    ${shown.length ? shown.map((i) => postHtml(i, { compact: true })).join("") : `<p class="empty">${q ? "Nothing matches. Try fewer words." : "Nothing here yet."}</p>`}
     ${rows.length > shown.length ? `<button class="btn more" type="button" data-act="show-more">Show ${Math.min(PAGE, rows.length - shown.length)} more</button>` : ""}`;
 }
 
@@ -1993,7 +2038,7 @@ function postHtml(item, { compact = false } = {}) {
     : item.suggested ? `<span class="tag">Top story</span>`
     : item.backAt && item.status === STATUS.INBOX && dayKey(item.backAt) === dayKey() ? `<span class="tag back">Back today</span>`
     : isFaded(item) ? `<span class="tag fade">Faded</span>`
-    : state.tab === "all" && item.status !== STATUS.QUEUED ? `<span class="tag">${{ inbox: "New", done: "Done", archived: "Let go", aside: "Set aside" }[item.status] || ""}</span>` : "";
+    : state.tab === "all" && item.status !== STATUS.QUEUED ? `<span class="tag">${{ inbox: "New", done: "Finished", archived: "Let go", aside: "Coming back" }[item.status] || ""}</span>` : "";
   // The words at the top: your reason, else Shoebox's line about it (marked as a guess), else nothing.
   let say = "";
   if (item.suggested) say = `<p class="body">${esc(item.suggestReason || item.summary || "Picked from what you finish.")}</p>`;
@@ -2188,6 +2233,7 @@ async function onTimelineClick(e) {
     return;
   }
   if ((b = hit("[data-filter]"))) { state.allFilter = +b.dataset.filter; state.allShown = PAGE; render({ top: false }); return; }
+  if ((b = hit("[data-kind]"))) { state.allKind = state.allKind === b.dataset.kind ? "" : b.dataset.kind; state.allShown = PAGE; render({ top: false }); return; }
   if ((b = hit("[data-v]"))) { timelineVerdict(b.dataset.id, b.dataset.v); return; }
   if ((b = hit("[data-undo]"))) { undoRecent(b.dataset.undo); return; }
   if ((b = hit("[data-love]"))) { const it = byId(b.dataset.love); if (it) setLove(it.id, !it.loved); return; }
@@ -3701,7 +3747,7 @@ function openSettings(panel = "", { fromCard = false } = {}) {
   let html;
   if (panel && P[panel]) {
     html = `<div class="sheet-head set-head">${fromCard ? "" : `<button class="x" type="button" data-set-back aria-label="All settings">${I.back}</button>`}<h2>${esc(P[panel].title)}</h2>${close}</div>
-      ${fromCard && panel === "weather" && morningCache().weather ? `<button class="btn" type="button" id="set-wx-hide">Hide the weather for today</button>` : ""}
+      ${fromCard && panel === "weather" && morningCache().weather ? `<button class="btn" type="button" id="set-wx-hide">${m.wxSmall ? "Show the full weather card" : "Make the weather card small"}</button>` : ""}
       ${P[panel].body}
       ${fromCard ? `<button class="btn ghost sm set-all" type="button" data-set-back>All settings</button>` : ""}`;
   } else {
@@ -3713,7 +3759,7 @@ function openSettings(panel = "", { fromCard = false } = {}) {
   const wrap = sheet(html, { label: panel && P[panel] ? P[panel].title : "Settings" });
   wrap.querySelectorAll("[data-set]").forEach((b) => b.addEventListener("click", () => openSettings(b.dataset.set)));
   wrap.querySelectorAll("[data-set-back]").forEach((b) => b.addEventListener("click", () => openSettings()));
-  $("#set-wx-hide", wrap)?.addEventListener("click", () => { closeSheet(); dayAction("wx-hide"); });
+  $("#set-wx-hide", wrap)?.addEventListener("click", () => { closeSheet(); dayAction(m.wxSmall ? "wx-big" : "wx-small"); });
   if (panel === "usage") showUsage($("#set-usage-box", wrap));
 
   const st = $("#set-st", wrap);
