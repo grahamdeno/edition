@@ -1023,3 +1023,11 @@ details.adv > summary, .group details.adv > summary, .ag-more summary { min-heig
 .mail-uses b { color: var(--fg); }
 .btn.erase { color: var(--warn); border-color: var(--warn); background: transparent; font-weight: 600; }
 .sheet-foot .btn.erase { background: var(--warn); color: #fff; }
+
+/* A change was saved: the status line lights up with a check, the button says Saved for a moment. */
+.st.ok { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 999px; background: var(--sig-soft); color: var(--sig-ink); font-weight: 600; animation: ok-pop 0.35s ease-out; }
+.st.ok::before { content: ""; width: 16px; height: 16px; flex: none; background: currentColor; -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12.5l4.5 4.5L19 7.5'/%3E%3C/svg%3E") center / contain no-repeat; mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12.5l4.5 4.5L19 7.5'/%3E%3C/svg%3E") center / contain no-repeat; }
+.btn.flash { background: var(--sig); border-color: var(--sig); color: var(--on-sig); }
+.btn.flash .i { width: 18px; height: 18px; }
+@keyframes ok-pop { 0% { transform: scale(0.92); opacity: 0.4; } 60% { transform: scale(1.03); opacity: 1; } 100% { transform: none; } }
+@media (prefers-reduced-motion: reduce) { .st.ok { animation: none; } }
