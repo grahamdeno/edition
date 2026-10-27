@@ -111,7 +111,16 @@ export function dayOfYear(now = Date.now()) {
   const d = new Date(now), start = new Date(d.getFullYear(), 0, 0);
   return Math.floor((new Date(d.getFullYear(), d.getMonth(), d.getDate()) - start) / DAY);
 }
-export const jungFor = (now = Date.now()) => JUNG[(dayOfYear(now) + new Date(now).getFullYear()) % JUNG.length];
+/** Today's quote, skipping ones you said aren't for you. Returns { ...quote, index } or null when all are retired. */
+export function jungFor(now = Date.now(), retired = []) {
+  const skip = new Set(retired);
+  const start = (dayOfYear(now) + new Date(now).getFullYear()) % JUNG.length;
+  for (let k = 0; k < JUNG.length; k++) {
+    const i = (start + k) % JUNG.length;
+    if (!skip.has(i)) return { ...JUNG[i], index: i };
+  }
+  return null;
+}
 
 /* ---- On this day: something from your past saves ---- */
 
