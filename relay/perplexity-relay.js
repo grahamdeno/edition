@@ -37,7 +37,7 @@
  */
 
 /** What this copy of the relay can do; the app checks it to say when an update is needed. */
-export const RELAY_VERSION = 10;
+export const RELAY_VERSION = 11;
 export const RELAY_FEATURES = ["preview", "image", "photo", "agent", "push", "remind", "ical", "nhl", "inbox", "apple", "ai", "stats"];
 
 const ALLOWED_ORIGINS = ["https://shoebox.tangomike.app", "https://grahamdeno.github.io"];
@@ -69,12 +69,16 @@ const RELAY = {
     if (!env.SHOEBOX) { message.setReject("Shoebox isn't set up to receive mail."); return; }
     const raw = await new Response(message.raw).arrayBuffer();
     if (raw.byteLength > 12e6) { message.setReject("Too large for Shoebox (12 MB)."); return; }
+    // Which inbox: a personal address (sb-…@) goes to that phone's box; the original shared address to the owner's.
+    const box = await mailBox(env, message.to);
+    if (box === null) { message.setReject("There's no Shoebox at that address."); return; }
     const { files, ...mail } = parseMail(new TextDecoder("utf-8", { fatal: false }).decode(raw));
     const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const pre = box ? `${box}:` : "";
     // Attachments wait in their own entries; the app fetches each one when it collects the mail.
-    for (const [n, f] of files.entries()) await env.SHOEBOX.put(`a:${id}:${n}`, f.data, { expirationTtl: 30 * 86400 });
+    for (const [n, f] of files.entries()) await env.SHOEBOX.put(`a:${pre}${id}:${n}`, f.data, { expirationTtl: 30 * 86400 });
     const attachments = files.map((f, n) => ({ n, name: f.name, type: f.type, size: f.size }));
-    await env.SHOEBOX.put(`m:${id}`, JSON.stringify({ id, at: Date.now(), from: message.from, ...mail, attachments }), { expirationTtl: 30 * 86400 });
+    await env.SHOEBOX.put(`m:${pre}${id}`, JSON.stringify({ id, at: Date.now(), from: message.from, ...mail, attachments }), { expirationTtl: 30 * 86400 });
   },
   async scheduled(event, env, ctx) {
     ctx.waitUntil(sendDue(env));
@@ -99,7 +103,7 @@ const RELAY = {
     if (pathname === "/stats" || pathname === "/stats/report") return statsRoute(request, env, pathname, cors);
     if (pathname.startsWith("/apple/") || pathname === "/song") return appleRoute(request, env, pathname, searchParams, cors);
     if (request.method === "GET" && pathname === "/nhl") return nhl(searchParams.get("date"), cors);
-    if (pathname === "/inbox" || pathname === "/inbox/ack" || pathname === "/inbox/file") return inboxRoute(request, env, pathname, cors);
+    if (pathname === "/inbox" || pathname === "/inbox/ack" || pathname === "/inbox/file" || pathname === "/inbox/address") return inboxRoute(request, env, pathname, cors);
     if (request.method === "GET" && pathname === "/ical") return ical(searchParams.get("url"), cors);
     if (request.method === "GET" && pathname === "/image") return image(searchParams.get("url"), cors);
     if (pathname === "/push/key" || pathname === "/push/test" || pathname.startsWith("/remind")) return pushRoute(request, env, pathname, searchParams, cors);
@@ -517,38 +521,91 @@ export async function nhl(date, cors) {
 }
 
 /* ================= Your Shoebox email address =================
- * Mail arrives through Cloudflare Email Routing (an address at a domain you
- * have on Cloudflare, routed to this Worker). It waits in KV until Shoebox
- * picks it up with the inbox key it set the first time, then it's deleted.
+ * Mail arrives through Cloudflare Email Routing and waits in KV until the
+ * phone picks it up, then it's deleted.
+ *
+ * Each phone has its own address, sb-<random>@<domain>, routed here by the
+ * domain's catch-all rule; its mail is kept under its own box (a hash of the
+ * phone's inbox key), so nobody else's phone can read it. Personal addresses
+ * turn on with the EMAIL_ALIASES=1 variable, once the catch-all is set.
+ * The original shared address (EMAIL_ADDRESS) still delivers to the phone that
+ * claimed it first, so an existing forward keeps working until it's moved.
  */
+const ALIAS_RE = /^sb-([a-z0-9]{8,16})@/;
+const aliasesOn = (env) => env.EMAIL_ALIASES === "1" || env.EMAIL_ALIASES === 1 || env.EMAIL_ALIASES === true;
+const mailDomain = (env) => String(env.EMAIL_DOMAIN || (env.EMAIL_ADDRESS || "").split("@")[1] || "tangomike.app").toLowerCase();
+async function boxOf(key) { return (await sha256(`inbox:${key}`)).slice(0, 20); }
+function newSlug() {
+  const abc = "abcdefghijkmnpqrstuvwxyz23456789"; // no look-alikes (l, o, 0, 1)
+  return Array.from(crypto.getRandomValues(new Uint8Array(10)), (b) => abc[b % abc.length]).join("");
+}
+
+/** The box a recipient address delivers to: "" for the shared address, the box id for a personal one, null for neither. */
+export async function mailBox(env, to) {
+  const addr = String(to || "").trim().toLowerCase();
+  if (!addr) return ""; // no envelope recipient: treat as the shared address
+  if (env.EMAIL_ADDRESS && addr === String(env.EMAIL_ADDRESS).toLowerCase()) return "";
+  const m = addr.match(ALIAS_RE);
+  if (!m || !aliasesOn(env) || addr.split("@")[1] !== mailDomain(env)) return env.EMAIL_ADDRESS ? null : "";
+  return (await env.SHOEBOX.get(`alias:${m[1]}`)) || null;
+}
+
+/** This phone's personal address, made the first time it's asked for (or fresh, when `renew`). */
+async function personalAddress(env, box, { renew = false } = {}) {
+  const kv = env.SHOEBOX;
+  const cur = await kv.get(`box:${box}`, "json");
+  if (cur && !renew) return `sb-${cur.slug}@${mailDomain(env)}`;
+  if (cur) await kv.delete(`alias:${cur.slug}`);
+  const slug = newSlug();
+  await kv.put(`alias:${slug}`, box);
+  await kv.put(`box:${box}`, JSON.stringify({ slug, at: Date.now() }));
+  return `sb-${slug}@${mailDomain(env)}`;
+}
+
 async function inboxRoute(request, env, pathname, cors) {
   const kv = env.SHOEBOX;
   if (!kv) return json(501, "The inbox needs the relay's storage. Redeploy with the Deploy to Cloudflare button.", cors);
   const key = request.headers.get("x-inbox-key") || "";
   if (!/^[\w-]{24,80}$/.test(key)) return json(401, "No inbox key.", cors);
-  const have = await kv.get("inbox-key");
-  if (!have) await kv.put("inbox-key", key); // the first phone to ask owns the inbox
-  else if (have !== key) return json(403, "This inbox belongs to another phone. Reset it in Cloudflare (delete the inbox-key entry) to move it.", cors);
+  let owner = await kv.get("inbox-key");
+  if (!owner && !aliasesOn(env)) { await kv.put("inbox-key", key); owner = key; } // before personal addresses, the first phone owns the shared one
+  const isOwner = owner === key;
+  if (!isOwner && !aliasesOn(env)) return json(403, "This inbox belongs to another phone. Personal addresses aren't on yet.", cors);
+  const box = await boxOf(key);
+  const send = (body) => new Response(JSON.stringify(body), { headers: { ...cors, "content-type": "application/json", "cache-control": "no-store" } });
+  // Mail keys: m:<box>:<id> for a personal address, m:<id> for the shared one (the owner's).
+  const mailKeys = async () => {
+    const mine = (await kv.list({ prefix: `m:${box}:` })).keys.map((k) => k.name);
+    const shared = isOwner ? (await kv.list({ prefix: "m:" })).keys.map((k) => k.name).filter((n) => !n.slice(2).includes(":")) : [];
+    return [...shared, ...mine];
+  };
   if (request.method === "GET" && pathname === "/inbox") {
-    const list = await kv.list({ prefix: "m:" });
     const mails = [];
-    for (const k of list.keys.slice(0, 20)) { const m = await kv.get(k.name, "json"); if (m) mails.push(m); }
-    return new Response(JSON.stringify({ mails, address: env.EMAIL_ADDRESS || null }), { headers: { ...cors, "content-type": "application/json", "cache-control": "no-store" } });
+    for (const name of (await mailKeys()).slice(0, 20)) { const m = await kv.get(name, "json"); if (m) mails.push(m); }
+    const address = aliasesOn(env) ? await personalAddress(env, box) : isOwner ? env.EMAIL_ADDRESS || null : null;
+    const shared = aliasesOn(env) && isOwner ? env.EMAIL_ADDRESS || null : null;
+    return send({ mails, address, shared });
+  }
+  if (request.method === "POST" && pathname === "/inbox/address") {
+    if (!aliasesOn(env)) return json(409, "Personal addresses aren't on yet.", cors);
+    return send({ address: await personalAddress(env, box, { renew: true }) });
   }
   if (request.method === "GET" && pathname === "/inbox/file") {
     const q = new URL(request.url).searchParams, id = q.get("id") || "", n = q.get("n") || "";
     if (!/^[\w-]+$/.test(id) || !/^\d$/.test(n)) return json(400, "Bad file.", cors);
-    const data = await kv.get(`a:${id}:${n}`);
+    const data = (await kv.get(`a:${box}:${id}:${n}`)) || (isOwner ? await kv.get(`a:${id}:${n}`) : null);
     if (!data) return json(404, "That attachment is gone.", cors);
-    return new Response(JSON.stringify({ data }), { headers: { ...cors, "content-type": "application/json", "cache-control": "no-store" } });
+    return send({ data });
   }
   if (request.method === "POST" && pathname === "/inbox/ack") {
     const { ids } = await request.json().catch(() => ({ ids: [] }));
     for (const id of (ids || []).slice(0, 50)) if (/^[\w-]+$/.test(id)) {
-      await kv.delete(`m:${id}`);
-      for (let n = 0; n < 6; n++) await kv.delete(`a:${id}:${n}`);
+      for (const pre of isOwner ? [`${box}:`, ""] : [`${box}:`]) {
+        await kv.delete(`m:${pre}${id}`);
+        for (let n = 0; n < 6; n++) await kv.delete(`a:${pre}${id}:${n}`);
+      }
     }
-    return new Response(JSON.stringify({ ok: true }), { headers: { ...cors, "content-type": "application/json" } });
+    return send({ ok: true });
   }
   return json(404, "Not found.", cors);
 }
