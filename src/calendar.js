@@ -215,3 +215,29 @@ export function eventsOn(events, dayStart) {
   }
   return out.sort((a, b) => (b.allDay - a.allDay) || a.start - b.start || a.title.localeCompare(b.title));
 }
+
+/* ---- How an event reads on Today ---- */
+
+/** A link to act on: the event's own, or the first in its notes (a video call, say). */
+export function calLink(e) {
+  if (e.url && /^https?:\/\//.test(e.url)) return e.url;
+  return (String(e.notes || "").match(/https?:\/\/[^\s<>"')]+/) || [])[0] || "";
+}
+
+/** "FW: Data Engineering Standup" → "Data Engineering Standup". */
+export function cleanEventTitle(t) {
+  let s = String(t || "").trim();
+  for (let k = 0; k < 3; k++) s = s.replace(/^(fw|fwd|re|following|updated|update|canceled|cancelled|invitation|accepted|tentative)\s*:\s*/i, "");
+  return s || "Busy";
+}
+
+/** Where an event happens, short: "Teams", "Zoom", or the first part of an address. */
+export function eventPlace(e) {
+  const loc = String(e.location || "").trim(), link = calLink(e);
+  const online = /teams\.microsoft|microsoft teams/i.test(loc + link) ? "Teams" : /zoom\.us|\bzoom\b/i.test(loc + link) ? "Zoom"
+    : /meet\.google|google meet/i.test(loc + link) ? "Google Meet" : /webex/i.test(loc + link) ? "Webex" : "";
+  if (online) return { text: online, online: true };
+  if (!loc || /^https?:\/\//.test(loc)) return { text: link ? "Online" : "", online: Boolean(link) };
+  return { text: loc.split(",")[0].trim().slice(0, 60), online: false, full: loc };
+}
+

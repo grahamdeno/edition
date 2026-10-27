@@ -66,3 +66,15 @@ test("Outlook zone names are understood", () => {
   const [e] = eventsOn(parseIcs(ics), day(2026, 10, 27));
   assert.equal(new Date(e.start).toISOString(), "2026-10-27T16:00:00.000Z");
 });
+
+import { cleanEventTitle, eventPlace, calLink } from "../src/calendar.js";
+
+test("event titles lose mail prefixes; online meetings are named by service", () => {
+  assert.equal(cleanEventTitle("FW: RE: Data Engineering Standup"), "Data Engineering Standup");
+  assert.equal(cleanEventTitle("Following: Lunch and Learn"), "Lunch and Learn");
+  assert.equal(cleanEventTitle(""), "Busy");
+  assert.deepEqual(eventPlace({ location: "Microsoft Teams Meeting" }), { text: "Teams", online: true });
+  assert.equal(eventPlace({ location: "", notes: "Join https://zoom.us/j/123" }).text, "Zoom");
+  assert.equal(eventPlace({ location: "Little Leaps, 5226 S. College Rd, Wilmington, NC" }).text, "Little Leaps");
+  assert.equal(calLink({ notes: "Join: https://teams.microsoft.com/l/meetup-join/abc) more" }), "https://teams.microsoft.com/l/meetup-join/abc");
+});
