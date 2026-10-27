@@ -36,7 +36,7 @@ import { I, LOGO } from "./icons.js";
 import { topicColor, dominantColor, tintInks, focusOf } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "4.10.0";
+export const VERSION = "4.10.1";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 
@@ -919,7 +919,7 @@ function schoolAskHtml() {
   if (!state.schoolForce && (!c.on || !c.days.includes(new Date().getDay()) || schoolAsked())) return "";
   return `<section class="ask" aria-labelledby="ask-h">
       <div class="ask-top"><span class="av av-school" aria-hidden="true">${esc((c.school || "S").charAt(0))}</span>
-        <div><h2 id="ask-h">Newsletter from ${esc(c.school || "school")}?</h2><p>Paste the link or the text. You'll get what matters for ${esc(c.child)}.</p></div></div>
+        <div><h2 id="ask-h">Newsletter from ${esc(c.school || "school")}?</h2><p>Paste the link or the text. Each thing that matters for ${esc(c.child)} becomes its own post.</p></div></div>
       <label class="sr-only" for="ask-in">Newsletter link or text</label>
       <textarea id="ask-in" rows="2" placeholder="Paste the link or the newsletter">${esc(state.schoolDraft || "")}</textarea>
       <div class="ask-acts"><button class="btn primary" type="button" data-school="go">Pull what matters</button>
@@ -937,7 +937,7 @@ async function pullNewsletter(raw, statusEl) {
   const c = schoolSettings();
   const first = input.split(/\s+/)[0];
   const isLink = /^https?:\/\/\S+$/i.test(input);
-  let url = isLink ? ai.unwrapLink(first) : "", text = isLink ? "" : input, image = null;
+  let url = isLink ? ai.unwrapLink(first) : "", text = isLink ? "" : input;
   if (isLink) {
     if (!ai.relayBase()) { set("Reading a link needs the relay (Settings › Relay). Or paste the newsletter's text instead.", true); return false; }
     set("Reading the newsletter…");
@@ -945,26 +945,28 @@ async function pullNewsletter(raw, statusEl) {
       const res = await withTimeout(fetch(`${ai.relayBase()}/preview?text=1&url=${encodeURIComponent(url)}`), 20000);
       const data = res.ok ? await res.json() : {};
       text = [data.title, data.description, data.text].filter(Boolean).join("\n\n");
-      image = (await usableImages(candidatesOf(data), { timeout: 6000 }))[0] || null;
     } catch (e) { noteError(e, { quiet: true, where: "school: read page" }); }
     if (text.length < 300) { set("That page didn't give up its text (it may need a sign-in or build itself in the browser). Copy the newsletter's text and paste it here instead.", true); return false; }
   }
   set("Picking out what matters…");
   let out;
-  try { out = await ai.schoolPost({ text, about: c.about, school: c.school }); } catch (e) {
+  try { out = await ai.schoolPosts({ text, about: c.about, school: c.school }); } catch (e) {
     noteError(e, { quiet: true, where: "school newsletter" });
     set(e.message || "Couldn't read it.", true);
     return false;
   }
-  if (!out.headline && !out.items.length) { set(`Nothing in this one for ${c.child}.`); markSchoolAsked(); return false; }
-  const item = createItem({ kind: KIND.LINK, url: url || undefined, title: out.headline || "This week at school", summary: out.body, tags: out.tags }, { id: db.newId(), source: "school" });
-  Object.assign(item, {
-    school: { name: out.school || c.school, body: out.body, items: out.items },
-    enrichedAt: Date.now(), picSettled: Date.now(), hook: out.body,
-    ...(image ? { imageUrl: image.src, imageAlt: image.alt || undefined, imageCands: [image] } : { coverOff: !url }),
-    ...(url ? {} : { kind: KIND.NOTE, text: out.body }),
-  });
-  await saveItem(item);
+  if (!out.posts.length) { set(`Nothing in this one for ${c.child}.`); markSchoolAsked(); return false; }
+  const now = Date.now(), name = out.school || c.school;
+  // Newest first in New, so the newsletter's first piece is created last and shows on top.
+  for (let k = out.posts.length - 1; k >= 0; k--) {
+    const p = out.posts[k];
+    const item = createItem({ kind: KIND.NOTE, text: p.body, title: p.headline || p.body.slice(0, 80), tags: p.tags.length ? p.tags : ["school"] },
+      { id: db.newId(), source: "school", now: now - k });
+    Object.assign(item, { title: p.headline || item.title, school: { name, body: p.body, date: p.date, from: url || undefined }, url: url || undefined,
+      enrichedAt: Date.now(), picSettled: Date.now(), coverOff: true, hook: p.body });
+    await saveItem(item);
+  }
+  state.schoolCount = out.posts.length;
   state.schoolDraft = "";
   state.schoolForce = false;
   markSchoolAsked();
@@ -1190,7 +1192,8 @@ function postHtml(item, { compact = false } = {}) {
   // The words at the top: your reason, else Shoebox's line about it (marked as a guess), else nothing.
   let say = "";
   if (item.suggested) say = `<p class="body">${esc(item.suggestReason || item.summary || "Picked from what you finish.")}</p>`;
-  else if (item.school) say = `<p class="school-head">${esc(item.title)}</p><p class="body">${esc(item.school.body || "")}</p>`;
+  else if (item.school) say = `<p class="school-head">${esc(item.title)}</p><p class="body">${esc(item.school.body || "")}</p>`
+    + (item.school.date ? `<p class="ev-place">${I.cal}<span>${esc(shortDate(fromDateInput(item.school.date)))}</span></p>` : "");
   else if (item.kind === KIND.NOTE) say = `<p class="say">${esc(item.text || item.title)}</p>`;
   else if (item.why) say = `<p class="say">${esc(item.why)}</p>`;
   else if (item.hook && !words) say = `<p class="guess"><span class="sr-only">${APP}'s guess: </span>${esc(item.hook)}</p>`;
@@ -1355,7 +1358,7 @@ async function onTimelineClick(e) {
     b.disabled = true;
     const ok = await pullNewsletter($("#ask-in")?.value, $("#ask-st"));
     b.disabled = false;
-    if (ok) { tick(true); render({ top: true }); toast("Posted to the top of New."); }
+    if (ok) { tick(true); render({ top: true }); toast(`${state.schoolCount} post${state.schoolCount === 1 ? "" : "s"} from school, at the top of New.`); }
     return;
   }
   if ((b = hit("[data-school=skip]"))) { markSchoolAsked(); state.schoolDraft = ""; state.schoolForce = false; render({ top: false }); return; }
