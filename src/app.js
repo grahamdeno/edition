@@ -33,7 +33,7 @@ import { I, LOGO } from "./icons.js";
 import { topicColor, dominantColor, tintInks } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "4.5.0";
+export const VERSION = "4.5.1";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 
@@ -1787,11 +1787,6 @@ function openAdd() {
     ${field("author", "Who said it")}
     ${field("why", "Why you're saving it", { area: true, hint: "(top of the post)", ph: "Read this before the roadmap review", attrs: 'maxlength="140"' })}
     ${field("note", "Your note", { area: true, ph: "Anything you want to remember about it" })}
-    <div class="two cap-tm" data-f="tags" hidden>
-      ${field("tags", "Tags", { ph: ai.settings.enabled() ? "Blank: AI picks" : "scrum, ai", attrs: 'autocapitalize="off"' }).replace(' hidden>', ">")}
-      ${field("minutes", "Minutes", { type: "number", ph: "Auto", attrs: 'inputmode="numeric" min="1"' }).replace(' hidden>', ">")}
-    </div>
-    <div class="chips tag-chips cap-tagpick" id="cap-tagpick" hidden></div>
     <div class="cap-foot">
       <span class="st" id="cap-st" role="status"></span>
       <button class="btn primary save" type="button" id="cap-save">Save</button>
@@ -1810,27 +1805,16 @@ function openAdd() {
   });
   const why = $("#cap-why", wrap);
   why.addEventListener("input", () => { state.capWhy = why.value; grow(why, 160); });
-  for (const k of ["title", "author", "note", "tags", "minutes"]) {
+  for (const k of ["title", "author", "note"]) {
     const el = $(`#cap-${k}`, wrap);
     el.addEventListener("input", () => {
       F[k] = el.value;
       if (k === "title") F.titleTyped = true;
-      if (k === "tags") renderTagPick();
       if (el.tagName === "TEXTAREA") grow(el, 200);
     });
     if (el.tagName === "INPUT") el.addEventListener("keydown", (e) => { if (e.key === "Enter") saveCapture(); });
   }
   [why, $("#cap-note", wrap)].forEach((el) => el.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) saveCapture(); }));
-  $("#cap-tagpick", wrap).addEventListener("click", (e) => {
-    const b = e.target.closest("[data-tag]");
-    if (!b) return;
-    const el = $("#cap-tags", wrap);
-    const list = el.value.split(",").map((t) => t.trim()).filter(Boolean);
-    const at = list.findIndex((t) => normTag(t) === b.dataset.tag);
-    if (at >= 0) list.splice(at, 1); else list.push(b.dataset.tag);
-    el.value = F.tags = list.join(", ");
-    renderTagPick();
-  });
   $("#cap-save", wrap).addEventListener("click", saveCapture);
   $("#cap-attach", wrap).addEventListener("click", () => { unlock(); $("#in-any", wrap).click(); });
   $("#cap-paste", wrap).addEventListener("click", pasteIntoBox);
@@ -1847,19 +1831,8 @@ function openAdd() {
   input.addEventListener("change", () => { stageFiles(Array.from(input.files || [])); input.value = ""; });
   renderTray();
   updateDetect();
-  renderTagPick();
   [ta, why, $("#cap-note", wrap)].forEach((el) => el.value && grow(el, 240));
   ta.focus();
-}
-
-/** Your most used tags, one tap to add or remove. */
-function renderTagPick() {
-  const box = $("#cap-tagpick");
-  if (!box) return;
-  const on = new Set(String(state.capForm.tags || "").split(",").map(normTag).filter(Boolean));
-  const top = vocab().slice(0, 8);
-  box.innerHTML = top.map((t) => `<button class="chip" type="button" data-tag="${esc(t)}" aria-pressed="${on.has(t)}">${esc(t)}</button>`).join("");
-  box.hidden = !top.length || $("[data-f=tags]")?.hidden;
 }
 
 /** What will be saved, line by line, so there are no surprises. */
@@ -1878,13 +1851,10 @@ function updateDetect() {
     const detail = one || d.kind === KIND.NOTE || d.kind === KIND.QUOTE ? "" : d.fileName || (d.videoId ? "" : d.url) || "";
     return `<li>${I.arrow}<span class="what">${esc(describeDraft(d))}</span>${detail ? `<span class="d">${esc(detail)}</span>` : ""}</li>`;
   }).join("");
-  // The same fields as Edit, once there's something to describe. Several at once share why and tags.
+  // Title, why and note once there's something to describe; the AI tags it from what you write. Several at once share why.
   const words = one && (one.kind === KIND.NOTE || one.kind === KIND.QUOTE);
-  const show = { why: drafts.length > 0, tags: drafts.length > 0, title: one && !words, author: one && one.kind === KIND.QUOTE, note: one && !words };
+  const show = { why: drafts.length > 0, title: one && !words, author: one && one.kind === KIND.QUOTE, note: one && !words };
   for (const [k, on] of Object.entries(show)) { const el = $(`[data-f=${k}]`); if (el) el.hidden = !on; }
-  const tags = $("#cap-tags");
-  if (tags) tags.closest(".cap-tm").classList.toggle("solo", !one);
-  renderTagPick();
   const save = $("#cap-save");
   save.disabled = !drafts.length;
   save.textContent = drafts.length > 1 ? `Save ${drafts.length} items` : "Save";
@@ -1981,15 +1951,8 @@ async function saveCapture() {
 async function applyCapFields(out) {
   const F = state.capForm, list = out.filter(Boolean), one = list.length === 1 ? list[0] : null;
   const why = (state.capWhy || "").trim().slice(0, 140);
-  const typed = canonTags(String(F.tags || "").split(","), {}, MAX_TAGS);
-  if (typed.length) {
-    const released = releaseTags(state.tagAliases, typed);
-    if (Object.keys(released).length !== Object.keys(state.tagAliases).length) { state.tagAliases = released; await db.meta.set("tagAliases", released); }
-  }
-  const m = Math.round(+F.minutes);
   for (const it of list) {
     if (why) it.why = why;
-    if (typed.length) { it.tags = typed; it.tagsMine = true; }
     if (it === one) {
       const words = it.kind === KIND.NOTE || it.kind === KIND.QUOTE;
       const title = String(F.title || "").trim();
@@ -2001,7 +1964,6 @@ async function applyCapFields(out) {
       }
       const author = String(F.author || "").trim();
       if (it.kind === KIND.QUOTE && author) it.author = author.slice(0, 80);
-      if (Number.isFinite(m) && m > 0) { it.minutes = Math.min(m, 600); it.minutesMine = true; }
     }
     await db.items.put(it);
   }
