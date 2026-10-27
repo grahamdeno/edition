@@ -38,7 +38,7 @@ import { topicColor, dominantColor, tintInks, focusOf } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 
-export const VERSION = "4.29.1";
+export const VERSION = "4.29.2";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -1183,7 +1183,7 @@ function morningHtml() {
     // Small: the picture and the temperature. Tap for the whole card.
     const w = c.weather;
     cards.push(`<button class="wx-small" type="button" data-day="wx-big" aria-label="Weather: ${w.now} degrees, ${esc(w.word)}. Show the full weather.">
-        <span class="wx-ico wx-${daily.weatherKind(w)}" aria-hidden="true">${WX_ICONS[daily.weatherKind(w)]}</span><span class="deg">${w.now}°</span></button>`);
+        <span class="wx-ico wx-${daily.weatherKind(w)}" aria-hidden="true">${WX_ICONS[daily.weatherKind(w)]}</span><span class="deg">${w.now}°</span><span class="wx-open" aria-hidden="true">${WX_MIN}</span></button>`);
   } else if (m.weather && c.weather) {
     const w = c.weather;
     const yt = daily.youtubeId(m.cam);
