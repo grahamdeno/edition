@@ -39,7 +39,7 @@ import { problems, noteError as logError, onFirstProblem, clearProblems, formatP
 import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone } from "./onboard.js";
 
-export const VERSION = "4.31.0";
+export const VERSION = "4.32.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -998,7 +998,7 @@ function render({ top = false } = {}) {
   bindTimeline(tl);
   tintVisible(tl);
   if (state.reveal) $("#panel", tl)?.classList.add("reveal");
-  coachPass(tl);
+  requestAnimationFrame(() => { placeSpot(); coachPass(tl); });
   updateWidget();
 }
 
@@ -1709,7 +1709,7 @@ async function finishBuild(aiOn) {
   const stories = aiOn && storiesAuto();
   if (stories) { state.storiesLoading = true; try { localStorage.setItem("edition.storiesDay", dayKey()); } catch { /* full */ } }
   render({ top: true });
-  setTimeout(() => { state.reveal = false; }, 2500);
+  setTimeout(() => { state.reveal = false; const tl = $("#tl"); if (tl) coachPass(tl); }, 2600);
   if (!stories) return;
   const n = await findNew(null).catch(() => 0);
   state.storiesLoading = false;
@@ -1741,36 +1741,109 @@ function celebrateSave(list) {
 }
 
 /*
+ * Spotlight: when Shoebox teaches something, everything else on screen dims
+ * and blurs, and the thing itself stays sharp and tappable. Four panels
+ * frame a hole around it; a tap on the dimmed part (or Got it) ends it.
+ * When guidance ends, the next thing to try (usually +) pulses, silently.
+ */
+let spot = null;
+function spotlight({ sel, text = "", key = "", next = ".fab" } = {}) {
+  endSpot(false);
+  const el = document.createElement("div");
+  el.className = "spot";
+  el.innerHTML = `<div class="spot-p" data-p="t"></div><div class="spot-p" data-p="b"></div><div class="spot-p" data-p="l"></div><div class="spot-p" data-p="r"></div>
+    <div class="spot-ring" aria-hidden="true"></div>
+    ${text ? `<div class="spot-tip" role="dialog" aria-label="Tip"><p>${esc(text)}</p><button class="btn sm" type="button" data-spot-ok>Got it</button></div>` : ""}`;
+  el.querySelectorAll(".spot-p").forEach((p) => p.addEventListener("click", () => endSpot()));
+  $("[data-spot-ok]", el)?.addEventListener("click", () => endSpot());
+  document.body.appendChild(el);
+  spot = { el, sel, key, next };
+  placeSpot();
+  requestAnimationFrame(() => { el.classList.add("on"); $("[data-spot-ok]", el)?.focus({ preventScroll: true }); });
+}
+/** Keep the hole on its target through scrolls and re-renders; no target, no spotlight. */
+function placeSpot() {
+  if (!spot) return;
+  const t = $(spot.sel);
+  if (!t || $(".sheet-wrap")) { endSpot(false); return; }
+  const r = t.getBoundingClientRect(), pad = 8, W = innerWidth, H = innerHeight;
+  const x0 = Math.max(0, r.left - pad), y0 = Math.max(0, r.top - pad), x1 = Math.min(W, r.right + pad), y1 = Math.min(H, r.bottom + pad);
+  const set = (p, s) => Object.assign($(`[data-p="${p}"]`, spot.el).style, s);
+  set("t", { left: "0px", top: "0px", width: `${W}px`, height: `${y0}px` });
+  set("b", { left: "0px", top: `${y1}px`, width: `${W}px`, height: `${Math.max(0, H - y1)}px` });
+  set("l", { left: "0px", top: `${y0}px`, width: `${x0}px`, height: `${Math.max(0, y1 - y0)}px` });
+  set("r", { left: `${x1}px`, top: `${y0}px`, width: `${Math.max(0, W - x1)}px`, height: `${Math.max(0, y1 - y0)}px` });
+  Object.assign($(".spot-ring", spot.el).style, { left: `${x0}px`, top: `${y0}px`, width: `${x1 - x0}px`, height: `${y1 - y0}px` });
+  const tip = $(".spot-tip", spot.el);
+  if (tip) {
+    const below = H - y1 > tip.offsetHeight + 24 || y0 < tip.offsetHeight + 24;
+    tip.style.top = below ? `${Math.min(H - tip.offsetHeight - 12, y1 + 12)}px` : `${Math.max(12, y0 - tip.offsetHeight - 12)}px`;
+  }
+}
+function endSpot(pulse = true) {
+  if (!spot) return;
+  const { el, next } = spot;
+  spot = null;
+  el.classList.remove("on");
+  setTimeout(() => el.remove(), 200);
+  if (pulse && next) pulseNext(next);
+}
+/** One last, silent nudge toward what to try next. */
+function pulseNext(sel) {
+  const t = $(sel);
+  if (!t) return;
+  t.classList.remove("pulse-next");
+  void t.offsetWidth;
+  t.classList.add("pulse-next");
+  setTimeout(() => t.classList.remove("pulse-next"), 4200);
+}
+addEventListener("resize", () => placeSpot());
+document.addEventListener("scroll", () => placeSpot(), { capture: true, passive: true });
+
+/*
  * Coach marks: one sentence the first time a feature is on screen, one per
- * session, under the card it's about. It stays put through re-renders until
- * "Got it" or until the feature is used.
+ * session. It waits until the thing is fully in view, so the page never
+ * jumps to it, then spotlights it.
  */
 const coachStore = { getItem: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, setItem: (k, v) => { try { localStorage.setItem(k, v); } catch { /* blocked */ } } };
 const coach = makeCoach(coachStore);
 const COACH = [
   { key: "dbl", sel: "[data-dbl]", text: "Double-tap a photo to love it." },
-  { key: "stories", sel: ".post .av-sb", text: "Top stories come from the topics you follow. Tap Not for me and say why, and tomorrow's picks change." },
+  { key: "stories", sel: ".post .av-sb", host: ".post", text: "Top stories come from the topics you follow. Tap Not for me and say why, and tomorrow's picks change." },
   { key: "daybar", sel: ".daybar details.db", text: "Tap the bar to see each event. Online meetings get a Join button." },
   { key: "more", sel: ".daily .more[data-panel], .daybar .more[data-panel]", text: "Tap ••• on any card to change it right where you see it." },
 ];
+const inView = (el) => { const r = el.getBoundingClientRect(); return r.height > 0 && r.top >= 70 && r.bottom <= innerHeight - 90; };
+/** The target to spotlight for a coach entry: the element, or the card around it. */
+function coachTarget(c) {
+  const el = $(`#panel ${c.sel}`);
+  if (!el) return null;
+  if (c.host) { const h = el.closest(c.host); if (h) { h.id ||= `spot-${c.key}`; return h; } }
+  el.id ||= `spot-${c.key}`;
+  return el;
+}
+let coachTimer = 0;
 function coachPass(tl) {
-  if (state.tab !== "today" || !flag(ONBOARDED) || state.reveal) return;
-  if (!state.coachNow) {
-    const c = COACH.find((x) => coach.can(x.key) && $(`#panel ${x.sel}`, tl));
-    if (!c || !coach.take(c.key)) return;
-    state.coachNow = c;
-    track(`coach_${c.key}`);
-  }
-  const c = state.coachNow;
-  const target = $(`#panel ${c.sel}`, tl);
-  const host = target?.closest(".post, section");
-  if (!host) return;
-  host.insertAdjacentHTML("afterend", `<div class="coach" role="note"><span>${esc(c.text)}</span><button class="btn sm" type="button" data-coach-ok>Got it</button></div>`);
+  if (!tl._coachBound) { tl._coachBound = true; tl.addEventListener("scroll", () => { clearTimeout(coachTimer); coachTimer = setTimeout(() => coachPass(tl), 400); }, { passive: true }); }
+  if (spot || $(".sheet-wrap") || state.tab !== "today" || state.reveal || state.reader) return;
+  // The welcome card, the first time: everything else waits.
+  if (!flag(ONBOARDED)) { const h = $("#panel .welcome.hero"); if (h && !state.heroSpot) { state.heroSpot = true; h.id = "spot-hero"; spotlight({ sel: "#spot-hero", next: '[data-welcome="start"]' }); } return; }
+  // Right after Build my morning: the share guide, once.
+  const g = $("#panel .ask.guide");
+  if (g && !coach.seen("guide") && inView(g)) { coach.see("guide"); g.id = "spot-guide"; spotlight({ sel: "#spot-guide" }); return; }
+  // Today's Did you know card, once, when it scrolls into view.
+  const tip = $("#panel .ask.tip");
+  const tipKey = tip && `tip-${tip.querySelector("[data-tip]")?.dataset.tip.split(":")[1]}`;
+  if (tip && coach.can(tipKey) && inView(tip) && coach.take(tipKey)) { tip.id = "spot-tip"; spotlight({ sel: "#spot-tip" }); return; }
+  const c = COACH.find((x) => coach.can(x.key) && coachTarget(x) && inView(coachTarget(x)));
+  if (!c || !coach.take(c.key)) return;
+  track(`coach_${c.key}`);
+  spotlight({ sel: `#${coachTarget(c).id}`, text: c.text, key: c.key });
 }
 /** A feature was used: its tip never needs to show, and goes if it's showing. */
 function coachUsed(key) {
   coach.see(key);
-  if (state.coachNow?.key === key) { state.coachNow = null; $(".coach")?.remove(); }
+  if (spot?.key === key) endSpot();
 }
 
 /* ===== The first week: one "Did you know" card a morning ===== */
@@ -1863,16 +1936,16 @@ function showFeature(k) {
   if (k === "add") { openAdd(); return; }
   if (k === "find") { selectTab("all"); $("#all-q")?.focus(); return; }
   state.tab = "today";
-  if (k === "share") { setFlag(SHARE_OFF, false); setFlag(PINNED, false); render({ top: true }); return; }
+  if (k === "share") { setFlag(SHARE_OFF, false); setFlag(PINNED, false); coach.forget("guide"); render({ top: true }); return; }
   const c = COACH.find((x) => x.key === k);
   if (!c) return;
   render({ top: false });
   const target = $(`#panel ${c.sel}`);
-  if (!target) { coach.forget(k); toast("Nothing like that on Today right now. The tip shows when one comes up."); return; }
+  if (!target) { coach.forget(k); toast("Nothing like that on Today right now. The tip shows when one comes up."); pulseNext(".fab"); return; }
   coach.see(k);
-  state.coachNow = c;
-  render({ top: false });
-  $(".coach")?.scrollIntoView({ behavior: reduced() ? "auto" : "smooth", block: "center" });
+  const t = coachTarget(c);
+  t.scrollIntoView({ behavior: "auto", block: "center" });
+  spotlight({ sel: `#${t.id}`, text: c.text, key: k });
 }
 
 /* Apple's rule 5.1.2(i): say plainly what goes to which AI company, and ask first. */
@@ -2560,7 +2633,6 @@ async function onTimelineClick(e) {
   if ((b = hit("[data-panel]"))) { coachUsed("more"); openSettings(b.dataset.panel, { fromCard: true }); return; }
   if ((b = hit("[data-welcome]"))) { await welcomeAction(b.dataset.welcome); return; }
   if ((b = hit("[data-tip]"))) { tipAction(b.dataset.tip); return; }
-  if ((b = hit("[data-coach-ok]"))) { state.coachNow = null; b.closest(".coach")?.remove(); return; }
   if ((b = hit("[data-ai-ask]"))) { setAi(b.dataset.aiAsk === "1"); render({ top: false }); return; }
   if ((b = hit("[data-school=skip]"))) { markSchoolAsked(); state.schoolDraft = ""; state.schoolForce = false; render({ top: false }); return; }
   if ((b = hit("[data-act]"))) { runAct(b.dataset.act, b); return; }
@@ -4224,7 +4296,7 @@ function openSettings(panel = "", { fromCard = false } = {}) {
   $("#set-replay", wrap)?.addEventListener("click", () => {
     [ONBOARDED, SHARE_OFF, PINNED, "edition.searched"].forEach((k) => setFlag(k, false));
     coach.reset();
-    state.coachNow = null;
+    state.heroSpot = false;
     track("onboard_replay");
     closeSheet();
     state.tab = "today";
@@ -4542,6 +4614,7 @@ function showToCopy(text) {
 let lastFocus = null;
 function sheet(html, { tall = false, label = "", guard = null } = {}) {
   closeSheet();
+  endSpot(false);
   expireToast(); // a leftover message shouldn't sit over the sheet
   lastFocus = document.activeElement;
   const wrap = document.createElement("div");
