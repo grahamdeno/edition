@@ -106,3 +106,33 @@ export function pickTip({ today, startDay = "", used = new Set(), log = {} } = {
 export function tipDone(log, key) {
   return { ...log, done: { ...(log?.done || {}), [key]: 1 } };
 }
+
+/**
+ * Top stories from the topics someone follows: strongest topic first, one
+ * from each in turn, no repeats, each tagged with its topic so a verdict on
+ * it teaches. lists: [{ topic, picks }] in order of weight.
+ */
+export function mixStories(lists, count = 3, known = new Set()) {
+  const out = [], seen = new Set(known);
+  const queues = lists.map((l) => ({ topic: l.topic, picks: [...(l.picks || [])] }));
+  while (out.length < count && queues.some((q) => q.picks.length)) {
+    for (const q of queues) {
+      while (q.picks.length) {
+        const p = q.picks.shift();
+        if (!p?.url || seen.has(p.url)) continue;
+        seen.add(p.url);
+        const tag = q.topic.startsWith("local") ? "local" : q.topic;
+        out.push({ ...p, tags: [...new Set([tag, ...(p.tags || [])])].slice(0, 3) });
+        break;
+      }
+      if (out.length >= count) break;
+    }
+  }
+  return out;
+}
+
+/** The chip topics someone follows, strongest first. */
+export function followOrder(suggest) {
+  const chips = new Set(TOPICS.map((t) => t.toLowerCase()));
+  return Object.entries(suggest?.topics || {}).filter(([k, v]) => v > 0 && chips.has(k)).sort((a, b) => b[1] - a[1]).map(([k]) => k);
+}
