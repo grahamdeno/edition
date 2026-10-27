@@ -29,6 +29,10 @@
  * Deploy: see relay/README.md.
  */
 
+/** What this copy of the relay can do; the app checks it to say when an update is needed. */
+export const RELAY_VERSION = 3;
+export const RELAY_FEATURES = ["preview", "image", "photo", "agent", "push", "remind", "ical"];
+
 const ALLOWED_ORIGINS = ["https://grahamdeno.github.io"];
 const UPSTREAM = "https://api.perplexity.ai";
 const PATHS = new Set(["/v1/agent"]);
@@ -63,6 +67,7 @@ export default {
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
     const { pathname, searchParams } = new URL(request.url);
     if (request.method === "GET" && pathname === "/preview") return preview(searchParams.get("url"), cors, searchParams.get("text") === "1");
+    if (request.method === "GET" && pathname === "/version") return new Response(JSON.stringify({ version: RELAY_VERSION, features: RELAY_FEATURES, push: Boolean(env.SHOEBOX) }), { headers: { ...cors, "content-type": "application/json" } });
     if (request.method === "GET" && pathname === "/ical") return ical(searchParams.get("url"), cors);
     if (request.method === "GET" && pathname === "/image") return image(searchParams.get("url"), cors);
     if (pathname === "/push/key" || pathname === "/push/test" || pathname.startsWith("/remind")) return pushRoute(request, env, pathname, searchParams, cors);
@@ -267,7 +272,8 @@ export async function ical(target, cors) {
   } catch { return json(502, "Couldn't reach the calendar.", cors); }
   if (!res.ok) return json(res.status === 404 || res.status === 401 || res.status === 403 ? 404 : 502, `The calendar server said ${res.status}. Check the address.`, cors);
   const text = await res.text();
-  if (text.length > 5e6 || !/^\s*BEGIN:VCALENDAR/i.test(text)) return json(415, "That address isn't a calendar file.", cors);
+  if (/^\s*</.test(text)) return json(404, "The calendar server sent a web page, not a calendar. The address may be wrong or reset; copy it again.", cors);
+  if (text.length > 20e6 || !/^\s*BEGIN:VCALENDAR/i.test(text)) return json(415, "That address isn't a calendar file.", cors);
   return new Response(text, { status: 200, headers: { ...cors, "content-type": "text/calendar; charset=utf-8", "cache-control": "private, no-store" } });
 }
 
