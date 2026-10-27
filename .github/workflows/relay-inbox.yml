@@ -1,0 +1,26 @@
+# Run by hand: is mail reaching the relay? Prints only counts and arrival times,
+# never senders, subjects or contents (this log may be public).
+name: Relay inbox check
+on:
+  workflow_dispatch:
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Mail waiting on the relay
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          KV: ${{ vars.SHOEBOX_KV_ID }}
+        run: |
+          npx -y wrangler@4 kv key list --namespace-id "$KV" --prefix "m:" --remote > mail.json 2>/dev/null || { echo "::error::Couldn't list the relay's storage"; exit 1; }
+          node -e '
+            const keys = JSON.parse(require("fs").readFileSync("mail.json", "utf8"));
+            const times = keys.map((k) => parseInt(k.name.slice(2).split("-")[0], 36)).filter(Number.isFinite).sort();
+            console.log(`::notice::${keys.length} email(s) waiting on the relay`);
+            for (const t of times) console.log(`::notice::arrived ${new Date(t).toISOString()}`);
+          '
+          if npx -y wrangler@4 kv key get inbox-key --namespace-id "$KV" --remote >/dev/null 2>&1; then echo "::notice::An app has claimed the inbox"; else echo "::notice::No app has claimed the inbox yet"; fi
