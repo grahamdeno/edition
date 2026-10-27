@@ -599,3 +599,10 @@ details.group[open] { padding-bottom: 14px; }
 .date-chip[aria-pressed="true"] { background: var(--fg); border-color: var(--fg); color: var(--bg); font-weight: 600; }
 .remind[hidden] { display: none; }
 .tag.back { background: var(--gold); color: var(--on-gold); }
+
+/* Keyboard up (iOS): a sheet sits in the visible part, above the keys, and scrolls inside */
+.kb .sheet-wrap { top: var(--vv-top, 0); height: var(--vv-h, 100%); padding-top: 8px; }
+.kb .sheet { padding-bottom: 8px; }
+.kb .adding .sheet { padding-bottom: 0; }
+.kb .cap-foot { padding-bottom: 10px; }
+.sheet { -webkit-overflow-scrolling: touch; }
