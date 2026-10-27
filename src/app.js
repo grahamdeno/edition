@@ -38,7 +38,7 @@ import { topicColor, dominantColor, tintInks, focusOf } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 
-export const VERSION = "4.24.2";
+export const VERSION = "4.24.3";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -1222,7 +1222,9 @@ function morningHtml() {
       }).join("") + (doneN === qs.length ? `<div class="acts day-acts"><span class="cq-score">${right} of ${qs.length} right</span><span class="grow"></span>
         <button class="act done" type="button" data-day="cq-done:${right}">${I.done}<span>Done</span></button></div>` : "")));
   }
-  return cards.length ? sectionHead("This morning") + cards.join("") : "";
+  // Named for the time of day, like the greeting above it.
+  const h = new Date().getHours();
+  return cards.length ? sectionHead(h < 5 || h >= 17 ? "This evening" : h < 12 ? "This morning" : "This afternoon") + cards.join("") : "";
 }
 
 /* The morning cards' own buttons: shrink the weather, finish CPMAI, keep or retire a Jung quote. */
