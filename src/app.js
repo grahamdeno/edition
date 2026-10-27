@@ -37,7 +37,7 @@ import { I, LOGO } from "./icons.js";
 import { topicColor, dominantColor, tintInks, focusOf } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "4.15.0";
+export const VERSION = "4.16.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 
@@ -151,6 +151,7 @@ async function boot() {
   enrichPending();
   schoolPictures();
   registerWorker();
+  toNative({ type: "ready" });
   refreshCalendar();
   loadMorning();
   checkInbox();
@@ -945,6 +946,7 @@ function render({ top = false } = {}) {
   hydrate(tl);
   bindTimeline(tl);
   tintVisible(tl);
+  updateWidget();
 }
 
 /** Replace one post in place (a summary or picture arrived), without disturbing the page. */
@@ -2287,7 +2289,7 @@ function openEdit(id) {
     if (!cur) { closeSheet(); return; }
     // The calendar alert goes first, while this is still the tap.
     const remindMe = edUntil && edUntil !== wasUntil && $("#ed-remind", wrap)?.checked;
-    if (remindMe && !push.enabled()) {
+    if (remindMe && !notifyOn()) {
       downloadReminder({ title: val("title") || cur.title, why: val("why") ?? cur.why, url: val("url") ?? cur.url, until: edUntil });
     }
     const next = { ...cur, editedAt: Date.now() };
@@ -2343,7 +2345,7 @@ function openEdit(id) {
       }
     } else if (!edUntil && wasUntil) { done = bringBackNow(next); msg = "It's back, at the top of Today."; }
     await saveItem(done);
-    if (remindMe && push.enabled()) scheduleReminder(done);
+    if (remindMe && notifyOn()) scheduleReminder(done);
     tick(true);
     closeSheet();
     render();
@@ -2529,10 +2531,17 @@ function jumpTo(id) {
 
 /** Ask the relay to notify this phone at 9:00 on the day. Quiet on failure, with a note. */
 async function scheduleReminder(item) {
-  if (!item || !item.until || !push.enabled()) return;
+  if (!item || !item.until || !notifyOn()) return;
   try {
     const at = new Date(item.until).setHours(9, 0, 0, 0);
     const body = [item.title || headline(item), item.why].filter(Boolean).join(" · ").slice(0, 200);
+    if (NATIVE) {
+      // The iPhone app schedules it on the phone itself; no relay needed.
+      toNative({ type: "remind", id: item.id, at, title: "Back in Shoebox", body });
+      const cur = byId(item.id);
+      if (cur) await saveItem({ ...cur, reminder: { id: item.id, native: true } });
+      return;
+    }
     const r = await push.remind({ id: item.id, at, title: "Back in Shoebox", body, url: `${location.origin}${location.pathname}?open=${encodeURIComponent(item.id)}` });
     const cur = byId(item.id);
     if (cur) await saveItem({ ...cur, reminder: r });
@@ -2543,7 +2552,65 @@ async function scheduleReminder(item) {
 }
 
 function dropReminder(item) {
-  if (item && item.reminder) push.cancel(item.reminder);
+  if (!item || !item.reminder) return;
+  if (item.reminder.native) toNative({ type: "cancel", id: item.reminder.id });
+  else push.cancel(item.reminder);
+}
+
+/* ================= The iPhone app =================
+ * In the Shoebox iPhone app, this page runs inside a native shell that adds
+ * the share sheet, a home-screen widget and on-phone notifications. It
+ * announces itself as window.shoeboxNative; messages go to it here.
+ */
+const NATIVE = typeof window !== "undefined" && Boolean(window.shoeboxNative);
+function toNative(msg) {
+  try { window.webkit?.messageHandlers?.shoebox?.postMessage(msg); } catch { /* not in the app */ }
+}
+/** Reminders can be notifications: on the phone in the app, or through the relay on the web. */
+function notifyOn() { return NATIVE || push.enabled(); }
+
+/** Things shared to Shoebox from other apps, handed over by the iPhone app. */
+async function receiveShared(list) {
+  const out = [];
+  for (const t of list || []) {
+    try {
+      if (t.kind === "file" && t.data) {
+        const bytes = Uint8Array.from(atob(t.data), (c) => c.charCodeAt(0));
+        out.push(await captureFile(new File([bytes], t.name || "shared", { type: t.mime || "application/octet-stream" }), "share"));
+      } else if (t.value) {
+        const text = [t.value, t.title && t.kind === "url" && t.title !== t.value ? t.title : ""].filter(Boolean).join("\n");
+        out.push(...await captureText(text, "share"));
+      }
+    } catch (e) { noteError(e, { quiet: true, where: "share sheet" }); }
+  }
+  if (out.length) afterCapture(out);
+}
+
+/** What the widget shows: today's open posts, soonest first. */
+let widgetTimer = 0;
+function updateWidget() {
+  if (!NATIVE) return;
+  clearTimeout(widgetTimer);
+  widgetTimer = setTimeout(() => {
+    try {
+      const s = todaySections();
+      const list = [...s.school, ...s.fresh, ...s.six];
+      const h = new Date().getHours();
+      toNative({
+        type: "today",
+        greeting: h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening",
+        left: [...s.fresh, ...s.six].filter(isOpen).length,
+        posts: list.slice(0, 12).map((i) => ({ id: i.id, title: String(i.title || headline(i) || "").slice(0, 140), why: i.why || "", kind: i.kind, done: !isOpen(i) })),
+      });
+    } catch (e) { noteError(e, { quiet: true, where: "widget" }); }
+  }, 600);
+}
+
+if (NATIVE) {
+  window.shoeboxReceive = (list) => receiveShared(list);
+  window.shoeboxOpen = (id) => jumpTo(id);
+  window.shoeboxActive = () => { refreshCalendar(); loadMorning(); checkInbox(); };
+  document.documentElement.classList.add("native");
 }
 
 const remindOn = () => { try { return localStorage.getItem("edition.remind") !== "0"; } catch { return true; } };
@@ -2562,7 +2629,7 @@ function asideHtml(prefix, until) {
           <input type="date" id="${prefix}-aside-date" min="${tomorrow}" value="${custom ? toDateInput(until) : ""}" aria-label="Pick a date"></span>
       </div>
       <label class="check remind" ${until ? "" : "hidden"}><input type="checkbox" id="${prefix}-remind" ${remindOn() ? "checked" : ""}>
-        <span>Remind me that morning<small>${push.enabled() ? "A notification at 9:00" : "Adds a 9:00 alert to your Calendar"}</small></span></label>
+        <span>Remind me that morning<small>${notifyOn() ? "A notification at 9:00" : "Adds a 9:00 alert to your Calendar"}</small></span></label>
     </div>`;
 }
 
@@ -2787,7 +2854,7 @@ async function saveCapture() {
   }
   const until = state.capForm.until && state.capForm.until > Date.now() ? state.capForm.until : null;
   const remindMe = until && $("#cap-remind")?.checked;
-  if (remindMe && !push.enabled()) {
+  if (remindMe && !notifyOn()) {
     const first = stagedDrafts()[0] || {};
     downloadReminder({ title: String(state.capForm.title || first.title || text.split("\n")[0] || "").trim(), why: state.capWhy, url: first.url, until });
   }
@@ -2801,7 +2868,7 @@ async function saveCapture() {
   for (let k = 0; k < out.length; k++) out[k] = await applyCapPicture(out[k]);
   await applyCapFields(out);
   if (until) for (let k = 0; k < out.length; k++) if (out[k]) { out[k] = setAside(out[k], until); await db.items.put(out[k]); }
-  if (remindMe && push.enabled()) Promise.resolve().then(async () => { for (const it of out) await scheduleReminder(it); });
+  if (remindMe && notifyOn()) Promise.resolve().then(async () => { for (const it of out) await scheduleReminder(it); });
   if (state.capPic?.ownUrl) URL.revokeObjectURL(state.capPic.ownUrl);
   state.capText = "";
   state.capFiles = [];

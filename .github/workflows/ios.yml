@@ -24,9 +24,14 @@ jobs:
       - name: Compile (simulator, unsigned)
         run: |
           cd ios
+          set +e
           xcodebuild -project Shoebox.xcodeproj -scheme Shoebox -sdk iphonesimulator \
-            -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build | tail -n 60
-          exit ${PIPESTATUS[0]}
+            -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build > build.log 2>&1
+          code=$?
+          # Surface our own warnings and errors as annotations, so they can be read without the full log.
+          grep -E "ios/(App|Share|Widget|Shared)/.*(warning|error):" build.log | sed -E 's#^.*/ios/##' | sort -u | head -40 | sed 's/^/::warning::/'
+          tail -n 25 build.log
+          exit $code
       - name: Signing key
         if: env.HAS_KEY == 'true' && github.ref == 'refs/heads/main'
         run: echo "${{ secrets.ASC_KEY_P8 }}" > "$RUNNER_TEMP/asc.p8"
