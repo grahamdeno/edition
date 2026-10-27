@@ -16,6 +16,7 @@ export const STATUS = Object.freeze({
   QUEUED: "queued",     // kept for later; eligible for an edition
   DONE: "done",
   ARCHIVED: "archived", // let go, or washed out after too many deferrals
+  ASIDE: "aside",       // set aside until a date; comes back as new that morning
 });
 
 export const KIND = Object.freeze({
@@ -777,3 +778,103 @@ export function usablePicture({ w, h } = {}, { minWidth = 600 } = {}) {
   const ratio = w / h;
   return w >= minWidth && h >= 300 && ratio >= 0.5 && ratio <= 2.4;
 }
+
+
+/* ---- Set aside until a date ----
+ * An item set aside is out of sight: not new, not in the queue, not in
+ * Today. On its date it comes back as new, at the top of Today.
+ */
+
+/** Local midnight of the day a timestamp falls on. */
+export function startOfDay(ts) { const d = new Date(ts); d.setHours(0, 0, 0, 0); return d.getTime(); }
+
+/** "2026-11-03" from a date field, as local midnight; null when empty or invalid. */
+export function fromDateInput(v) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(v || ""));
+  if (!m) return null;
+  const d = new Date(+m[1], +m[2] - 1, +m[3]);
+  return Number.isNaN(d.getTime()) ? null : d.getTime();
+}
+
+/** Local midnight as "2026-11-03", for a date field. */
+export function toDateInput(ts) {
+  const d = new Date(ts);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+/** Quick choices: tomorrow, the weekend, next week, next month. Never today or a duplicate day. */
+export function asideChoices(now = Date.now()) {
+  const day = startOfDay(now), d = new Date(day), dow = d.getDay();
+  const at = (n) => { const x = new Date(day); x.setDate(x.getDate() + n); return x.getTime(); };
+  const sat = (6 - dow + 7) % 7 || 7, mon = (8 - dow) % 7 || 7;
+  const month = new Date(day); month.setMonth(month.getMonth() + 1);
+  const list = [
+    { label: "Tomorrow", until: at(1) },
+    { label: dow === 6 ? "Next weekend" : "This weekend", until: at(sat) },
+    { label: "Next week", until: at(mon) },
+    { label: "In a month", until: month.getTime() },
+  ];
+  const seen = new Set();
+  return list.filter((c) => !seen.has(c.until) && seen.add(c.until));
+}
+
+export function setAside(item, until, now = Date.now()) {
+  const next = { ...item, status: STATUS.ASIDE, until: startOfDay(until), asideAt: now, asideFrom: item.status === STATUS.ASIDE ? item.asideFrom : item.status };
+  next.history = [...(item.history || []), { v: "aside", at: now, until: next.until }];
+  delete next.deferredAt;
+  delete next.fadedAt;
+  return next;
+}
+
+/** Items whose day has come, back as new. Returns only the ones that changed. */
+export function wakeAside(items, now = Date.now()) {
+  return items.filter((i) => i.status === STATUS.ASIDE && (i.until || 0) <= now).map((i) => {
+    const next = { ...i, status: STATUS.INBOX, backAt: i.until || now };
+    delete next.until;
+    return next;
+  });
+}
+
+/** Bring a set-aside item back now, as new. */
+export function bringBackNow(item, now = Date.now()) {
+  const next = { ...item, status: STATUS.INBOX, backAt: now };
+  delete next.until;
+  return next;
+}
+
+/** "Tue, Nov 3" (with the year when it isn't this year). */
+export function shortDate(ts, now = Date.now()) {
+  const d = new Date(ts);
+  const opts = { weekday: "short", month: "short", day: "numeric" };
+  if (d.getFullYear() !== new Date(now).getFullYear()) opts.year = "numeric";
+  return d.toLocaleDateString("en-US", opts);
+}
+
+/**
+ * A calendar file for the day it comes back: a short event at 9:00 with an
+ * alert, so the phone reminds you outside the app.
+ */
+export function reminderIcs({ title, why = "", url = "", until, appUrl, now = Date.now() }) {
+  const pad = (n) => String(n).padStart(2, "0");
+  const d = new Date(until);
+  const ymd = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}`;
+  const s = new Date(now);
+  const stamp = `${s.getUTCFullYear()}${pad(s.getUTCMonth() + 1)}${pad(s.getUTCDate())}T${pad(s.getUTCHours())}${pad(s.getUTCMinutes())}${pad(s.getUTCSeconds())}Z`;
+  const esc = (v) => String(v || "").replace(/\\/g, "\\\\").replace(/\n/g, "\\n").replace(/([,;])/g, "\\$1");
+  const text = [why, url, `Open Shoebox: ${appUrl}`].filter(Boolean).join("\n");
+  const fold = (line) => line.length <= 74 ? line : line.match(/.{1,73}/g).join("\r\n ");
+  return [
+    "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Shoebox//Set aside//EN", "CALSCALE:GREGORIAN", "METHOD:PUBLISH",
+    "BEGIN:VEVENT",
+    `UID:shoebox-${ymd}-${Math.abs(hashStr(title + url + until))}@shoebox`,
+    `DTSTAMP:${stamp}`,
+    `DTSTART:${ymd}T090000`, `DTEND:${ymd}T091500`,
+    `SUMMARY:${esc(`Back in Shoebox: ${String(title || "something you set aside").slice(0, 80)}`)}`,
+    `DESCRIPTION:${esc(text)}`,
+    `URL:${appUrl}`,
+    "BEGIN:VALARM", "ACTION:DISPLAY", "TRIGGER:PT0M", `DESCRIPTION:${esc(`Back in Shoebox: ${String(title || "").slice(0, 80)}`)}`, "END:VALARM",
+    "END:VEVENT", "END:VCALENDAR",
+  ].map(fold).join("\r\n") + "\r\n";
+}
+
+function hashStr(s) { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return h; }

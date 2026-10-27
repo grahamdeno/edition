@@ -23,6 +23,7 @@ import {
   screenSuggestions, suggestMaxMinutes,
   canonTags, tagVocab, tagStats, renameTag, addAlias, releaseTags, renameInSuggestProfile, localTags, normTag, MAX_TAGS,
   friendlyWhen, usablePicture,
+  setAside, wakeAside, bringBackNow, asideChoices, fromDateInput, toDateInput, shortDate, reminderIcs,
 } from "./model.js";
 import * as db from "./db.js";
 import { captureText, captureFile, captureTransfer, readClipboard, captureShares } from "./capture.js";
@@ -33,7 +34,7 @@ import { I, LOGO } from "./icons.js";
 import { topicColor, dominantColor, tintInks, focusOf } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 
-export const VERSION = "4.6.0";
+export const VERSION = "4.7.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => logError(e, { ...opts, version: VERSION });
 
@@ -41,6 +42,7 @@ const KIND_LABEL = { link: "Link", note: "Note", quote: "Quote", photo: "Photo",
 const ALL_FILTERS = [
   { label: "Kept", id: STATUS.QUEUED },
   { label: "New", id: STATUS.INBOX },
+  { label: "Set aside", id: STATUS.ASIDE },
   { label: "Loved", id: "loved" },
   { label: "Done", id: STATUS.DONE },
   { label: "Let go", id: STATUS.ARCHIVED },
@@ -110,6 +112,7 @@ async function boot() {
   const seeded = await seedSamples();
   await importShares();
   await importFromUrl();
+  await wakeDue();
   await ensureEdition();
   bindScreen();
   render();
@@ -334,7 +337,7 @@ async function hydrate(root) {
 }
 /* ================= Capture plumbing ================= */
 
-async function afterCapture(list) {
+async function afterCapture(list, until = null) {
   list = list.filter(Boolean);
   if (!list.length) return;
   list.forEach((it) => { state.items = [it, ...state.items.filter((i) => i.id !== it.id)]; });
@@ -342,7 +345,8 @@ async function afterCapture(list) {
   state.tab = "today";
   render({ top: true });
   picturePending();
-  toast(`Saved ${list.length === 1 ? "1 item" : list.length + " items"} to ${APP}.`, {
+  toast(until ? `Set aside until ${shortDate(until)}. It'll be at the top of Today that morning.`
+    : `Saved ${list.length === 1 ? "1 item" : list.length + " items"} to ${APP}.`, {
     action: "Undo",
     onAction: async () => { await removeItems(list); render(); },
   });
@@ -767,7 +771,7 @@ function applyTint(el, color) {
 function todaySections() {
   topUpEdition();
   const isNew = (i) => i.status === STATUS.INBOX || state.recent.get(i.id)?.stage === "inbox";
-  const fresh = state.items.filter((i) => !i.suggested && isNew(i)).sort((a, b) => b.created - a.created);
+  const fresh = state.items.filter((i) => !i.suggested && isNew(i)).sort((a, b) => (b.backAt || b.created) - (a.backAt || a.created));
   const freshIds = new Set(fresh.map((i) => i.id));
   const v = editionView(state.items, state.edition);
   const six = v.pages.filter((p) => !freshIds.has(p.id));
@@ -946,7 +950,8 @@ function allHtml() {
   const rows = state.items
     .filter((i) => f.id === "all" || (f.id === "loved" ? i.loved : i.status === f.id))
     .filter(match)
-    .sort((a, b) => (b.loved && f.id === "loved" ? b.loved - (a.loved || 0) : 0) || (b.doneAt || b.archivedAt || b.created) - (a.doneAt || a.archivedAt || a.created));
+    .sort((a, b) => (f.id === STATUS.ASIDE ? (a.until || 0) - (b.until || 0) : 0)
+      || (b.loved && f.id === "loved" ? b.loved - (a.loved || 0) : 0) || (b.doneAt || b.archivedAt || b.created) - (a.doneAt || a.archivedAt || a.created));
   const waiting = !q && (f.id === STATUS.QUEUED || f.id === "all") ? fading(state.items, state.edition, { limit: 8 }) : [];
   const shown = rows.slice(0, state.allShown);
   return `<div class="find-wrap">${I.search}<label class="sr-only" for="all-q">Search everything you saved</label>
@@ -985,8 +990,9 @@ function postHtml(item, { compact = false } = {}) {
   const b = byline(item);
   const tag = item.loved ? `<span class="tag love">${I.heartFill}<span>Loved</span></span>`
     : item.suggested ? `<span class="tag">Top story</span>`
+    : item.backAt && item.status === STATUS.INBOX && dayKey(item.backAt) === dayKey() ? `<span class="tag back">Back today</span>`
     : isFaded(item) ? `<span class="tag fade">Faded</span>`
-    : state.tab === "all" && item.status !== STATUS.QUEUED ? `<span class="tag">${{ inbox: "New", done: "Done", archived: "Let go" }[item.status] || ""}</span>` : "";
+    : state.tab === "all" && item.status !== STATUS.QUEUED ? `<span class="tag">${{ inbox: "New", done: "Done", archived: "Let go", aside: "Set aside" }[item.status] || ""}</span>` : "";
   // The words at the top: your reason, else Shoebox's line about it (marked as a guess), else nothing.
   let say = "";
   if (item.suggested) say = `<p class="body">${esc(item.suggestReason || item.summary || "Picked from what you finish.")}</p>`;
@@ -1034,6 +1040,10 @@ function stampHtml(item, v) {
 function actionsHtml(item, open) {
   const love = `<button class="act icon" type="button" data-love="${esc(item.id)}" aria-pressed="${!!item.loved}" aria-label="Love">${item.loved ? I.heartFill : I.heart}</button>`;
   const reply = item.suggested ? "" : `<button class="act icon" type="button" data-reply="${esc(item.id)}" aria-label="Reply to yourself${item.replies?.length ? `, ${item.replies.length} so far` : ""}">${I.reply}${item.replies?.length ? `<span class="n" aria-hidden="true">${item.replies.length}</span>` : ""}</button>`;
+  if (!open && item.status === STATUS.ASIDE) {
+    return `<div class="settled-row"><p class="stamp later">${I.later}<span>Comes back ${esc(shortDate(item.until))}</span></p>
+      <button class="act" type="button" data-backnow="${esc(item.id)}">${I.requeue}<span>Bring back now</span></button></div>`;
+  }
   if (!open) {
     const requeue = item.status === STATUS.DONE || item.status === STATUS.ARCHIVED
       ? `<button class="act" type="button" data-requeue="${esc(item.id)}">${I.requeue}<span>Bring back</span></button>` : "";
@@ -1144,6 +1154,11 @@ async function onTimelineClick(e) {
   let b;
   if ((b = hit("[data-tab]"))) { selectTab(b.dataset.tab); return; }
   if ((b = hit("[data-act]"))) { runAct(b.dataset.act, b); return; }
+  if ((b = hit("[data-backnow]"))) {
+    const cur = byId(b.dataset.backnow);
+    if (cur) { await saveItem(bringBackNow(cur)); tick(true); render({ top: false }); toast("It's back, at the top of Today."); }
+    return;
+  }
   if ((b = hit("[data-filter]"))) { state.allFilter = +b.dataset.filter; state.allShown = PAGE; render({ top: false }); return; }
   if ((b = hit("[data-v]"))) { timelineVerdict(b.dataset.id, b.dataset.v); return; }
   if ((b = hit("[data-undo]"))) { undoRecent(b.dataset.undo); return; }
@@ -1600,6 +1615,7 @@ function openEdit(id) {
   const wrap = sheet(`
     <div class="sheet-head"><h2>Edit</h2><button class="x" type="button" data-close aria-label="Close">${I.close}</button></div>
     <p class="note">${esc(KIND_LABEL[item.kind] || "Item")} · saved ${esc(ago(item.created))}${item.fileName ? ` · ${esc(item.fileName)}` : ""}</p>
+    ${item.status === STATUS.DONE || item.status === STATUS.ARCHIVED ? "" : asideHtml("ed", item.status === STATUS.ASIDE ? item.until : null)}
     ${item.kind !== KIND.PHOTO ? `<div class="pic-edit">
       <div class="lbl"><span id="ed-pic-l">Picture</span></div>
       <div class="picks" id="ed-picks" role="group" aria-labelledby="ed-pic-l"></div>
@@ -1628,9 +1644,16 @@ function openEdit(id) {
 
   const val = (k) => $(`#ed-${k}`, wrap)?.value;
   if (item.kind !== KIND.PHOTO) bindPictureEdit(wrap, id);
+  const wasUntil = item.status === STATUS.ASIDE ? item.until : null;
+  let edUntil = wasUntil;
+  if ($(".aside-pick", wrap)) bindAside(wrap, "ed", (u) => { edUntil = u; $("#ed-save", wrap).textContent = u && u !== wasUntil ? `Set aside until ${shortDate(u)}` : "Save"; });
   const save = async () => {
     const cur = byId(id);
     if (!cur) { closeSheet(); return; }
+    // The calendar alert goes first, while this is still the tap.
+    if (edUntil && edUntil !== wasUntil && $("#ed-remind", wrap)?.checked) {
+      downloadReminder({ title: val("title") || cur.title, why: val("why") ?? cur.why, url: val("url") ?? cur.url, until: edUntil });
+    }
     const next = { ...cur, editedAt: Date.now() };
     if (words) {
       const t = (val("text") || "").trim();
@@ -1668,11 +1691,20 @@ function openEdit(id) {
     next.tags = typed;
     const m = Math.round(+val("minutes"));
     next.minutes = Number.isFinite(m) && m > 0 ? Math.min(m, 600) : cur.minutes;
-    await saveItem(next);
+    let done = next, msg = "Saved.";
+    if (edUntil && edUntil !== wasUntil) {
+      done = setAside(next, edUntil);
+      msg = `Set aside until ${shortDate(edUntil)}.`;
+      if (state.edition && state.edition.ids.includes(id)) {
+        state.edition = { ...state.edition, ids: state.edition.ids.filter((x) => x !== id) };
+        await db.meta.set("edition", state.edition);
+      }
+    } else if (!edUntil && wasUntil) { done = bringBackNow(next); msg = "It's back, at the top of Today."; }
+    await saveItem(done);
     tick(true);
     closeSheet();
     render();
-    toast("Saved.");
+    toast(msg);
   };
   $("#ed-save", wrap).addEventListener("click", save);
   wrap.querySelectorAll("input").forEach((i) => i.addEventListener("keydown", (e) => { if (e.key === "Enter") save(); }));
@@ -1828,6 +1860,79 @@ async function deleteItem(id) {
     },
   });
 }
+/* ================= Set aside until a date =================
+ * In Add and in Edit: Now, or a day it comes back as new, at the top of
+ * Today. A calendar alert (an .ics file the phone adds to Calendar) is the
+ * reminder outside the app; web apps on iPhone can't schedule their own.
+ */
+
+/** Items whose day has come go back to New. Returns how many. */
+async function wakeDue() {
+  const woke = wakeAside(state.items);
+  for (const it of woke) await saveItem(it);
+  return woke.length;
+}
+
+const remindOn = () => { try { return localStorage.getItem("edition.remind") !== "0"; } catch { return true; } };
+const setRemind = (on) => { try { localStorage.setItem("edition.remind", on ? "1" : "0"); } catch { /* private mode */ } };
+
+function asideHtml(prefix, until) {
+  const choices = asideChoices();
+  const custom = until && !choices.some((c) => c.until === until);
+  const tomorrow = toDateInput(choices[0].until);
+  return `<div class="aside-pick">
+      <div class="lbl"><span id="${prefix}-aside-l">Show it</span><span id="${prefix}-aside-when">${until ? `From ${esc(shortDate(until))}` : "Now"}</span></div>
+      <div class="chips wrap" role="group" aria-labelledby="${prefix}-aside-l">
+        <button class="chip" type="button" data-until="" aria-pressed="${!until}">Now</button>
+        ${choices.map((c) => `<button class="chip" type="button" data-until="${c.until}" aria-pressed="${until === c.until}">${c.label}</button>`).join("")}
+        <span class="chip date-chip" aria-pressed="${!!custom}"><span class="dl">${custom ? esc(shortDate(until)) : "Pick a date"}</span>
+          <input type="date" id="${prefix}-aside-date" min="${tomorrow}" value="${custom ? toDateInput(until) : ""}" aria-label="Pick a date"></span>
+      </div>
+      <label class="check remind" ${until ? "" : "hidden"}><input type="checkbox" id="${prefix}-remind" ${remindOn() ? "checked" : ""}>
+        <span>Remind me that morning<small>Adds a 9:00 alert to your Calendar</small></span></label>
+    </div>`;
+}
+
+/** Wire an asideHtml block. onPick(until or null) on every change. */
+function bindAside(root, prefix, onPick) {
+  const box = $(".aside-pick", root);
+  const paint = (until) => {
+    const choices = asideChoices();
+    const custom = until && !choices.some((c) => c.until === until);
+    box.querySelectorAll("[data-until]").forEach((b) => b.setAttribute("aria-pressed", String(String(until || "") === b.dataset.until)));
+    const dc = $(".date-chip", box);
+    dc.setAttribute("aria-pressed", String(!!custom));
+    $(".dl", dc).textContent = custom ? shortDate(until) : "Pick a date";
+    $(`#${prefix}-aside-when`, box).textContent = until ? `From ${shortDate(until)}` : "Now";
+    $(".remind", box).hidden = !until;
+    onPick(until || null);
+  };
+  box.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-until]");
+    if (!b) return;
+    const date = $(`#${prefix}-aside-date`, box);
+    date.value = "";
+    paint(b.dataset.until ? +b.dataset.until : null);
+  });
+  $(`#${prefix}-aside-date`, box).addEventListener("change", (e) => {
+    const t = fromDateInput(e.target.value);
+    paint(t && t > Date.now() ? t : null);
+  });
+  $(`#${prefix}-remind`, box).addEventListener("change", (e) => setRemind(e.target.checked));
+}
+
+/** Hand the phone a calendar alert for the day. Call straight from a tap, so the phone allows it. */
+function downloadReminder({ title, why, url, until }) {
+  const ics = reminderIcs({ title, why, url, until, appUrl: location.origin + location.pathname });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([ics], { type: "text/calendar" }));
+  a.download = "shoebox-reminder.ics";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+}
+
 /* ================= Add (sheet) ================= */
 
 function openAdd() {
@@ -1856,6 +1961,7 @@ function openAdd() {
     ${field("author", "Who said it")}
     ${field("why", "Why you're saving it", { area: true, hint: "(top of the post)", ph: "Read this before the roadmap review", attrs: 'maxlength="140"' })}
     ${field("note", "Your note", { area: true, ph: "Anything you want to remember about it" })}
+    <div data-f="aside" hidden>${asideHtml("cap", F.until || null)}</div>
     <div class="cap-foot">
       <span class="st" id="cap-st" role="status"></span>
       <button class="btn primary save" type="button" id="cap-save">Save</button>
@@ -1884,6 +1990,7 @@ function openAdd() {
     if (el.tagName === "INPUT") el.addEventListener("keydown", (e) => { if (e.key === "Enter") saveCapture(); });
   }
   [why, $("#cap-note", wrap)].forEach((el) => el.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) saveCapture(); }));
+  bindAside(wrap, "cap", (until) => { F.until = until; updateDetect(); });
   $("#cap-save", wrap).addEventListener("click", saveCapture);
   $("#cap-attach", wrap).addEventListener("click", () => { unlock(); $("#in-any", wrap).click(); });
   $("#cap-paste", wrap).addEventListener("click", pasteIntoBox);
@@ -1922,11 +2029,12 @@ function updateDetect() {
   }).join("");
   // Title, why and note once there's something to describe; the AI tags it from what you write. Several at once share why.
   const words = one && (one.kind === KIND.NOTE || one.kind === KIND.QUOTE);
-  const show = { why: drafts.length > 0, title: one && !words, author: one && one.kind === KIND.QUOTE, note: one && !words };
+  const show = { why: drafts.length > 0, aside: drafts.length > 0, title: one && !words, author: one && one.kind === KIND.QUOTE, note: one && !words };
   for (const [k, on] of Object.entries(show)) { const el = $(`[data-f=${k}]`); if (el) el.hidden = !on; }
   const save = $("#cap-save");
   save.disabled = !drafts.length;
-  save.textContent = drafts.length > 1 ? `Save ${drafts.length} items` : "Save";
+  const until = state.capForm.until;
+  save.textContent = until ? `Set aside until ${shortDate(until)}` : drafts.length > 1 ? `Save ${drafts.length} items` : "Save";
   schedulePreview();
 }
 
@@ -1998,6 +2106,11 @@ async function saveCapture() {
     setCapStatus("Type, paste or attach something first.", true);
     return;
   }
+  const until = state.capForm.until && state.capForm.until > Date.now() ? state.capForm.until : null;
+  if (until && $("#cap-remind")?.checked) {
+    const first = stagedDrafts()[0] || {};
+    downloadReminder({ title: String(state.capForm.title || first.title || text.split("\n")[0] || "").trim(), why: state.capWhy, url: first.url, until });
+  }
   setCapStatus("Saving…");
   const out = [];
   if (text) out.push(...await captureText(text, "drop"));
@@ -2007,6 +2120,7 @@ async function saveCapture() {
   }
   for (let k = 0; k < out.length; k++) out[k] = await applyCapPicture(out[k]);
   await applyCapFields(out);
+  if (until) for (let k = 0; k < out.length; k++) if (out[k]) { out[k] = setAside(out[k], until); await db.items.put(out[k]); }
   if (state.capPic?.ownUrl) URL.revokeObjectURL(state.capPic.ownUrl);
   state.capText = "";
   state.capFiles = [];
@@ -2014,7 +2128,7 @@ async function saveCapture() {
   state.capForm = {};
   state.capPic = null;
   closeSheet();
-  afterCapture(out);
+  afterCapture(out, until);
 }
 /** Put what you filled in on Add onto what was saved. What you typed, the AI leaves alone. */
 async function applyCapFields(out) {
@@ -2760,8 +2874,9 @@ function wireGlobal() {
     const before = state.items.length;
     const day = state.edition && state.edition.date;
     await importShares();
+    const woke = await wakeDue();
     await ensureEdition();
-    if (state.items.length !== before || (state.edition && state.edition.date !== day)) {
+    if (woke || state.items.length !== before || (state.edition && state.edition.date !== day)) {
       if (state.edition && state.edition.date !== day) state.recent.clear();
       if (!state.reader && !$(".sheet-wrap")) render();
       picturePending();
