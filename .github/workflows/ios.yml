@@ -20,7 +20,7 @@ jobs:
       - name: Pick Xcode
         run: |
           echo "::notice::Xcodes on this Mac: $(ls -d /Applications/Xcode_*.app | xargs -n1 basename | tr '\n' ' ')"
-          X="/Applications/Xcode_${XCODE:-26.0.1}.app"; [ -d "$X" ] || X="$(ls -d /Applications/Xcode_26*.app | sort -V | head -1)"
+          X="$(ls -d /Applications/Xcode_*.app | grep -vi beta | sort -V | tail -1)"
           sudo xcode-select -s "$X"
           xcodebuild -version | head -1 | sed 's/^/::notice::Using /'
       - name: Make the Xcode project
@@ -34,7 +34,7 @@ jobs:
           code=$?
           # Surface our own warnings and errors as annotations, so they can be read without the full log.
           grep -E "ios/(App|Share|Widget|Shared)/.*(warning|error):" build.log | sed -E 's#^.*/ios/##' | sort -u | head -40 | sed 's/^/::warning::/'
-          tail -n 25 build.log
+          [ $code -ne 0 ] && tail -n 8 build.log | sed 's/^/::error::/'
           exit $code
       - name: Signing key
         if: env.HAS_KEY == 'true' && github.ref == 'refs/heads/main'
