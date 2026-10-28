@@ -94,7 +94,7 @@ export function shareStep({ native = false, standalone = false, shared = false, 
  * value. A tip for something already in use is skipped; each shows for one
  * day, or until acted on or dismissed. Days are "YYYY-MM-DD" keys.
  */
-export const DAY_TIPS = ["email", "more", "newsletters", "later", "find", "backup"];
+export const DAY_TIPS = ["email", "song", "more", "newsletters", "later", "find", "backup"];
 export function pickTip({ today, startDay = "", used = new Set(), log = {} } = {}) {
   if (!startDay || !today || today <= startDay) return { key: "", log };
   const done = { ...(log.done || {}) };

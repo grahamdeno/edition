@@ -63,12 +63,12 @@ import { pickTip, tipDone, DAY_TIPS } from "../src/onboard.js";
 test("day tips: none on day 1, one a day after, skipping what's in use", () => {
   assert.equal(pickTip({ today: "2026-10-27", startDay: "2026-10-27" }).key, "");
   assert.equal(pickTip({ today: "2026-10-28", startDay: "" }).key, "", "people who skipped onboarding before it existed get none");
-  let r = pickTip({ today: "2026-10-28", startDay: "2026-10-27", used: new Set(["email"]) });
+  let r = pickTip({ today: "2026-10-28", startDay: "2026-10-27", used: new Set(["email", "song"]) });
   assert.equal(r.key, "more");
   const same = pickTip({ today: "2026-10-28", startDay: "2026-10-27", log: r.log });
   assert.equal(same.key, "more", "same tip all day");
   assert.equal(pickTip({ today: "2026-10-28", startDay: "2026-10-27", log: tipDone(r.log, "more") }).key, "", "dismissed: gone for today");
-  r = pickTip({ today: "2026-10-29", startDay: "2026-10-27", used: new Set(["email"]), log: r.log });
+  r = pickTip({ today: "2026-10-29", startDay: "2026-10-27", used: new Set(["email", "song"]), log: r.log });
   assert.equal(r.key, "newsletters", "yesterday's tip is done");
   const all = { done: Object.fromEntries(DAY_TIPS.map((k) => [k, 1])), day: "2026-11-01", key: "backup" };
   assert.equal(pickTip({ today: "2026-11-02", startDay: "2026-10-27", log: all }).key, "", "after the week, nothing");

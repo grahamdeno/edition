@@ -41,7 +41,7 @@ import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 import * as songs from "./songs.js";
 import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone, mixStories, followOrder } from "./onboard.js";
 
-export const VERSION = "4.47.0";
+export const VERSION = "4.48.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -1101,13 +1101,13 @@ function sectionHead(title, note = "") {
 
 function todayHtml() {
   const s = todaySections();
-  let h = stripHtml(s) + songAskHtml() + welcomeHtml() + aiAskHtml() + calendarHtml() + morningHtml() + schoolAskHtml();
+  let h = stripHtml(s) + songAskHtml() + whatsNewHtml() + welcomeHtml() + aiAskHtml() + calendarHtml() + morningHtml() + dayTipHtml() + schoolAskHtml();
   if (s.school.length) h += sectionHead("From school", `${s.school.filter(isOpen).length || "All"} to do`) + s.school.map((i) => postHtml(i)).join("");
   if (s.fresh.length) h += sectionHead("New", `${s.fresh.filter(isOpen).length || "All"} to sort`) + s.fresh.map((i) => postHtml(i)).join("");
   if (s.six.length) h += sectionHead("Today's six", `${s.six.filter(isOpen).length} of ${s.six.length} left`) + s.six.map((i) => postHtml(i)).join("");
   if (s.sugg.length) h += sectionHead("Top stories") + s.sugg.map((i) => postHtml(i)).join("");
   else if (state.storiesLoading) h += sectionHead("Top stories") + `<p class="finding" role="status"><span class="spin" aria-hidden="true"></span>Finding today's top stories${followedTopics(state.suggest).length ? ` on ${esc(followedTopics(state.suggest).slice(0, 3).join(", "))}` : ""}…</p>`;
-  return h + dayTipHtml() + endHtml(s);
+  return h + endHtml(s);
 }
 
 /* ================= This morning =================
@@ -1789,7 +1789,7 @@ function shareGuideHtml() {
 }
 
 /** The day onboarding ended: the first-week tips count from it. A replay starts the week over. */
-function markStart() { try { localStorage.setItem(START_DAY, dayKey()); localStorage.removeItem(TIP_LOG); } catch { /* blocked */ } }
+function markStart() { coach.see(`new-${WHATS_NEW}`); try { localStorage.setItem(START_DAY, dayKey()); localStorage.removeItem(TIP_LOG); } catch { /* blocked */ } }
 
 async function welcomeAction(what) {
   track(`welcome_${what.replace(/-/g, "_")}`);
@@ -1803,7 +1803,7 @@ async function welcomeAction(what) {
 }
 
 /*
- * Build my morning: three short steps in one sheet (topics, your day, AI),
+ * Build my morning: four short steps in one sheet (topics, your day, school, AI),
  * then Today assembles in front of them with their own weather, calendar
  * and top stories.
  */
@@ -1811,7 +1811,7 @@ function openBuild(step = 1) {
   state.build = state.build || { topics: new Set(followedTopics(state.suggest)), study: "" };
   const b = state.build, m = morningSettings();
   const head = (h) => `<div class="sheet-head"><h2>${h}</h2><button class="x" type="button" data-close aria-label="Close">${I.close}</button></div>
-    <p class="bm-n">Step ${step} of 3</p>`;
+    <p class="bm-n">Step ${step} of 4</p>`;
   let html;
   if (step === 1) {
     html = `${head("What do you like to read about?")}
@@ -1830,8 +1830,20 @@ function openBuild(step = 1) {
         <button class="btn" type="button" data-bm="zip">Set</button></div>
       ${nativeCan("calendar") ? `<div class="bm-row"><div><b>Calendar</b><span id="bm-cal">${calNative() ? "On" : "Your day at a glance, with free time"}</span></div>
         ${calNative() ? "" : `<button class="btn primary" type="button" data-bm="cal">Show my calendar</button>`}</div>` : ""}
+      ${nativeCan("music") ? `<div class="bm-row"><div><b>Song of the day</b><span id="bm-song">${m.song ? "On" : "One from your music you haven't played in a while"}</span></div>
+        ${m.song ? "" : `<button class="btn" type="button" data-bm="song">Turn on</button>`}</div>` : ""}
       <span class="st" id="bm-st" role="status"></span>
       <div class="sheet-foot"><button class="btn primary wide" type="button" data-bm="3">Next</button></div>`;
+  } else if (step === 3) {
+    const sc = schoolSettings();
+    html = `${head("Kids in school?")}
+      <p class="note">Forward school email and newsletters to Shoebox, and it turns them into short posts about your child: what to do, what to decide, what to know, with the dates. Your child's name stays on this phone.</p>
+      <label class="bm-l" for="bm-kid">Child's first name <span>Optional. Add more later in Settings.</span></label>
+      <input id="bm-kid" type="text" autocomplete="off" autocapitalize="words" placeholder="First name" value="${esc(sc.child || "")}">
+      <label class="bm-l" for="bm-kid-about" style="margin-top:12px">Grade and school <span>Helps Shoebox keep only what's for them</span></label>
+      <input id="bm-kid-about" type="text" autocomplete="off" placeholder="8th grade at Myrtle Grove Middle; band, soccer" value="">
+      <span class="st" id="bm-st" role="status"></span>
+      <div class="sheet-foot two"><button class="btn" type="button" data-bm="4">No kids in school</button><button class="btn primary" type="button" data-bm="kid">Next</button></div>`;
   } else {
     html = `${head("Let AI pick your top stories?")}
       <p class="note">With AI on, Shoebox finds the day's top stories on your topics, writes a line about each thing you save, and finds pictures. With it off, everything else still works.</p>
@@ -1866,7 +1878,26 @@ async function buildClick(e, step, wrap) {
     track("onboard_topics");
     openBuild(2);
   } else if (what === "3") openBuild(3);
-  else if (what === "loc") {
+  else if (what === "4") openBuild(4);
+  else if (what === "kid") {
+    const name = $("#bm-kid", wrap).value.trim().slice(0, 40), about = $("#bm-kid-about", wrap).value.trim().slice(0, 200);
+    if (name || about) {
+      const school = (about.match(/\bat ([^;,.]+)/i) || [])[1]?.trim() || "";
+      const cur = schoolSettings();
+      setSchoolSettings({ ...cur, on: true, child: name || cur.child, about: about ? `${name || "My child"}: ${about}` : cur.about, school: school || cur.school,
+        words: [...new Set([...(cur.words || []), ...(school ? [school] : [])])] });
+      track("onboard_school");
+    }
+    openBuild(4);
+  } else if (what === "song") {
+    btn.disabled = true; say("Asking for your music…");
+    const r = await nativeAsk("music", { op: "pick", ask: true, seed: daily.dayOfYear() }, 60000).catch(() => ({ ok: false }));
+    if (r.ok) {
+      setMorningSettings({ ...morningSettings(), song: true });
+      const c = morningCache(); c.song = nativeSong(r); c.songTried = true; saveMorningCache(c);
+      $("#bm-song", wrap).textContent = `On. Today: ${r.title}`; btn.remove(); say("");
+    } else { btn.disabled = false; say(r.status === "denied" ? "Music access is off. Turn it on in the iPhone's Settings › Shoebox." : "No songs with plays in your Music library yet.", true); }
+  } else if (what === "loc") {
     btn.disabled = true; say("Finding where you are…");
     try { const p = await useMyLocation(); $("#bm-wx", wrap).textContent = `For ${p.name}`; btn.textContent = "Update"; btn.classList.remove("primary"); say(""); }
     catch (err) { say(err.message, true); }
@@ -2010,6 +2041,7 @@ const COACH = [
   { key: "dbl", sel: "[data-dbl]", text: "Double-tap a photo to love it." },
   { key: "stories", sel: ".post .av-sb", host: ".post", text: "Top stories come from the topics you follow. Tap Not for me and say why, and tomorrow's picks change." },
   { key: "daybar", sel: ".daybar details.db", text: "This is a view of your schedule today. Tap the bar to see each event, and online meetings get a Join button." },
+  { key: "song", sel: ".post.song .song", host: ".post", text: "A song from your music you haven't played in a while. Open it in Apple Music, and Shoebox asks later how it landed." },
   { key: "more", sel: ".daily .more[data-panel], .daybar .more[data-panel]", text: "Tap ••• on any card to change it right where you see it." },
 ];
 const inView = (el) => { const r = el.getBoundingClientRect(); return r.height > 0 && r.top >= 70 && r.bottom <= innerHeight - 90; };
@@ -2029,7 +2061,7 @@ function coachPass(tl) {
   if (!flag(ONBOARDED)) { const h = $("#panel .welcome.hero"); if (h && !state.heroSpot) { state.heroSpot = true; h.id = "spot-hero"; spotlight({ sel: "#spot-hero", next: '[data-welcome="start"]' }); } return; }
   // Right after Build my morning: the share guide, once.
   const g = $("#panel .ask.guide");
-  if (g && !coach.seen("guide") && inView(g)) { coach.see("guide"); g.id = "spot-guide"; spotlight({ sel: "#spot-guide" }); return; }
+  if (g && coach.can("guide") && inView(g) && coach.take("guide")) { g.id = "spot-guide"; spotlight({ sel: "#spot-guide" }); return; }
   // Today's Did you know card, once, when it scrolls into view.
   const tip = $("#panel .ask.tip");
   const tipKey = tip && `tip-${tip.querySelector("[data-tip]")?.dataset.tip.split(":")[1]}`;
@@ -2045,10 +2077,45 @@ function coachUsed(key) {
   if (spot?.key === key) endSpot();
 }
 
+/*
+ * What's new, once per release that adds something worth trying, for people
+ * who were already using Shoebox (new people learn it all in onboarding).
+ */
+const WHATS_NEW = "4.47";
+function whatsNewItems() {
+  const m = morningSettings();
+  let mail = "", pick = "";
+  try { mail = localStorage.getItem("edition.inboxAddress") || ""; pick = localStorage.getItem("edition.inboxPick") || ""; } catch { /* blocked */ }
+  return [
+    nativeCan("music") && !m.song && { k: "song", t: "Song of the day", d: "One from your music you haven't played in a while, each morning.", go: "Turn it on" },
+    pick && !/-[a-z2-9]{4}@/.test(mail) && { k: "email", t: "Your own email address", d: "Sign up for newsletters with it, or forward school email to it.", go: "Set it up" },
+    { k: "colors", t: "Plain colors", d: "A quiet paper-and-ink look, if grape isn't your thing.", go: "Try it" },
+    { k: "all", t: "Everything Shoebox can do", d: "One page, with Show me on each.", go: "See all" },
+  ].filter(Boolean);
+}
+function whatsNewHtml() {
+  if (!flag(ONBOARDED) || coach.seen(`new-${WHATS_NEW}`)) return "";
+  const items = whatsNewItems();
+  return `<section class="ask whatsnew" aria-labelledby="wn-h">
+      <div class="ask-top"><span class="av av-sb" aria-hidden="true">${LOGO}</span><div><p class="tip-k">New in Shoebox</p><h2 id="wn-h">A few things to try</h2></div></div>
+      <ul class="wn-list">${items.map((x) => `<li><div><b>${esc(x.t)}</b><span>${esc(x.d)}</span></div><button class="btn sm" type="button" data-wn="${x.k}">${esc(x.go)}</button></li>`).join("")}</ul>
+      <button class="btn ghost sm wel-skip" type="button" data-wn="done">Got it</button>
+    </section>`;
+}
+function whatsNewAction(k) {
+  track(`whatsnew_${k}`);
+  if (k === "done") { coach.see(`new-${WHATS_NEW}`); render({ top: false }); return; }
+  if (k === "song") openSettings("cards");
+  else if (k === "email") openSettings("email");
+  else if (k === "colors") openSettings("you");
+  else if (k === "all") openSettings("features");
+}
+
 /* ===== The first week: one "Did you know" card a morning ===== */
 const START_DAY = "edition.onboardedDay", TIP_LOG = "edition.dayTips";
 /* Built when used: NATIVE is set further down the file. */
 const dayTips = () => ({
+  song: { h: "A song you forgot you loved", p: "Turn on Song of the day and each morning brings one from your music you haven't played in a while.", go: "Turn it on", act: () => openSettings("cards") },
   email: { h: "Your own Shoebox email address", p: "Sign up for newsletters with it and they come straight here. Anything else, forward to it.", go: "Set it up", act: () => openSettings("email") },
   more: { h: "Change a card where you see it", p: "Tap ••• on the weather or calendar card to change just that card, without hunting through Settings.", go: "Try it on weather", act: () => openSettings("weather", { fromCard: true }) },
   newsletters: { h: "School email becomes short posts", p: "Forward school email and newsletters. Shoebox pulls out each thing to do, decide or know, with the dates.", go: "Set it up", act: () => openSettings("newsletters") },
@@ -2063,6 +2130,7 @@ function tipsUsed() {
   const got = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
   if (got("edition.inboxAddress") || state.items.some((i) => i.source === "email")) used.add("email");
   if (coach.seen("more")) used.add("more");
+  if (!nativeCan("music") || morningSettings().song) used.add("song");
   if (schoolSettings().on || !ai.settings.enabled()) used.add("newsletters");
   if (got("edition.remindTime") || state.items.some((i) => i.status === STATUS.ASIDE)) used.add("later");
   if (flag("edition.searched")) used.add("find");
@@ -2856,6 +2924,7 @@ async function onTimelineClick(e) {
   if ((b = hit("[data-panel]"))) { coachUsed("more"); openSettings(b.dataset.panel, { fromCard: true }); return; }
   if ((b = hit("[data-welcome]"))) { await welcomeAction(b.dataset.welcome); return; }
   if ((b = hit("[data-tip]"))) { tipAction(b.dataset.tip); return; }
+  if ((b = hit("[data-wn]"))) { whatsNewAction(b.dataset.wn); return; }
   if ((b = hit("[data-ai-ask]"))) { setAi(b.dataset.aiAsk === "1"); render({ top: false }); return; }
   if ((b = hit("[data-school=skip]"))) { markSchoolAsked(); state.schoolDraft = ""; state.schoolForce = false; render({ top: false }); return; }
   if ((b = hit("[data-act]"))) { runAct(b.dataset.act, b); return; }
