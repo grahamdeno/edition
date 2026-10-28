@@ -41,7 +41,7 @@ import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 import * as songs from "./songs.js";
 import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone, mixStories, followOrder } from "./onboard.js";
 
-export const VERSION = "4.60.0";
+export const VERSION = "4.61.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -1106,7 +1106,7 @@ function render({ top = false } = {}) {
   bindTimeline(tl);
   tintVisible(tl);
   if (state.reveal) $("#panel", tl)?.classList.add("reveal");
-  requestAnimationFrame(() => { placeSpot(); coachPass(tl); tintSongCard(); refreshDayLine(); });
+  requestAnimationFrame(() => { placeSpot(); coachPass(tl); tintSongCard(); refreshDayLine(); watchFoldCards(); });
   updateWidget();
 }
 
@@ -1429,7 +1429,13 @@ function morningHtml() {
   const m = morningSettings(), c = morningCache();
   const cards = [];
   const place = placeOf(m);
-  const card = (cls, rail, meta, body) => `<article class="post daily ${cls}"><div class="rail">${rail}</div><div class="main"><div class="meta">${meta}</div>${body}</div></article>`;
+  // A card you can finish for the day: a button folds it to one line (or hides it, by your choice) until tomorrow.
+  const folds = [], foldMode = m.doneMode === "hide" ? "hide" : "fold";
+  const card = (cls, rail, meta, body, f) => {
+    if (f && c.folded?.[f.key]) { if (foldMode === "fold") folds.push(f); return ""; }
+    const done = f ? `<div class="acts fold-acts"><span class="grow"></span><button class="act done" type="button" data-day="fold:${esc(f.key)}">${I.done}<span>${esc(f.btn)}</span></button></div>` : "";
+    return `<article class="post daily ${cls}"${f ? ` data-fold="${esc(f.key)}"` : ""}><div class="rail">${rail}</div><div class="main"><div class="meta">${meta}</div>${body}${done}</div></article>`;
+  };
   const hm = (iso) => (iso ? new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) : "");
   if (m.weather && !place && flag(ONBOARDED)) {
     cards.push(`<div class="wx-mini"><span class="wx-ic-s" aria-hidden="true">${I.sun}</span><span>Weather: add your ZIP code and it shows here each morning.</span>
@@ -1464,7 +1470,7 @@ function morningHtml() {
     const st = songs.songStats(songLog());
     cards.push(card("song", `<span class="av av-day" aria-hidden="true">${I.music}</span>`, `<span class="who">Song of the day</span>${cardMore("cards", "Daily cards")}`,
       songCard({ art: sg.art || sg.artwork, title: sg.title, artist: sg.artist, year: sg.year, when: sg.lastPlayed, preview: sg.preview, url: sg.url, openId: sg.id, next: true, tint: sg.tint,
-        tally: [st.month ? `${st.month} song${st.month === 1 ? "" : "s"} brought back this month` : "", st.loved ? `${st.loved} in your Rediscovered playlist` : ""].filter(Boolean).join(" · ") })));
+        tally: [st.month ? `${st.month} song${st.month === 1 ? "" : "s"} brought back this month` : "", st.loved ? `${st.loved} in your Rediscovered playlist` : ""].filter(Boolean).join(" · ") }), { key: "song", label: sg.title, btn: "Listened" }));
   } else if (m.song && nativeCan("music") && c.songStatus === "empty") {
     cards.push(card("song", `<span class="av av-day" aria-hidden="true">${I.music}</span>`, `<span class="who">Song of the day</span>${cardMore("cards", "Daily cards")}`,
       `<p class="wx-line">Song of the day picks from songs you've played in the Music app. Play a few there and one shows up here tomorrow.</p>`));
@@ -1472,7 +1478,7 @@ function morningHtml() {
     const sg = c.song, mt = sg.match || {};
     const t = sg.lastPlayed ? Date.parse(sg.lastPlayed) : NaN;
     cards.push(card("song", `<span class="av av-day" aria-hidden="true">${I.music}</span>`, `<span class="who">Song of the day</span>${cardMore("cards", "Daily cards")}`,
-      songCard({ art: mt.artwork, title: mt.name || sg.title, artist: mt.artist || sg.artist, year: mt.year, when: Number.isFinite(t) ? t : 0, preview: mt.preview, url: mt.url, tint: sg.tint })));
+      songCard({ art: mt.artwork, title: mt.name || sg.title, artist: mt.artist || sg.artist, year: mt.year, when: Number.isFinite(t) ? t : 0, preview: mt.preview, url: mt.url, tint: sg.tint }), { key: "song", label: mt.name || sg.title, btn: "Listened" }));
   }
   if (m.hockey) for (const g of c.games || []) {
     if (!g.done) continue;
@@ -1481,7 +1487,8 @@ function morningHtml() {
       `<span class="who">${esc(g.name)},</span> <span class="when">last night</span><span class="tag ${g.won ? "won" : ""}">${res}${g.end ? ` · ${esc(g.end)}` : ""}</span>${cardMore("cards", "Daily cards")}`,
       `<p class="score">${esc(g.name)} ${g.us}, ${esc(g.opp)} ${g.them}</p>
        <p class="wx-line">${g.home ? "At home" : "Away"}${g.scorers.length ? ` · Goals: ${esc(g.scorers.join(", "))}` : ""}</p>
-       ${g.recap || g.center ? `<a class="btn sm hl" href="${esc(g.recap || g.center)}" target="_blank" rel="noopener">${I.play}<span>${g.recap ? "Watch highlights" : "Game recap"}</span></a>` : ""}`));
+       ${g.recap || g.center ? `<a class="btn sm hl" href="${esc(g.recap || g.center)}" target="_blank" rel="noopener">${I.play}<span>${g.recap ? "Watch highlights" : "Game recap"}</span></a>` : ""}`,
+      { key: `nhl-${g.team}`, label: `${g.name} ${g.us}–${g.them}`, btn: "Seen it" }));
   }
   if (m.quote && isJung(m.quoteFrom)) {
     // Carl Jung: the hand-picked set, on the phone, no AI needed.
@@ -1525,7 +1532,8 @@ function morningHtml() {
       const img = pic ? (pic.blobId ? `<img alt="" data-blob="${esc(pic.blobId)}">` : `<img alt="" src="${esc(pic.src)}" referrerpolicy="no-referrer" onerror="this.remove()">`) : "";
       cards.push(card("otd", avatarHtml(), `<span class="who">On this day,</span> <span class="when">${esc(o.label.toLowerCase())}</span>${cardMore("cards", "Daily cards")}`,
         `<button class="otd-card" type="button" data-open="${esc(o.item.id)}">${img ? `<span class="otd-pic">${img}</span>` : ""}
-          <span class="otd-t"><span class="ttl">${esc(o.item.why || o.item.title || "Something you saved")}</span>${o.item.why && o.item.title ? `<span class="site">${esc(o.item.title)}</span>` : ""}</span></button>`));
+          <span class="otd-t"><span class="ttl">${esc(o.item.why || o.item.title || "Something you saved")}</span>${o.item.why && o.item.title ? `<span class="site">${esc(o.item.title)}</span>` : ""}</span></button>`,
+        { key: "otd", label: "On this day", btn: "Seen it" }));
     }
   }
   if (m.study && c.cpmai?.questions?.length && c.cpmai.done) {
@@ -1551,10 +1559,45 @@ function morningHtml() {
   }
   // Named for the time of day, like the greeting above it.
   const h = new Date().getHours();
-  return cards.length ? sectionHead(h < 5 || h >= 17 ? "This evening" : h < 12 ? "This morning" : "This afternoon") + cards.join("") : "";
+  const shown = cards.filter(Boolean);
+  if (folds.length) shown.push(`<div class="fold-row" role="group" aria-label="Done for today">${folds.map((f) => `<button class="chip fold-chip" type="button" data-day="unfold:${esc(f.key)}" aria-label="${esc(f.label)}, done for today. Show it again.">${I.done}<span>${esc(f.label)}</span></button>`).join("")}</div>`);
+  return shown.length ? sectionHead(h < 5 || h >= 17 ? "This evening" : h < 12 ? "This morning" : "This afternoon") + shown.join("") : "";
 }
 
 /* The morning cards' own buttons: shrink the weather, finish CPMAI, keep or retire a Jung quote. */
+/** Finish a morning card for today; it folds to a line (or hides) until tomorrow. */
+function foldCard(c, key) {
+  c.folded = { ...(c.folded || {}), [key]: Date.now() };
+  track(`fold_${String(key).replace(/^nhl-.*/, "nhl").replace(/[^a-z]/g, "")}`);
+}
+/*
+ * Folding by itself: the song once you come back from Apple Music or the preview plays out;
+ * scores and On this day once you've had them on screen and leave the app. A card you
+ * opened again stays open. Settings › Daily cards turns this off.
+ */
+const autoFoldOn = () => morningSettings().doneAuto !== false;
+function autoFold(key) {
+  if (!autoFoldOn()) return;
+  const c = morningCache();
+  if (c.folded?.[key] || c.unfolded?.[key] || !document.querySelector(`[data-fold="${CSS.escape(key)}"]`)) return false;
+  foldCard(c, key);
+  saveMorningCache(c);
+  return true;
+}
+let foldSeen = null;
+function watchFoldCards() {
+  if (!("IntersectionObserver" in window)) return;
+  foldSeen?.disconnect();
+  const timers = new Map();
+  foldSeen = new IntersectionObserver((entries) => {
+    for (const e of entries) {
+      const key = e.target.dataset.fold;
+      if (e.isIntersecting && e.intersectionRatio >= 0.6) timers.set(key, setTimeout(() => { state.foldSeen = { ...(state.foldSeen || {}), [key]: true }; }, 2000));
+      else { clearTimeout(timers.get(key)); timers.delete(key); }
+    }
+  }, { threshold: [0, 0.6] });
+  document.querySelectorAll('#panel [data-fold]:not([data-fold="song"])').forEach((el) => foldSeen.observe(el));
+}
 const isJung = (from) => /^\s*(carl\s+(gustav\s+)?)?jung\s*$/i.test(String(from || ""));
 /** A quote's id: its first words, so "Not for me" and Keep follow it across days. */
 const quoteId = (q) => String(q?.q || "").toLowerCase().replace(/[^a-z0-9 ]/g, "").replace(/\s+/g, " ").trim().slice(0, 60);
@@ -1577,6 +1620,8 @@ async function dayAction(what) {
     try { const all = JSON.parse(localStorage.getItem("edition.cpmaiScores") || "{}"); all[dayKey()] = [c.cpmai.right, c.cpmai.questions.length]; localStorage.setItem("edition.cpmaiScores", JSON.stringify(all)); } catch { /* full */ }
     tick(true);
   } else if (act === "cq-show" && c.cpmai) c.cpmai.done = false;
+  else if (act === "fold") { foldCard(c, arg); live("Done for today."); }
+  else if (act === "unfold") { if (c.folded) delete c.folded[arg]; c.unfolded = { ...(c.unfolded || {}), [arg]: true }; }
   else if (act === "jung-keep") {
     const j = daily.JUNG[+arg];
     if (j && !state.items.some((i) => i.jung === +arg)) {
@@ -1666,7 +1711,7 @@ function playPreview(btn) {
   if (previewAudio) { previewAudio.pause(); document.querySelectorAll(".disc-play.playing").forEach((x) => { x.classList.remove("playing"); x.style.setProperty("--p", 0); }); }
   previewAudio = new Audio(src);
   previewAudio.addEventListener("timeupdate", () => { const a = previewAudio; if (a.duration) btn.style.setProperty("--p", (a.currentTime / a.duration).toFixed(3)); });
-  previewAudio.addEventListener("ended", () => show(false));
+  previewAudio.addEventListener("ended", () => { show(false); if (btn.closest('[data-fold="song"]')) { autoFold("song"); render({ top: false }); } });
   previewAudio.play().then(() => show(true)).catch(() => show(false));
 }
 
@@ -3252,6 +3297,7 @@ async function onTimelineClick(e) {
   let b;
   if ((b = hit("[data-tab]"))) { selectTab(b.dataset.tab); return; }
   if ((b = hit("[data-preview]"))) { playPreview(b); return; }
+  if (hit('[data-fold="song"] .disc-acts a.btn.primary')) state.songOpened = true;
   if ((b = hit("[data-song-open]"))) {
     // The link opens the song in Apple Music by itself; note it so Shoebox can ask later how it landed.
     const sg = morningCache().song;
@@ -4769,6 +4815,10 @@ function openSettings(panel = "", { fromCard = false } = {}) {
       ${onOff("otd", "On this day", m.otd)}
       ${me || nativeCan("music") ? onOff("song", "Song of the day", m.song) : ""}
       ${nativeCan("music") ? `<p class="note">A song from your Music library you haven't played in a while. It stays on your iPhone.</p>` : ""}
+      <div class="row"><span class="rk">When I'm done with a card</span>
+        <div class="seg" role="group" aria-label="When I'm done with a card"><button type="button" data-done-mode="fold" aria-pressed="${m.doneMode !== "hide"}">Fold</button><button type="button" data-done-mode="hide" aria-pressed="${m.doneMode === "hide"}">Hide</button></div></div>
+      ${onOff("doneAuto", "Fold by itself once I've seen it", m.doneAuto !== false)}
+      <p class="note">Song, scores and On this day each get a Listened or Seen it button. Folded cards wait in one line under This morning; tap one to see it again. Hide takes them away until tomorrow. Everything opens fresh each morning.</p>
       ${onOff("quote", "Quote of the day", m.quote)}
       <div class="field q-from" ${m.quote ? "" : "hidden"}><label for="set-q-from">Quotes from <span class="hint">(a person or a theme)</span></label>
         <div class="mail-pick"><input id="set-q-from" type="text" autocomplete="off" maxlength="50" placeholder="Seneca, stoicism, faith…" value="${esc(m.quoteFrom || "")}"><button class="btn sm" type="button" id="set-q-save">Use</button></div>
@@ -4974,6 +5024,11 @@ function openSettings(panel = "", { fromCard = false } = {}) {
     if (k === "quote") { const f = $(".q-from", wrap); if (f) f.hidden = on !== "1"; if (on === "1" && !morningSettings().quoteFrom) $("#set-q-from", wrap)?.focus(); }
     render({ top: false });
     loadMorning();
+  }));
+  wrap.querySelectorAll("[data-done-mode]").forEach((b) => b.addEventListener("click", () => {
+    setMorningSettings({ ...morningSettings(), doneMode: b.dataset.doneMode });
+    wrap.querySelectorAll("[data-done-mode]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+    render({ top: false });
   }));
   const useQuoteFrom = (from) => {
     const v = String(from || "").trim().slice(0, 50);
@@ -5684,7 +5739,14 @@ function wireGlobal() {
     else if (state.reader) closeReader();
   });
   document.addEventListener("visibilitychange", async () => {
-    if (document.visibilityState === "hidden") { const t = $(".toast"); if (t && t._onExpire) expireToast(t); return; }
+    if (document.visibilityState === "hidden") {
+      const t = $(".toast"); if (t && t._onExpire) expireToast(t);
+      for (const key of Object.keys(state.foldSeen || {})) if (autoFold(key)) state.foldedAway = true;
+      state.foldSeen = {};
+      return;
+    }
+    if (state.songOpened) { state.songOpened = false; if (autoFold("song")) state.foldedAway = true; }
+    if (state.foldedAway) { state.foldedAway = false; if (state.tab === "today" && !state.reader && !$(".sheet-wrap")) render({ top: false }); else state.staleToday = true; }
     if (document.visibilityState !== "visible") return;
     const before = state.items.length;
     const day = state.edition && state.edition.date;
