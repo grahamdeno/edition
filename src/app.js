@@ -41,7 +41,7 @@ import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 import * as songs from "./songs.js";
 import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone, mixStories, followOrder } from "./onboard.js";
 
-export const VERSION = "4.65.1";
+export const VERSION = "4.65.2";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -1474,14 +1474,16 @@ function morningHtml() {
     cards.push(card("song", `<span class="av av-day" aria-hidden="true">${I.music}</span>`, `<span class="who">Song of the day</span>${cardMore("cards", "Daily cards")}`,
       songCard({ art: mt.artwork, title: mt.name || sg.title, artist: mt.artist || sg.artist, year: mt.year, when: Number.isFinite(t) ? t : 0, preview: mt.preview, url: mt.url, tint: sg.tint }), { key: "song", label: mt.name || sg.title, btn: "Listened" }));
   }
-  if (m.hockey) for (const g of c.games || []) {
-    if (!g.done) continue;
+  if (m.hockey) for (const g0 of c.games || []) {
+    if (!g0.done) continue;
+    // Games saved this morning, before highlights links: make one from the teams.
+    const g = g0.highlights ? g0 : { ...g0, highlights: daily.highlightsLink(g0.home ? g0.opp : g0.name, g0.home ? g0.name : g0.opp, yesterdayKey()) };
     const res = g.won ? "W" : "L";
     cards.push(card(`nhl t-${esc(g.team)}`, `<span class="av av-day team" aria-hidden="true">${esc(g.team)}</span>`,
       `<span class="who">${esc(g.name)},</span> <span class="when">last night</span><span class="tag ${g.won ? "won" : ""}">${res}${g.end ? ` · ${esc(g.end)}` : ""}</span>${cardMore("cards", "Daily cards")}`,
       `<p class="score">${esc(g.name)} ${g.us}, ${esc(g.opp)} ${g.them}</p>
        <p class="wx-line">${g.home ? "At home" : "Away"}${g.scorers.length ? ` · Goals: ${esc(g.scorers.join(", "))}` : ""}</p>
-       ${g.recap || g.center ? `<a class="btn sm hl" href="${esc(g.recap || g.center)}" target="_blank" rel="noopener">${I.play}<span>${g.recap ? "Watch highlights" : "Game recap"}</span></a>` : ""}`,
+       ${g.highlights ? `<a class="btn sm hl" href="${esc(g.highlights)}" target="_blank" rel="noopener">${I.play}<span>Watch highlights</span></a>` : g.recap || g.center ? `<a class="btn sm hl" href="${esc(g.recap || g.center)}" target="_blank" rel="noopener">${I.play}<span>${g.recap ? "Watch highlights" : "Game recap"}</span></a>` : ""}`,
       { key: `nhl-${g.team}`, label: `${g.name} ${g.us}–${g.them}`, btn: "Seen it" }));
   }
   if (m.quote && isJung(m.quoteFrom)) {

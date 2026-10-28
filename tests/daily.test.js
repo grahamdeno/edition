@@ -4,7 +4,7 @@ import { gamesFor, onThisDay, jungFor, JUNG, compass, weatherWord } from "../src
 
 test("last night's games for the Hurricanes and Capitals", () => {
   const data = { games: [
-    { gameState: "OFF", homeTeam: { abbrev: "CAR", name: { default: "Hurricanes" }, score: 4 }, awayTeam: { abbrev: "NYR", name: { default: "Rangers" }, score: 3 },
+    { gameState: "OFF", gameDate: "2026-10-26", homeTeam: { abbrev: "CAR", name: { default: "Hurricanes" }, score: 4 }, awayTeam: { abbrev: "NYR", name: { default: "Rangers" }, score: 3 },
       gameOutcome: { lastPeriodType: "OT" }, threeMinRecap: "/video/recap-123", gameCenterLink: "/gamecenter/nyr-vs-car/2026/10/26/2026020100",
       goals: [{ teamAbbrev: { default: "CAR" }, name: { default: "S. Aho" } }, { teamAbbrev: { default: "NYR" }, name: { default: "A. Panarin" } }] },
     { gameState: "FINAL", homeTeam: { abbrev: "BOS", score: 2 }, awayTeam: { abbrev: "WSH", score: 1 } },
@@ -15,6 +15,8 @@ test("last night's games for the Hurricanes and Capitals", () => {
   assert.deepEqual([g[0].name, g[0].us, g[0].them, g[0].won, g[0].end, g[0].home], ["Hurricanes", 4, 3, true, "OT", true]);
   assert.equal(g[0].recap, "https://www.nhl.com/video/recap-123");
   assert.deepEqual(g[0].scorers, ["S. Aho"]);
+  assert.equal(decodeURIComponent(g[0].highlights.split("=")[1]), "NHL Rangers vs Hurricanes highlights October 26, 2026");
+  assert.ok(g[1].highlights.startsWith("https://www.youtube.com/results?search_query="));
   assert.deepEqual([g[1].name, g[1].won, g[1].home], ["Capitals", false, false]);
 });
 

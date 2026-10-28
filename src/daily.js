@@ -109,6 +109,14 @@ export async function fetchWeather(place) {
 
 export const TEAMS = { CAR: "Hurricanes", WSH: "Capitals" };
 
+/** A YouTube search for one game's highlights: "Rangers vs Hurricanes highlights October 26, 2026". */
+export function highlightsLink(away, home, date) {
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(date || "") ? new Date(`${date}T12:00:00`) : null;
+  const when = d ? d.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }) : "";
+  const q = `NHL ${away} vs ${home} highlights ${when}`.trim();
+  return `https://www.youtube.com/results?search_query=${encodeURIComponent(q)}`;
+}
+
 export function gamesFor(data, teams) {
   const out = [];
   for (const g of data?.games || []) {
@@ -126,6 +134,8 @@ export function gamesFor(data, teams) {
         won: done && (us.score ?? 0) > (them.score ?? 0),
         recap: site(g.threeMinRecap) || site(g.condensedGame) || null,
         center: site(g.gameCenterLink),
+        // NHL.com's video links can bounce to other pages; a YouTube search for the game finds the league's own highlights.
+        highlights: highlightsLink(away.name?.default || away.abbrev, home.name?.default || home.abbrev, g.gameDate),
         scorers: (g.goals || []).filter((x) => x.teamAbbrev?.default === abbr || x.teamAbbrev === abbr)
           .map((x) => x.name?.default || [x.firstName?.default, x.lastName?.default].filter(Boolean).join(" ")).filter(Boolean),
         start: g.startTimeUTC || null,
