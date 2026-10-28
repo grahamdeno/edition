@@ -36,12 +36,12 @@ import * as ai from "./ai.js";
 import { tick, unlock, soundOn, setSound } from "./feel.js";
 import { I, LOGO } from "./icons.js";
 import { topicColor, dominantColor, tintInks, focusOf } from "./visuals.js";
-import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
+import { problems, realProblems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 import * as songs from "./songs.js";
 import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone, mixStories, followOrder } from "./onboard.js";
 
-export const VERSION = "4.56.0";
+export const VERSION = "4.57.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -181,6 +181,7 @@ async function restoreAfterMove() {
 
 async function boot() {
   const movedNote = await restoreAfterMove();
+  sealMeSettings();
   const migrated = await db.migrateFromLocalStorage(migrateLegacy).catch(() => 0);
   ai.migrateAiSettings();
   state.items = await db.items.all();
@@ -1040,8 +1041,10 @@ function todaySections() {
     .sort((a, b) => b.created - a.created).slice(0, SUGGESTIONS_PER_DAY);
   // School posts: every one not done, each day, apart from New and the six. Settled ones stay till tomorrow, stamped.
   // School posts: the newest newsletter's posts first (in its own order), then the rest by their date.
-  const newest = Math.max(0, ...state.items.filter((i) => i.school && i.status === STATUS.INBOX).map((i) => i.created));
-  const batch = (i) => i.status === STATUS.INBOX && newest - i.created < 10 * 60e3;
+  // A post settled this session keeps its place, so the list doesn't jump under your finger.
+  const unsorted = (i) => i.status === STATUS.INBOX || state.recent.get(i.id)?.stage === "inbox";
+  const newest = Math.max(0, ...state.items.filter((i) => i.school && unsorted(i)).map((i) => i.created));
+  const batch = (i) => unsorted(i) && newest - i.created < 10 * 60e3;
   const school = state.items.filter((i) => i.school && (schoolToday([i]).length || (state.recent.has(i.id))))
     .sort((a, b) => (batch(b) - batch(a)) || (batch(a) ? b.created - a.created : 0)
       || (a.school.date || "9999").localeCompare(b.school.date || "9999") || a.created - b.created);
@@ -1073,7 +1076,7 @@ function settledAs(item) {
 
 function leftToday() {
   const s = todaySections();
-  return [...s.fresh, ...s.six].filter(isOpen).length;
+  return [...s.school, ...s.fresh, ...s.six].filter(isOpen).length;
 }
 
 /** Render the whole screen. Keeps your place unless `top` asks to go back up. */
@@ -1132,6 +1135,7 @@ function todayHtml() {
   if (s.fresh.length) h += sectionHead("New", `${s.fresh.filter(isOpen).length || "All"} to sort`) + s.fresh.map((i) => postHtml(i)).join("");
   if (s.six.length) h += sectionHead("Today's six", `${s.six.filter(isOpen).length} of ${s.six.length} left`) + s.six.map((i) => postHtml(i)).join("");
   if (s.sugg.length) h += sectionHead("Top stories") + s.sugg.map((i) => postHtml(i)).join("");
+  else if (state.storiesMiss && !state.storiesLoading && state.tab === "today") h += sectionHead("Top stories") + `<p class="finding miss" role="status">No stories came through just now. Shoebox looks again tomorrow morning.${ai.settings.canDiscover() ? ` <button class="linkish" type="button" data-act="discover">Try again</button>` : ""}</p>`;
   else if (state.storiesLoading) h += sectionHead("Top stories") + `<p class="finding" role="status"><span class="spin" aria-hidden="true"></span>Finding today's top stories${followedTopics(state.suggest).length ? ` on ${esc(followedTopics(state.suggest).slice(0, 3).join(", "))}` : ""}…</p>`;
   return h + endHtml(s);
 }
@@ -1144,7 +1148,17 @@ function todayHtml() {
 const MORNING_KEY = "edition.morning", MORNING_CACHE = "edition.morningCache";
 
 /** Shoebox Me, Graham's private build, opens with ?me=1: personal modules stay available there. */
-const personal = () => { try { return localStorage.getItem("edition.me") === "1"; } catch { return false; } };
+const personal = () => { try { return Boolean(window.shoeboxNative) && localStorage.getItem("edition.me") === "1"; } catch { return false; } };
+/** Shoebox Me: write today's school and morning settings to the phone once, so they never depend on defaults in the code. */
+function sealMeSettings() {
+  if (!personal()) return;
+  try {
+    if (localStorage.getItem("edition.meSealed")) return;
+    localStorage.setItem(SCHOOL_KEY, JSON.stringify(schoolSettings()));
+    localStorage.setItem(MORNING_KEY, JSON.stringify(morningSettings()));
+    localStorage.setItem("edition.meSealed", "1");
+  } catch { /* storage full or blocked */ }
+}
 /** Shoebox Me sends its AI sign-up so the relay gives it a firstname-keep address. */
 const staffHeaders = () => (personal() ? ai.ownerHeaders() : {});
 /** Shoebox Me: move an address made before -keep (graham-uppx) to graham-keep, once. The old one still delivers. */
@@ -1542,7 +1556,7 @@ async function dayAction(what) {
  * The card takes its colour from the cover.
  */
 function songCard({ art = "", title = "", artist = "", year = "", when = 0, preview = "", url = "", openId = "", next = false, tint = "", tally = "" }) {
-  const ago = when ? friendlyWhen(when) : "";
+  const ago = when ? new Date(when).toLocaleDateString("en-US", Date.now() - when < 45 * 864e5 ? { month: "long", day: "numeric" } : { month: "long", year: "numeric" }) : "";
   return `<div class="disc"${tint ? ` style="--tint:${esc(tint)}"` : ""}>
     <div class="disc-top">
       <div class="disc-art">${art ? `<img alt="" src="${esc(art)}" referrerpolicy="no-referrer" onerror="this.remove()" data-tint-from="1">` : `<span class="disc-blank">${I.music}</span>`}
@@ -1735,6 +1749,7 @@ async function checkInbox({ statusEl = null } = {}) {
         const twin = state.items.find((i) => i.email && i.title === (m.subject || "") && i.email.from === m.from && Math.abs((i.email.at || 0) - (m.at || 0)) < 2 * 864e5);
         if (twin) { done.push(m.id); continue; }
         const item = createItem({ kind: KIND.NOTE, text: body.slice(0, 8000), title: m.subject || body.slice(0, 80) || "Email" }, { id: db.newId(), source: "email" });
+        track("save_email");
         Object.assign(item, { title: m.subject || item.title, email: { from: m.from, fromName: m.fromName || m.from, at: m.at }, url: link || undefined });
         await saveItem(item);
         made++;
@@ -1836,7 +1851,7 @@ function welcomeHtml() {
       <div class="ask-top"><span class="av av-sb" aria-hidden="true">${LOGO}</span>
         <div><h2 id="wel-h">Welcome to Shoebox</h2>
         <p>Your own feed: the things you saved come back a few at a time, with your day and weather on top. It ends when you're done.</p></div></div>
-      <div class="ask-acts"><button class="btn primary" type="button" data-welcome="start">Build my morning</button></div>
+      <div class="ask-acts"><button class="btn primary" type="button" data-welcome="start">Get started</button></div>
       <button class="btn ghost sm wel-skip" type="button" data-welcome="skip">Skip</button>
     </section>`;
   }
@@ -1864,7 +1879,7 @@ function shareGuideHtml() {
     `<button class="btn primary" type="button" data-welcome="pinned">Done</button>`, false);
   if (step === "home") return card("Keep Shoebox on your Home Screen", "It opens like an app and works offline.",
     `<ol class="sg-steps"><li>In Safari, tap <b>Share</b> ${SHARE_ICON}</li><li>Tap <b>Add to Home Screen</b>, then <b>Add</b>.</li></ol>`,
-    `<button class="btn primary" type="button" data-welcome="share-off">Done</button>
+    `<button class="btn primary" type="button" data-welcome="share-off">I added it</button>
      <button class="btn" type="button" data-welcome="add">Save a link</button>`, false);
   return card("Save your first thing", "Copy a link and tap +, or paste it anywhere on this screen.", "",
     `<button class="btn primary" type="button" data-welcome="add">${I.plus || ""}<span>Save something</span></button>`);
@@ -1885,31 +1900,37 @@ async function welcomeAction(what) {
 }
 
 /*
- * Build my morning: five short steps in one sheet (topics, your day, school, email address, AI),
+ * Build my morning: five short steps in one sheet (getting things in, your day, school, optional topics, AI),
  * then Today assembles in front of them with their own weather, calendar
  * and top stories.
  */
 function openBuild(step = 1) {
   state.build = state.build || { topics: new Set(followedTopics(state.suggest)), study: "" };
   const b = state.build, m = morningSettings();
-  // The email step shows when the relay can make personal addresses.
+  // Your own things first: how they get in. Then your day, school, optional topics, and AI.
   const mailOk = (() => { try { return Boolean(localStorage.getItem("edition.inboxPick")); } catch { return false; } })();
-  if (step === 4 && !mailOk) step = 5;
-  const total = mailOk ? 5 : 4, pos = step === 5 && !mailOk ? 4 : step;
   const head = (h) => `<div class="sheet-head"><h2>${h}</h2><button class="x" type="button" data-close aria-label="Close">${I.close}</button></div>
-    <p class="bm-n">Step ${pos} of ${total}</p>`;
+    <p class="bm-n">Step ${step} of 5</p>`;
   let html;
   if (step === 1) {
-    html = `${head("What do you like to read about?")}
-      <p class="note">Pick a few. Each morning Shoebox finds the day's top stories on them.</p>
-      <div class="bm-chips" role="group" aria-label="Topics">${TOPICS.map((t) => `<button type="button" class="bm-chip" data-bm-topic="${t}" aria-pressed="${b.topics.has(t)}">${t}</button>`).join("")}</div>
-      <label class="bm-l" for="bm-study">Studying for something? <span>Optional. Three practice questions a day.</span></label>
-      <input id="bm-study" type="text" autocomplete="off" placeholder="AWS Solutions Architect, Spanish verbs" value="${esc(b.study || (m.study ? m.studyTopic : ""))}">
-      <div class="sheet-foot"><button class="btn primary wide" type="button" data-bm="2">Next</button></div>`;
+    let addr = "", pick = "";
+    try { addr = localStorage.getItem("edition.inboxAddress") || ""; pick = localStorage.getItem("edition.inboxPick") || ""; } catch { /* blocked */ }
+    const mine = /-[a-z2-9]{4}@|-keep@/.test(addr);
+    const share = NATIVE ? `<b>From any app:</b> tap Share, then Shoebox. Not in the row? Swipe to the end and tap More.`
+      : `<b>Anything you copy:</b> open Shoebox and tap +, or paste anywhere on Today.`;
+    html = `${head("Get your things in")}
+      <p class="note">Shoebox is your own feed: only what you choose goes in. Save it the moment you see it, and it comes back a few at a time.</p>
+      <ul class="mail-uses bm-ways"><li>${share}</li>
+        ${mailOk ? `<li><b>By email:</b> forward anything, sign up for newsletters, or add your address in your school's parent app.</li>` : ""}</ul>
+      ${!mailOk ? "" : mine ? `<div class="mail-addr"><b id="bm-addr">${esc(addr)}</b><button class="btn sm" type="button" data-bm="copy">Copy</button></div>`
+      : `<label class="bm-l" for="bm-mail">Your Shoebox email address <span>The first part is yours; four random letters keep it private.</span></label>
+        <div class="mail-pick"><input id="bm-mail" type="text" autocomplete="given-name" autocapitalize="none" placeholder="Your first name" maxlength="16"><span>-····@${esc(pick)}</span></div>`}
+      <span class="st" id="bm-st" role="status"></span>
+      <div class="sheet-foot two">${!mailOk || mine ? `<button class="btn primary" type="button" data-bm="2" style="grid-column: 1 / -1">Next</button>` : `<button class="btn" type="button" data-bm="2">Not now</button><button class="btn primary" type="button" data-bm="mail">Make my address</button>`}</div>`;
   } else if (step === 2) {
     const place = placeOf(m);
     html = `${head("Your day")}
-      <p class="note">Your weather and today's calendar sit at the top of Today.</p>
+      <p class="note">Your weather and today's calendar sit at the top of Today, so there's a reason to look each morning.</p>
       <div class="bm-row"><div><b>Weather</b><span id="bm-wx">${place ? `For ${esc(place.name)}` : "Where are you?"}</span></div>
         ${canLocate() ? `<button class="btn${place ? "" : " primary"}" type="button" data-bm="loc">${place ? "Update" : "Use my location"}</button>` : ""}</div>
       <div class="bm-zip"><label class="sr-only" for="bm-zip">ZIP code or city</label><input id="bm-zip" type="text" autocomplete="postal-code" placeholder="Or a ZIP code" inputmode="numeric">
@@ -1927,29 +1948,24 @@ function openBuild(step = 1) {
       <label class="bm-l" for="bm-kid">Child's first name <span>Optional. Add more later in Settings.</span></label>
       <input id="bm-kid" type="text" autocomplete="off" autocapitalize="words" placeholder="First name" value="${esc(sc.child || "")}">
       <label class="bm-l" for="bm-kid-about" style="margin-top:12px">Grade and school <span>Helps Shoebox keep only what's for them</span></label>
-      <input id="bm-kid-about" type="text" autocomplete="off" placeholder="8th grade at Myrtle Grove Middle; band, soccer" value="">
+      <input id="bm-kid-about" type="text" autocomplete="off" placeholder="7th grade at Lincoln Middle; band, soccer" value="">
       <span class="st" id="bm-st" role="status"></span>
       <div class="sheet-foot two"><button class="btn" type="button" data-bm="4">No kids in school</button><button class="btn primary" type="button" data-bm="kid">Next</button></div>`;
   } else if (step === 4) {
-    let addr = "", pick = "";
-    try { addr = localStorage.getItem("edition.inboxAddress") || ""; pick = localStorage.getItem("edition.inboxPick") || ""; } catch { /* blocked */ }
-    const mine = /-[a-z2-9]{4}@/.test(addr);
-    html = `${head("Your Shoebox email address")}
-      <p class="note">Your own address, only for this phone. Sign up for newsletters with it, add it in your school's parent app, or forward anything to it, and it shows up here.</p>
-      ${mine ? `<div class="mail-addr"><b id="bm-addr">${esc(addr)}</b><button class="btn sm" type="button" data-bm="copy">Copy</button></div>
-        <ul class="mail-uses"><li><b>Newsletters:</b> sign up with it, and they come straight here.</li><li><b>School email:</b> add it as a second email in the school's parent app.</li><li><b>Anything else:</b> forward it.</li></ul>`
-      : `<label class="bm-l" for="bm-mail">First part of your address <span>Four random letters keep it private.</span></label>
-        <div class="mail-pick"><input id="bm-mail" type="text" autocomplete="given-name" autocapitalize="none" placeholder="Your first name" maxlength="16"><span>-····@${esc(pick)}</span></div>`}
-      <span class="st" id="bm-st" role="status"></span>
-      <div class="sheet-foot two">${mine ? `<button class="btn primary" type="button" data-bm="5" style="grid-column: 1 / -1">Next</button>` : `<button class="btn" type="button" data-bm="5">Not now</button><button class="btn primary" type="button" data-bm="mail">Make my address</button>`}</div>`;
+    html = `${head("Anything else to follow?")}
+      <p class="note">Optional. Pick a few topics and Shoebox adds the day's biggest stories on them, marked as picked for you. Your own saves always come first.</p>
+      <div class="bm-chips" role="group" aria-label="Topics">${TOPICS.map((t) => `<button type="button" class="bm-chip" data-bm-topic="${t}" aria-pressed="${b.topics.has(t)}">${t}</button>`).join("")}</div>
+      <label class="bm-l" for="bm-study">Studying for something? <span>Optional. Three practice questions a day.</span></label>
+      <input id="bm-study" type="text" autocomplete="off" placeholder="AWS Solutions Architect, Spanish verbs" value="${esc(b.study || (m.study ? m.studyTopic : ""))}">
+      <div class="sheet-foot two"><button class="btn" type="button" data-bm="5">Skip</button><button class="btn primary" type="button" data-bm="topics">Next</button></div>`;
   } else {
-    html = `${head("Let AI pick your top stories?")}
-      <p class="note">With AI on, Shoebox finds the day's top stories on your topics, writes a line about each thing you save, and finds pictures. With it off, everything else still works.</p>
+    html = `${head("Turn on AI?")}
+      <p class="note">With AI on, Shoebox writes a line about each thing you save, finds pictures, turns school email into posts, and picks stories on your topics. With it off, everything else still works.</p>
       <p class="note">To do that, the text of what you save goes to an outside AI service through Shoebox's server. It isn't used to train AI.</p>
       <details class="bm-more"><summary>Exactly what's sent</summary><p>${esc(AI_DISCLOSURE)}</p></details>
       <div class="sheet-foot two"><button class="btn" type="button" data-bm="ai-0">Not now</button><button class="btn primary" type="button" data-bm="ai-1">Turn on AI</button></div>`;
   }
-  const wrap = sheet(html, { label: "Build my morning" });
+  const wrap = sheet(html, { label: "Get started" });
   wrap.addEventListener("click", (e) => buildClick(e, step, wrap));
 }
 
@@ -1968,14 +1984,15 @@ async function buildClick(e, step, wrap) {
   const what = btn.dataset.bm;
   const st = $("#bm-st", wrap);
   const say = (msg, err) => { if (st) { st.textContent = msg; st.classList.toggle("err", !!err); } };
-  if (what === "2") {
+  if (what === "topics") {
     b.study = $("#bm-study", wrap)?.value.trim() || "";
     state.suggest = followTopics(state.suggest, [...b.topics]);
     await db.meta.set("suggest", state.suggest);
     if (b.study) setMorningSettings({ ...morningSettings(), study: true, studyTopic: b.study.slice(0, 80) });
-    track("onboard_topics");
-    openBuild(2);
-  } else if (what === "3") openBuild(3);
+    if (b.topics.size) track("onboard_topics");
+    openBuild(5);
+  } else if (what === "2") openBuild(2);
+  else if (what === "3") openBuild(3);
   else if (what === "4") openBuild(4);
   else if (what === "5") openBuild(5);
   else if (what === "copy") {
@@ -1990,7 +2007,7 @@ async function buildClick(e, step, wrap) {
       if (!res.ok || !d.address) throw new Error(d?.error?.message || "No address came back.");
       localStorage.setItem("edition.inboxAddress", d.address);
       track("onboard_email");
-      openBuild(4);
+      openBuild(1);
     } catch (err) { btn.disabled = false; say(err.message || "Couldn't reach Shoebox's server. You can do this later in Settings › Email.", true); }
   } else if (what === "kid") {
     const name = $("#bm-kid", wrap).value.trim().slice(0, 40), about = $("#bm-kid-about", wrap).value.trim().slice(0, 200);
@@ -2056,6 +2073,7 @@ async function finishBuild(aiOn) {
   if (!stories) return;
   const n = await findNew(null).catch(() => 0);
   state.storiesLoading = false;
+  state.storiesMiss = !n;
   if (!$(".sheet-wrap")) render({ top: false });
   if (n) { buzz(8); toNative({ type: "haptic" }); }
 }
@@ -2065,6 +2083,8 @@ async function finishBuild(aiOn) {
  * that gets the quiet confirmation: a toast and a light tap.
  */
 function celebrateSave(list) {
+  // Where saves come from (share sheet, +, paste, email): anonymous counts only.
+  for (const i of list) if (i) track(`save_${String(i.source || "add").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 20) || "add"}`);
   const shared = list.some((i) => i && i.source === "share");
   if (shared) { buzz(8); toNative({ type: "haptic" }); }
   if (flag(FIRST_SAVE)) return;
@@ -2097,7 +2117,13 @@ function spotlight({ sel, text = "", key = "", next = ".fab" } = {}) {
   el.innerHTML = `<div class="spot-dim" aria-hidden="true"></div><div class="spot-p" data-p="t"></div><div class="spot-p" data-p="b"></div><div class="spot-p" data-p="l"></div><div class="spot-p" data-p="r"></div>
     <div class="spot-ring" aria-hidden="true"></div>
     ${text ? `<div class="spot-tip" role="dialog" aria-label="Tip"><p>${esc(text)}</p><button class="btn sm" type="button" data-spot-ok>Got it</button></div>` : ""}`;
-  el.querySelectorAll(".spot-p").forEach((p) => p.addEventListener("click", () => endSpot()));
+  // A tap outside the hole closes the tip and still does what it was aimed at (Settings, a tab, a button).
+  el.querySelectorAll(".spot-p").forEach((p) => p.addEventListener("click", (e) => {
+    endSpot();
+    el.querySelectorAll(".spot-p, .spot-tip").forEach((x) => { x.style.pointerEvents = "none"; });
+    const under = document.elementFromPoint(e.clientX, e.clientY)?.closest("button, a[href], summary, [role=button]");
+    if (under && !el.contains(under)) under.click();
+  }));
   $("[data-spot-ok]", el)?.addEventListener("click", () => endSpot());
   document.body.appendChild(el);
   spot = { el, sel, key, next };
@@ -2307,7 +2333,7 @@ const features = () => [
   ]],
   ["Deciding", [
     ["Love", "Double-tap a photo, or tap the heart. Loved things are kept for good.", "dbl"],
-    ["Done, Later, Let go", "Later brings it back tomorrow. Put off eight times, it fades so nothing nags.", ""],
+    ["Done, Later, Let go", "Later shows a few days to pick from, right on the card. Something put off eight times fades, so nothing nags.", ""],
     ["Set aside until a day", "It waits under Coming back, then tops Today that morning.", "reminders"],
     ["Undo and bring back", "Every choice has Undo. Let go things wait under All saves › Let go.", ""],
     ["Reply to yourself", "Add a thought to any save. It's searchable later.", ""],
@@ -2779,7 +2805,7 @@ async function refreshDayLine() {
 
 /** The end of Today: what's left, or the finish moment once it's all cleared. */
 function endHtml(s) {
-  const all = [...s.fresh, ...s.six];
+  const all = [...s.fresh, ...s.six, ...s.school];
   const open = all.filter(isOpen).length;
   const c = counts(state.items);
   const more = `${c.queued ? `<button class="btn" type="button" data-act="one-more">Read one more</button>` : ""}
@@ -2964,7 +2990,7 @@ async function laterTo(id, until) {
   render();
   buzz(8);
   track("later_pick");
-  toast(`Back ${laterWhen(after.until)}.`, { action: "Undo", onAction: () => undoRecent(id) });
+  confirmOnCard(id, `Back ${laterWhen(after.until)}.`, { action: "Undo", onAction: () => undoRecent(id) });
 }
 
 /*
@@ -3120,6 +3146,7 @@ function bindTimeline(tl) {
 let dblLoved = 0;
 async function onTimelineClick(e) {
   const t = e.target;
+  if (state.laterOpen && !t.closest(".later-pick, [data-later-open]")) { const id = state.laterOpen; state.laterOpen = null; refreshPost(id); }
   const hit = (sel) => t.closest(sel);
   let b;
   if ((b = hit("[data-tab]"))) { selectTab(b.dataset.tab); return; }
@@ -3217,7 +3244,7 @@ function runAct(act, btn) {
   else if (act === "one-more") oneMore();
   else if (act === "discover") {
     btn.disabled = true;
-    findNew($("#end-st")).then((n) => { btn.disabled = false; if (n) render(); });
+    findNew($("#end-st")).then((n) => { btn.disabled = false; if (n) { state.storiesMiss = false; render(); } else if (btn.isConnected && btn.classList.contains("linkish")) btn.textContent = "Still nothing. Try later"; });
   }
 }
 
@@ -3228,6 +3255,17 @@ async function oneMore() {
   await addToEdition(extra.ids[0]);
   render();
   document.getElementById("p-" + extra.ids[0])?.scrollIntoView({ behavior: reduced() ? "auto" : "smooth", block: "center" });
+}
+
+/**
+ * After a choice on a card: the card itself shows the result with Undo, so a message would only cover
+ * the next card. Screen readers still hear it. A message shows only when the card is out of view.
+ */
+function confirmOnCard(id, msg, opts = {}) {
+  const el = document.getElementById("p-" + id), top = $(".top")?.getBoundingClientRect().bottom || 0;
+  const r = el?.getBoundingClientRect();
+  if (r && r.bottom > top + 40 && r.top < innerHeight - 40) { live(msg); return; }
+  toast(msg, opts);
 }
 
 /** A verdict from the timeline. The post stays, stamped, with Undo; Today's count and end card follow. */
@@ -3249,10 +3287,10 @@ async function timelineVerdict(id, verdict) {
   if (wasLeft > 0 && nowLeft === 0 && state.tab === "today") {
     buzz([12, 60, 18]);
     $(".end.win")?.scrollIntoView({ behavior: reduced() ? "auto" : "smooth", block: "center" });
-    toast("You cleared today.", { action: "Undo", onAction: () => undoRecent(id) });
+    live("You cleared today."); // the finish card says it; a message would cover it
   } else {
     buzz(8);
-    toast(words[verdict], { action: "Undo", onAction: () => undoRecent(id) });
+    confirmOnCard(id, words[verdict], { action: "Undo", onAction: () => undoRecent(id) });
   }
 }
 
@@ -3452,6 +3490,7 @@ function storyBody(item) {
     ${item.transcript ? `<span class="label">Text in the image</span><div class="prose">${esc(item.transcript)}</div>` : ""}
     ${item.note ? `<div class="prose mine-note">${esc(item.note)}</div>` : ""}
     ${item.replies && item.replies.length ? `<div class="story-replies"><span class="label">Your replies</span>${item.replies.map((r) => `<p><span class="when">${esc(friendlyWhen(r.at))}</span>${esc(r.text)}</p>`).join("")}</div>` : ""}
+    ${item.kind === KIND.LINK && !busy && !item.text && !item.summary && !item.extended && !item.note ? `<p class="summary empty-read">Shoebox couldn't read this page${item.url ? ` from ${esc(host(item.url))}` : ""}, often because it needs a sign-in. The original has it all.</p>` : ""}
     ${source}
     ${item.ai && item.ai.why ? `<p class="why-line"><b>Why today</b>${esc(item.ai.why)}</p>` : ""}`;
 }
@@ -3496,6 +3535,9 @@ async function recordVerdict(before, verdict) {
   const after = verdict === VERDICT.LATER && isFaded(before) ? restore(before) : applyVerdict(before, verdict, { stage });
   if (whyNot) after.whyNot = whyNot;
   await saveItem(after);
+  // The number that says whether your own feed works: saves that came back and got finished.
+  track(`v_${String(verdict).replace(/[^a-z]/g, "")}`);
+  if (verdict === VERDICT.DONE && !before.suggested && !before.school && Date.now() - (before.created || Date.now()) > 864e5) track("comeback_done");
   const prevSuggest = state.suggest;
   let learned = null;
   if (before.suggested) {
@@ -3720,11 +3762,8 @@ function openEdit(id) {
     if (edUntil !== wasUntil) { dropReminder(cur); delete next.reminder; }
     if (edUntil && edUntil !== wasUntil) {
       done = setAside(next, edUntil);
-      msg = `Set aside until ${shortDate(edUntil)}.`;
-      if (state.edition && state.edition.ids.includes(id)) {
-        state.edition = { ...state.edition, ids: state.edition.ids.filter((x) => x !== id) };
-        await db.meta.set("edition", state.edition);
-      }
+      msg = `Back ${laterWhen(edUntil)}.`;
+      if (todayIds().includes(id)) state.recent.set(id, { verdict: "aside", stage: cur.status === STATUS.INBOX ? "inbox" : "six", undo: async () => { dropReminder(done); await saveItem(cur); } });
     } else if (!edUntil && wasUntil) { done = bringBackNow(next); msg = "It's back, at the top of Today."; }
     await saveItem(done);
     if (remindMe && notifyOn()) scheduleReminder(done);
@@ -4705,9 +4744,9 @@ function openSettings(panel = "", { fromCard = false } = {}) {
           <button type="button" data-ai="1" aria-pressed="${ai.settings.consented()}">On</button><button type="button" data-ai="0" aria-pressed="${!ai.settings.consented()}">Off</button></div></div>
       <p class="note">An outside AI service reads what you save to tag it, rank it, find pictures and turn newsletters into posts.</p>
       <details class="adv"><summary>Exactly what's sent</summary><p class="note">${esc(AI_DISCLOSURE)}</p></details>
-      <div class="row"><span class="rk">Top stories each morning</span>
+      ${ai.settings.consented() ? `<div class="row"><span class="rk">Top stories each morning</span>
         <div class="seg" role="group" aria-label="Top stories each morning"><button type="button" data-stories="1" aria-pressed="${storiesAuto()}">On</button><button type="button" data-stories="0" aria-pressed="${!storiesAuto()}">Off</button></div></div>
-      <p class="note">A few of the biggest stories in what you follow, picked once a day.</p>
+      <p class="note">A few of the biggest stories in what you follow, picked once a day.</p>` : `<p class="note">Top stories, summaries and school posts start when AI is on.</p>`}
       ${me ? `<p class="note" id="set-ai-use"></p>` : ""}
       <button class="btn ghost sm" type="button" id="set-discover" ${ai.settings.canDiscover() ? "" : "disabled"}>Get more top stories now</button>
       <span class="st" id="set-st" role="status"></span>
@@ -4743,7 +4782,7 @@ function openSettings(panel = "", { fromCard = false } = {}) {
         <p class="note">Removes every save, photo, note and setting from this ${NATIVE ? "iPhone" : "device"}, and from Shoebox's server your email address, any mail waiting there and this phone's AI sign-up. It can't be undone.</p>
         <button class="btn erase" type="button" id="set-erase">Delete all my data</button></div>` },
     features: { title: "Things Shoebox can do", value: "", body: featuresBody() },
-    help: { title: "Help and feedback", value: problems.length ? `${problems.length} logged` : "", body: `
+    help: { title: "Help and feedback", value: realProblems().length ? `${realProblems().length} logged` : "", body: `
       <div class="group help-links">
         <a class="row" href="${supportMail()}"><span class="rk">Email support</span><span class="sv">support@inmyshoebox.com</span></a>
         <a class="row" href="support" target="_blank" rel="noopener"><span class="rk">Questions and answers</span>${I.next}</a>
@@ -4771,7 +4810,7 @@ function openSettings(panel = "", { fromCard = false } = {}) {
     html = `<div class="sheet-head"><h2>Settings</h2>${close}</div>` + SETTINGS_ORDER.map(([label, keys]) => {
       const rows = keys.filter((k) => P[k]).map((k) => `<button class="row set-row" type="button" data-set="${k}"><span class="rk">${esc(P[k].title)}</span><span class="sv">${esc(P[k].value || "")}</span>${I.next}</button>`).join("");
       return rows ? `${label ? `<h3 class="set-h">${esc(label)}</h3>` : ""}<div class="group set-list">${rows}</div>` : "";
-    }).join("") + `<p class="version">${APP}${me ? " Me" : ""} ${VERSION} · ${c.inbox} new · ${c.queued} queued · ${c.done} done · ${c.archived} let go</p>`;
+    }).join("") + `<p class="version">${APP}${me ? " Me" : ""} ${VERSION}</p>`;
   }
   const wrap = sheet(html, { label: panel && P[panel] ? P[panel].title : "Settings" });
   wrap.querySelectorAll("[data-set]").forEach((b) => b.addEventListener("click", () => openSettings(b.dataset.set)));
@@ -4791,7 +4830,7 @@ function openSettings(panel = "", { fromCard = false } = {}) {
     render({ top: false });
   }));
   if (me && ai.settings.consented() && ai.settings.device()) {
-    ai.usage().then((u) => { const el = $("#set-ai-use", wrap); if (el) el.textContent = `Today: ${u.cents.toFixed(1)}¢ of AI${u.limit ? ` (daily allowance ${u.limit}¢)` : ""}. Install id: ${u.device}.`; }).catch(() => {});
+    ai.usage().then((u) => { const el = $("#set-ai-use", wrap); if (el) el.textContent = `This month: ${u.cents.toFixed(1)}¢ of AI${u.limit ? ` (allowance ${u.limit}¢)` : ""}. Install id: ${u.device}.`; }).catch(() => {});
   }
   renderSuggestProfile(wrap);
   renderTagList(wrap);
@@ -5209,10 +5248,10 @@ async function undoTagChange() {
 function refreshProblems(wrap) {
   const n = $("#set-pr-n", wrap);
   if (!n) return;
-  const last = problems[problems.length - 1];
-  n.textContent = problems.length
-    ? `${problems.length} logged on this phone. Latest: ${last.where}: ${last.msg}`
-    : "Nothing logged.";
+  const real = realProblems(), last = real[real.length - 1], net = problems.length - real.length;
+  n.textContent = real.length
+    ? `${real.length} logged on this phone. Latest: ${last.where}: ${last.msg}`
+    : net ? "Nothing wrong. A few things waited for a better connection." : "Nothing logged.";
   $("#set-pr-clear", wrap).disabled = !problems.length;
 }
 

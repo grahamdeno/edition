@@ -11,7 +11,10 @@
   "vars": {
     "EMAIL_ADDRESS": "shoebox@teamd503.com",
     "EMAIL_DOMAIN": "inmyshoebox.com,tangomike.app",
-    "EMAIL_ALIASES": "1"
+    "EMAIL_ALIASES": "1",
+    // AI budget: $1 per person a month, $20 a day for everyone together (owner phones have no personal limit).
+    "AI_DEVICE_MONTHLY_CENTS": "100",
+    "AI_DAILY_CENTS": "2000"
   },
   // Reminders and the notification key pair. Created for you on deploy.
   "kv_namespaces": [{ "binding": "SHOEBOX" }],

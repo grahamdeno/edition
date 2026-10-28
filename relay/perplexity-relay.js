@@ -40,7 +40,7 @@
  */
 
 /** What this copy of the relay can do; the app checks it to say when an update is needed. */
-export const RELAY_VERSION = 22;
+export const RELAY_VERSION = 23;
 export const RELAY_FEATURES = ["preview", "image", "photo", "agent", "push", "remind", "ical", "nhl", "inbox", "apple", "ai", "stats", "stories", "beta"];
 
 // inmyshoebox.com is home; shoebox.tangomike.app stays allowed while phones move over.
@@ -922,13 +922,14 @@ async function appleRoute(request, env, pathname, params, cors) {
  * The app never holds an Anthropic key. Each install registers once for a
  * random device id and token (only the token's hash is kept). Every call is
  * checked against a short list of models and size limits, then charged to
- * a daily budget for that device and one for the whole relay, in hundredths
- * of a cent, from the usage Anthropic reports back.
+ * a monthly budget for that device, a daily one for its network and one for
+ * the whole relay, in hundredths of a cent, from the usage Anthropic reports back.
  *
  * Settings (Cloudflare › Worker › Settings › Variables):
  *   ANTHROPIC_API_KEY      secret, required
- *   AI_DEVICE_DAILY_CENTS  per device per day, default 25
- *   AI_DAILY_CENTS         whole relay per day, default 500
+ *   AI_DEVICE_MONTHLY_CENTS  per device per calendar month, default 100 ($1)
+ *   AI_DAILY_CENTS           whole relay per day, default 2000 ($20)
+ *   AI_NETWORK_DAILY_CENTS   per network address per day, default 75
  *   AI_OWNER_DEVICES       comma-separated device ids with no device limit
  */
 
@@ -996,15 +997,15 @@ async function aiRoute(request, env, pathname, cors, ctx = null) {
   const rec = device && /^[a-z0-9]{1,40}$/.test(device) ? await kv.get(`aid:${device}`, "json") : null;
   if (!rec || rec.hash !== await sha256(token)) return aiJson(401, { error: { message: "This install isn't registered.", code: "register" } }, cors);
   const owner = String(env.AI_OWNER_DEVICES || "").split(",").map((x) => x.trim()).includes(device);
-  const deviceCap = (parseFloat(env.AI_DEVICE_DAILY_CENTS) || 25) * 100;
-  const allCap = (parseFloat(env.AI_DAILY_CENTS) || 500) * 100;
+  const deviceCap = (parseFloat(env.AI_DEVICE_MONTHLY_CENTS) || 100) * 100;
+  const allCap = (parseFloat(env.AI_DAILY_CENTS) || 2000) * 100;
   const ip = request.headers.get("cf-connecting-ip") || "unknown";
   const ipCap = (parseFloat(env.AI_NETWORK_DAILY_CENTS) || 75) * 100;
-  const dk = `aiq:${device}:${today}`, ak = `aiq:all:${today}`, nk = `aiq:ip:${ip}:${today}`;
+  const dk = `aiq:${device}:${today.slice(0, 7)}`, ak = `aiq:all:${today}`, nk = `aiq:ip:${ip}:${today}`;
   const [mine, all, net] = await Promise.all([spent(kv, dk), spent(kv, ak), spent(kv, nk)]);
   /** Charge a cost to this install, its network, and the whole relay. */
   const charge = (cost, { device: toDevice = true } = {}) => Promise.all([
-    toDevice ? kv.put(dk, String(mine + cost), { expirationTtl: 3 * 86400 }) : null,
+    toDevice ? kv.put(dk, String(mine + cost), { expirationTtl: 40 * 86400 }) : null,
     toDevice ? kv.put(nk, String(net + cost), { expirationTtl: 2 * 86400 }) : null,
     kv.put(ak, String(all + cost), { expirationTtl: 3 * 86400 }),
   ]);
@@ -1016,7 +1017,7 @@ async function aiRoute(request, env, pathname, cors, ctx = null) {
   if (request.method === "POST" && pathname === "/ai/stories") return storiesRoute(request, env, { kv, today, owner, ctx, cors, charge, over: all >= allCap, mineOver: !owner && (mine >= deviceCap || net >= ipCap) });
   if (request.method !== "POST" || pathname !== "/ai/messages") return json(404, "Not found.", cors);
   if (all >= allCap) return aiJson(429, { error: { message: "Shoebox's AI is resting for today. It's back tomorrow." } }, cors);
-  if (!owner && mine >= deviceCap) return aiJson(429, { error: { message: "You've used today's AI allowance. It resets tomorrow." } }, cors);
+  if (!owner && mine >= deviceCap) return aiJson(429, { error: { message: "You've used this month's AI allowance. It resets on the 1st." } }, cors);
   if (!owner && net >= ipCap) return aiJson(429, { error: { message: "This network has used today's AI allowance. It resets tomorrow." } }, cors);
 
   const text = await request.text();
@@ -1214,7 +1215,7 @@ async function storiesRoute(request, env, { kv, today, ctx, cors, charge, over, 
   const cached = await kv.get(key, "json");
   if (cached) return aiJson(200, { ...cached, topic: k.id, shared: true }, cors);
   if (over) return aiJson(429, { error: { message: "Shoebox's AI is resting for today. It's back tomorrow." } }, cors);
-  if (k.local && mineOver) return aiJson(429, { error: { message: "You've used today's AI allowance. It resets tomorrow." } }, cors);
+  if (k.local && mineOver) return aiJson(429, { error: { message: "You've used this month's AI allowance. It resets on the 1st." } }, cors);
   // One search per topic a day: whoever asks first runs it; anyone asking meanwhile is told to come back.
   const lock = `tsl:${today}:${k.id}`;
   if (await kv.get(lock)) return aiJson(202, { pending: true, retry: 20 }, cors);
@@ -1433,7 +1434,7 @@ async function betaRoute(request, env, cors) {
   await kv.put(`bte:${who}`, id, { expirationTtl: 90 * 86400 });
 
   let verdict = null;
-  const allCap = (parseFloat(env.AI_DAILY_CENTS) || 500) * 100;
+  const allCap = (parseFloat(env.AI_DAILY_CENTS) || 2000) * 100;
   const ak = `aiq:all:${today}`;
   if (env.ANTHROPIC_API_KEY && await spent(kv, ak) < allCap) {
     const model = "claude-haiku-5-5";

@@ -47,10 +47,10 @@ a:focus-visible, button:focus-visible { outline: 3px solid var(--gold); outline-
 .hero-in { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr); gap: 32px; align-items: end; padding-top: 72px; }
 .hero h1 { margin: 0; font: 400 clamp(64px, 10.5vw, 136px)/.86 var(--serif); letter-spacing: -.02em; }
 .hero h1 span { display: block; }
-.hero .lede { max-width: 30ch; margin: 28px 0 0; font-size: clamp(19px, 2vw, 22px); line-height: 1.45; color: #EDE3FF; }
+.hero .lede { max-width: 30ch; margin: 28px 0 0; font-size: clamp(19px, 2vw, 22px); line-height: 1.45; color: #FFF7DA; }
 .hero .ctas { display: flex; flex-wrap: wrap; gap: 14px; margin: 32px 0 0; }
 .hero .copy { padding-bottom: 96px; }
-.hero .note { margin: 18px 0 0; font-size: 15px; color: #D9C8FF; }
+.hero .note { margin: 18px 0 0; font-size: 15px; color: #F3ECFF; }
 
 /* Screens standing in the box, cut off by its front edge. */
 .stand { position: relative; height: 640px; }
@@ -155,13 +155,14 @@ h2 { margin: 0; font: 400 clamp(44px, 6vw, 80px)/.95 var(--serif); letter-spacin
 /* Last call */
 .end { background: var(--box); color: #FFF7DA; text-align: center; padding: 120px 0 0; overflow: hidden; }
 .end h2 { color: #FFF7DA; font-size: clamp(56px, 9vw, 120px); }
-.end p { max-width: 36ch; margin: 18px auto 0; color: #EDE3FF; font-size: 19px; }
+.end p { max-width: 36ch; margin: 18px auto 0; color: #FFF7DA; font-size: 19px; }
 .end .ctas { display: flex; justify-content: center; flex-wrap: wrap; gap: 14px; margin-top: 32px; }
 .end .peek { display: flex; justify-content: center; margin-top: 72px; height: 240px; }
 .end .peek .phone { width: 300px; height: fit-content; }
 
 footer.foot { padding: 36px 0 max(40px, env(safe-area-inset-bottom)); color: var(--muted); font-size: 15px; }
-footer.foot .wrap { display: flex; flex-wrap: wrap; gap: 10px 28px; align-items: center; }
+footer.foot .wrap { display: flex; flex-wrap: wrap; gap: 0 24px; align-items: center; }
+footer.foot a { display: inline-flex; align-items: center; min-height: 44px; }
 footer.foot .made { margin-left: auto; }
 
 /* ---- Small screens ---- */
