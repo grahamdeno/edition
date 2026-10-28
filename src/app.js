@@ -41,7 +41,7 @@ import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 import * as songs from "./songs.js";
 import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone, mixStories, followOrder } from "./onboard.js";
 
-export const VERSION = "4.45.0";
+export const VERSION = "4.45.1";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -5093,8 +5093,11 @@ function toast(msg, { action, onAction, onExpire, high = false, sticky = false }
   el._onExpire = onExpire || null;
   if (action) $("button", el).addEventListener("click", () => { el._onExpire = null; el.remove(); onAction && onAction(); });
   document.body.appendChild(el);
-  // Long enough to read and reach Undo; held while a finger or the keyboard is on it.
-  const arm = () => { clearTimeout(toastTimer); if (!sticky) toastTimer = setTimeout(() => expireToast(el), action ? 7000 : 3500); };
+  // Long enough to read at a glance (about 1.2 s plus 55 ms a letter: 2 to 4.5 s), plus 1.5 s to reach Undo
+  // when there is one (5 s at most). Held while a finger or the keyboard is on it; a tap on the words closes it.
+  const ms = Math.min(action ? 5000 : 4500, Math.max(2000, 1200 + 55 * String(msg).length) + (action ? 1500 : 0));
+  const arm = () => { clearTimeout(toastTimer); if (!sticky) toastTimer = setTimeout(() => expireToast(el), ms); };
+  $("span", el)?.addEventListener("click", () => { clearTimeout(toastTimer); expireToast(el); });
   el.addEventListener("pointerenter", () => clearTimeout(toastTimer));
   el.addEventListener("pointerleave", arm);
   el.addEventListener("focusin", () => clearTimeout(toastTimer));
