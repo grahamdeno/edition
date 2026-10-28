@@ -24,7 +24,7 @@ import {
   canonTags, tagVocab, tagStats, renameTag, addAlias, releaseTags, renameInSuggestProfile, localTags, normTag, MAX_TAGS,
   friendlyWhen, usablePicture, discoveryItems, schoolToday,
   setAside, startOfDay, wakeAside, bringBackNow, asideChoices, fromDateInput, toDateInput, shortDate, reminderIcs,
-  senderName, plainEntities,
+  senderName, plainEntities, cleanEmail, emailPreview,
 } from "./model.js";
 import * as db from "./db.js";
 import * as push from "./push.js";
@@ -41,7 +41,7 @@ import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 import * as songs from "./songs.js";
 import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone, mixStories, followOrder } from "./onboard.js";
 
-export const VERSION = "4.63.1";
+export const VERSION = "4.64.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -228,6 +228,7 @@ async function boot() {
   wireGlobal();
   picturePending();
   enrichPending();
+  emailPostsPending();
   schoolPictures();
   registerWorker();
   toNative({ type: "ready" });
@@ -1828,6 +1829,53 @@ async function dailyBackup() {
   } catch (e) { noteError(e, { quiet: true, where: "daily backup" }); }
 }
 
+/**
+ * The post an email becomes (4.64.0): the AI reads it and writes a headline, a few plain lines, any dates or
+ * to-dos, and picks the one link worth opening. Without AI (or if it fails) the post is the start of the email
+ * with its forwarding headers, footers and tracking links taken out. The whole email stays behind More.
+ */
+async function writeEmailPost(item) {
+  if (!item.email || item.post?.by === "ai" || !ai.settings.enabled() || (item.postTries || 0) >= 2) return item;
+  try {
+    const p = await ai.emailPost({ subject: item.email.subject || item.title, fromName: item.email.fromName, text: item.text, links: item.email.links || (item.url ? [item.url] : []) });
+    if (!p) return { ...item, postTries: (item.postTries || 0) + 1 };
+    return {
+      ...item,
+      title: item.titleMine || item.editedAt ? item.title : p.headline || item.title,
+      email: { ...item.email, subject: item.email.subject || item.title },
+      post: { body: p.body, items: p.items, by: "ai" },
+      url: p.link || item.url,
+      why: item.why || p.why || undefined,
+      tags: item.tagsMine || !p.tags.length ? item.tags : tidyTags(p.tags),
+      intent: p.intent || item.intent,
+      photoQuery: p.photoQuery || item.photoQuery,
+      // Written here, so the general reader doesn't retitle it from the raw email.
+      enrichedAt: item.enrichedAt || Date.now(),
+      postTries: (item.postTries || 0) + 1,
+    };
+  } catch (e) {
+    noteError(e, { quiet: true, where: "inbox: email post" });
+    return { ...item, postTries: (item.postTries || 0) + 1 };
+  }
+}
+/** Email posts saved before 4.64.0 (the whole email pasted in): written properly, one at a time, once AI is on. */
+let emailPostsRunning = false;
+async function emailPostsPending() {
+  if (emailPostsRunning || !ai.settings.enabled()) return;
+  emailPostsRunning = true;
+  try {
+    for (;;) {
+      const next = state.items.find((i) => i.email && !i.school && i.kind === KIND.NOTE && i.post?.by !== "ai" && (i.postTries || 0) < 2);
+      if (!next) break;
+      state.enriching.add(next.id); refreshPost(next.id);
+      const done = await writeEmailPost(next);
+      state.enriching.delete(next.id);
+      await saveItem(done.postTries ? done : { ...done, postTries: 2 });
+      refreshPost(next.id);
+    }
+  } finally { emailPostsRunning = false; }
+}
+
 let inboxRunning = false;
 async function checkInbox({ statusEl = null } = {}) {
   const base = ai.relayBase();
@@ -1880,10 +1928,11 @@ async function checkInbox({ statusEl = null } = {}) {
         // The same message twice (forwarded to two addresses while moving): keep one.
         const twin = state.items.find((i) => i.email && i.title === (m.subject || "") && i.email.from === m.from && Math.abs((i.email.at || 0) - (m.at || 0)) < 2 * 864e5);
         if (twin) { done.push(m.id); continue; }
+        // 4.64.0: the email is kept whole (for "The whole email"), but the post is written from it, never pasted.
         const item = createItem({ kind: KIND.NOTE, text: body.slice(0, 8000), title: m.subject || body.slice(0, 80) || "Email" }, { id: db.newId(), source: "email" });
         track("save_email");
-        Object.assign(item, { title: m.subject || item.title, email: { from: m.from, fromName: m.fromName || m.from, at: m.at }, url: link || undefined });
-        await saveItem(item);
+        Object.assign(item, { title: m.subject || item.title, email: { from: m.from, fromName: m.fromName || m.from, at: m.at, links: (m.links || []).slice(0, 20) }, url: link || undefined });
+        await saveItem(await writeEmailPost(item));
         made++;
       }
       done.push(m.id);
@@ -1892,6 +1941,7 @@ async function checkInbox({ statusEl = null } = {}) {
     try { localStorage.setItem("edition.inboxChecked", String(Date.now())); } catch { /* full */ }
     say(done.length ? `${done.length} email${done.length === 1 ? "" : "s"} collected.` : "No new email.");
     if (made) { tick(true); render({ top: false }); enrichPending(); picturePending(); }
+    emailPostsPending();
     return made;
   } catch (e) {
     noteError(e, { quiet: true, where: "inbox" });
@@ -3045,6 +3095,18 @@ function byline(item) {
 
 /** What a tap on a post's words adds: the rest of an email, the summary, your note, every key point and reply. */
 const EMAIL_CUT = 280;
+/**
+ * An email post (4.64.0): the headline, the post written from the email (or its cleaned opening), its dates and
+ * to-dos, and, opened, the whole email cleaned of headers and footers.
+ */
+function emailSay(item, expanded) {
+  const body = item.post?.body || emailPreview(item.text, EMAIL_CUT);
+  const items = item.post?.items?.length ? `<ul class="email-items">${item.post.items.map((i) =>
+    `<li>${i.date ? `<b>${esc(shortDate(fromDateInput(i.date)))}</b> · ` : ""}${esc(i.text)}</li>`).join("")}</ul>` : "";
+  const whole = expanded ? cleanEmail(item.text) : "";
+  return `<p class="school-head">${esc(item.title)}</p><p class="body">${esc(body)}</p>${items}`
+    + (whole && whole.replace(/\s+/g, " ") !== body.replace(/…$/, "") ? `<div class="email-whole"><h3>The whole email</h3><p class="body full">${esc(whole)}</p></div>` : "");
+}
 function moreHtml(item) {
   const parts = [];
   const said = item.suggestReason || item.summary;
@@ -3057,7 +3119,7 @@ function moreHtml(item) {
 function hasMore(item, compact) {
   const pts = item.points?.length && [KIND.LINK, KIND.PDF, KIND.TEXT].includes(item.kind) ? item.points.length : 0;
   return Boolean(moreHtml(item))
-    || (item.email && String(item.text || "").length > EMAIL_CUT)
+    || (item.email && cleanEmail(item.text).replace(/\s+/g, " ").length > (item.post?.body ? 0 : EMAIL_CUT))
     || (pts && (compact || pts > 3))
     || (item.replies || []).length > (compact ? 1 : 3);
 }
@@ -3089,9 +3151,7 @@ function postHtml(item, { compact = false } = {}) {
   // The words at the top: your reason, else Shoebox's line about it (marked as a guess), else nothing.
   let say = "";
   if (item.suggested) say = `<p class="body">${esc(item.suggestReason || item.summary || "Picked from what you finish.")}</p>`;
-  else if (item.email) say = `<p class="school-head">${esc(item.title)}</p>` + (expanded
-    ? `<p class="body full">${esc(String(item.text || "").trim())}</p>`
-    : `<p class="body">${esc(String(item.text || "").replace(/\s+/g, " ").slice(0, EMAIL_CUT))}${String(item.text || "").length > EMAIL_CUT ? "…" : ""}</p>`);
+  else if (item.email) say = emailSay(item, expanded);
   else if (item.school) say = `<p class="school-head">${esc(item.title)}</p><p class="body">${esc(item.school.body || "")}</p>`
     + (item.school.date ? `<p class="ev-place">${I.cal}<span>${esc(shortDate(fromDateInput(item.school.date)))}</span></p>` : "")
     + (item.school.fromFile ? `<p class="ev-place">${I.attach}<span>From the attached ${esc(item.school.fromFile)}</span></p>` : "");

@@ -916,6 +916,49 @@ export function senderName(fromName, from) {
   const two = parts.slice(-2).join(".");
   return /^(co|com|org|net|gov|edu|ac)\.[a-z]{2}$/.test(two) && parts.length > 2 ? parts.slice(-3).join(".") : two;
 }
+/**
+ * An email cut down to what its sender actually wrote: the message inside a
+ * forward, without forwarding headers, quoted replies, signatures, legal and
+ * unsubscribe footers, or the bare tracking links that HTML mail leaves in
+ * brackets. Used when AI can't write the post, and for "The whole email".
+ */
+const FWD_START = /^(-{2,}\s*forwarded message\s*-{2,}|begin forwarded message:?|-{2,}\s*original message\s*-{2,})$/i;
+const HEADER_LINE = /^(from|sent|date|to|cc|bcc|subject|reply-to):\s/i;
+const REPLY_START = /^(on .{4,200}wrote:|-{2,}\s*original message\s*-{2,}|_{8,})$/i;
+const SIGNATURE = /^(--|—|sent from my (iphone|ipad|android|phone)|get outlook for (ios|android)|sent from (mail|outlook|yahoo mail)\b.*)$/i;
+const FOOTER = /unsubscribe|manage (your )?(email )?preferences|view (this email )?in (your )?browser|you('re| are) receiving this|update your preferences|privacy policy|all rights reserved|^©|^\(c\) \d{4}|no longer wish to receive|this (e-?mail|message) (and any attachments )?(is|are|may be) (confidential|intended)|add us to your address book/i;
+export function cleanEmail(text) {
+  let lines = String(text || "").replace(/\r/g, "").split("\n").map((l) => l.trim());
+  // A forward: the message is what comes after its header block.
+  const fwd = lines.findIndex((l) => FWD_START.test(l));
+  // An "Original Message" block counts as a forward only when almost nothing was written above it.
+  const isFwd = fwd >= 0 && (!/original message/i.test(lines[fwd]) || lines.slice(0, fwd).join("").trim().length < 40);
+  if (isFwd) {
+    let i = fwd + 1;
+    while (i < lines.length && (HEADER_LINE.test(lines[i]) || !lines[i])) i++;
+    lines = lines.slice(i);
+  }
+  const out = [];
+  for (const l of lines) {
+    if (REPLY_START.test(l) || SIGNATURE.test(l)) break;
+    if (l.startsWith(">")) continue;
+    if (FOOTER.test(l)) { if (out.join(" ").length > 120) break; continue; }
+    out.push(l);
+  }
+  return out.join("\n")
+    .replace(/\s*\((https?:\/\/[^\s)]+)\)/g, "")            // "Read more (https://…)" → "Read more"
+    .replace(/^\s*https?:\/\/\S{60,}\s*$/gm, "")            // a long tracking link on its own line
+    .replace(/\[(image|cid):[^\]]*\]/gi, "")
+    .replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+}
+/** The first words of a cleaned email, for a post when AI hasn't written one. */
+export function emailPreview(text, n = 280) {
+  const t = cleanEmail(text).replace(/\s+/g, " ").trim();
+  if (t.length <= n) return t;
+  const cut = t.slice(0, n), stop = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf("? "), cut.lastIndexOf("! "));
+  return stop > n * 0.5 ? cut.slice(0, stop + 1) : cut.replace(/\s+\S*$/, "") + "…";
+}
+
 /** Text from mail sometimes arrives with HTML codes still in it (&#160;, &amp;). */
 export function plainEntities(t) {
   return String(t || "").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'")

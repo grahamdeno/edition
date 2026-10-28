@@ -457,3 +457,25 @@ test("parseJson forgives trailing commas and curly quotes", async () => {
   assert.deepEqual(parseJson('{“q”: "b"}'), { q: "b" });
   assert.throws(() => parseJson('{"q": "unfinished'), /malformed/);
 });
+
+test("an email becomes a written post, never the whole email (4.64.0)", async () => {
+  const { emailPost } = await import("../src/ai.js");
+  const sent = stubApi({ headline: "Flight to Denver confirmed for Nov 14", body: "Your Delta flight leaves at 7:05 AM. Check in opens the day before.",
+    items: [{ date: "2026-11-14", text: "Depart 7:05 AM, DL 1234" }, { date: "bad", text: "Confirmation GX4KQ2" }],
+    link: "https://delta.com/trip/GX4KQ2", why: "", intent: "reference", tags: ["travel"], photo_query: "airport gate morning" });
+  const out = await emailPost({ subject: "Fwd: Your trip", fromName: "Graham", text: "---------- Forwarded message ---------\nFrom: Delta\n\nYour flight…", links: ["https://delta.com/trip/GX4KQ2", "https://delta.com/unsub"] });
+  assert.equal(out.headline, "Flight to Denver confirmed for Nov 14");
+  assert.equal(out.items[0].date, "2026-11-14");
+  assert.equal(out.items[1].date, null, "a date that isn't a date is dropped");
+  assert.equal(out.link, "https://delta.com/trip/GX4KQ2");
+  const p = promptOf(sent[0]);
+  assert.match(p, /Never paste or retell the whole email/);
+  assert.match(p, /- https:\/\/delta\.com\/trip\/GX4KQ2/);
+});
+
+test("an email post's link must be one the email had", async () => {
+  const { emailPost } = await import("../src/ai.js");
+  stubApi({ headline: "Sale", body: "x", items: [], link: "https://made.up/thing", tags: [] });
+  const out = await emailPost({ subject: "s", text: "t", links: ["https://real.test/a"] });
+  assert.equal(out.link, null);
+});

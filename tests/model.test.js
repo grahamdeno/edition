@@ -296,3 +296,16 @@ test("a shared link with its page title on the next line is a link, titled", () 
   assert.equal(d.title, "Star Child: Special Edition by Claire A Nivola - COOL HUNTING®");
   assert.equal(detectText("Two paragraphs of my own thinking about this.\n\nhttps://a.com/x\nand more")[0].kind, KIND.NOTE);
 });
+
+test("an email is cut to what its sender wrote: no forward headers, footers, replies or tracking links (4.64.0)", async () => {
+  const { cleanEmail, emailPreview } = await import("../src/model.js");
+  const fwd = "---------- Forwarded message ---------\nFrom: Delta <x@delta.com>\nDate: Mon, Oct 27\nSubject: Your trip\nTo: me@x.com\n\nYour flight to Denver is confirmed. Manage trip (https://t.delta.com/ls/click?upn=abc123)\nDepart Nov 14 at 7:05 AM.\n\nYou are receiving this because you booked.\nUnsubscribe\n© 2026 Delta Air Lines";
+  assert.equal(cleanEmail(fwd), "Your flight to Denver is confirmed. Manage trip\nDepart Nov 14 at 7:05 AM.");
+  const apple = "Begin forwarded message:\n\nFrom: Coach\nSubject: Practice\nDate: today\nTo: me\n\nPractice moves to 5 PM Thursday.\n\nSent from my iPhone";
+  assert.equal(cleanEmail(apple), "Practice moves to 5 PM Thursday.");
+  const reply = "Sounds good, see you then.\n\nOn Mon, Oct 27, 2026 at 9:00 AM Ann <a@x.com> wrote:\n> Lunch Friday?";
+  assert.equal(cleanEmail(reply), "Sounds good, see you then.");
+  assert.equal(cleanEmail("Thanks!\n--\nGraham D.\n555-1234"), "Thanks!");
+  const long = "First sentence here. " + "word ".repeat(80);
+  assert.ok(emailPreview(long, 100).length <= 101);
+});
