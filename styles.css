@@ -1033,3 +1033,6 @@ details.adv > summary, .group details.adv > summary, .ag-more summary { min-heig
 @keyframes ok-pop { 0% { transform: scale(0.92); opacity: 0.4; } 60% { transform: scale(1.03); opacity: 1; } 100% { transform: none; } }
 @media (prefers-reduced-motion: reduce) { .st.ok { animation: none; } }
 .note.err { color: var(--warn); }
+.song-tally { margin: 8px 0 0; font-size: 0.8125rem; color: var(--sig-ink); font-weight: 600; }
+.ask.song-ask { border-color: var(--sig); }
+.ask.song-ask b { color: var(--fg); }
