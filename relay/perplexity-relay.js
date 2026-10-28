@@ -706,13 +706,16 @@ function walk(part, out, depth = 0) {
   else if (type.startsWith("text/html") && !out.html) out.html = decodeBody(body, headers);
 }
 
+const safeChar = (n, fallback) => { try { return n > 0 && n < 0x110000 ? String.fromCodePoint(n) : fallback; } catch { return fallback; } };
+
 export function htmlToText(html) {
   return String(html || "")
     .replace(/<(script|style|head)\b[\s\S]*?<\/\1>/gi, " ")
     .replace(/<a\b[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi, (m, href, t) => `${t.replace(/<[^>]+>/g, "").trim()} (${href})`)
     .replace(/<(br|\/p|\/div|\/h\d|\/li|\/tr)\b[^>]*>/gi, "\n").replace(/<li\b[^>]*>/gi, "\n• ")
     .replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&#39;|&rsquo;/g, "'").replace(/&quot;|&ldquo;|&rdquo;/g, '"')
-    .replace(/[ \t]+/g, " ").replace(/ *\n */g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+    .replace(/&#x([0-9a-f]{1,6});/gi, (m, h) => safeChar(parseInt(h, 16), m)).replace(/&#(\d{1,7});/g, (m, d) => safeChar(+d, m))
+    .replace(/\u00a0/g, " ").replace(/[ \t]+/g, " ").replace(/ *\n */g, "\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
 /** { subject, fromName, text, links } from a raw message. */
