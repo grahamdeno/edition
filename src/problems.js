@@ -23,15 +23,21 @@ export function noteError(e, { quiet = false, where = "", version = "" } = {}) {
     v: version,
     where: where || "app",
     msg,
+    // A weak connection isn't a broken app: kept for diagnostics, left out of what Help counts.
+    net: NET.test(msg) || err?.status === 0 || undefined,
     status: err?.status || undefined,
     stack: scrub(String(err?.stack || "").split("\n").slice(0, 6).join("\n")).slice(0, 800),
   });
   problems.splice(0, problems.length - MAX);
   save();
-  if (quiet || noted) return;
+  if (quiet || noted || problems[problems.length - 1].net) return;
   noted = true;
   if (onFirst) onFirst();
 }
+
+const NET = /failed to fetch|load failed|networkerror|network connection|internet connection|timed out|timeout|offline|couldn't reach|aborted/i;
+/** Problems that aren't just a dropped connection. */
+export function realProblems() { return problems.filter((p) => !p.net); }
 
 export function clearProblems() { problems.splice(0); save(); }
 

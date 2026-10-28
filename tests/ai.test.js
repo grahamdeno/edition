@@ -244,7 +244,7 @@ test("the proxy only takes the app's own kind of request", () => {
 
 test("proxy: register, call with the relay's key, charge the budget, stop at the limit", async () => {
   const kv = memKv();
-  const env = { SHOEBOX: kv, ANTHROPIC_API_KEY: "sk-relay", AI_DEVICE_DAILY_CENTS: "0.1" };
+  const env = { SHOEBOX: kv, ANTHROPIC_API_KEY: "sk-relay", AI_DEVICE_MONTHLY_CENTS: "0.1" };
   const origin = "https://inmyshoebox.com";
   const reg = await relay.fetch(new Request("https://w.test/ai/register", { method: "POST", headers: { origin } }), env);
   const { device, token } = await reg.json();

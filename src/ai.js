@@ -758,7 +758,7 @@ export async function schoolPosts({ text, about, school = "", today = new Date()
     "Do not summarise or merge: each kept piece becomes its own post, with its specifics (what, when, where, what to bring or do, who to contact, links) kept.",
     "",
     "Return JSON: {",
-    '"school": string (the school\'s short name, e.g. "Myrtle Grove Middle"),',
+    '"school": string (the school\'s short name, e.g. "Lincoln Middle"),',
     '"posts": array of up to 16 {',
     '  "type": "action" | "decision" | "info" (action: the family has to do something, like sign, pay, bring, register or show up; decision: they have a choice to make, like whether to sign up, attend or buy; info: good to know, nothing to do),',
     '  "headline": string (a catchy line a parent would stop scrolling for, max 70 chars; specific, no clickbait, no emoji),',

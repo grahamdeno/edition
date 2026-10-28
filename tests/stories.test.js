@@ -47,10 +47,10 @@ test("a topic is searched once a day and shared; local news counts against the a
     assert.equal(second.shared, true);
     assert.equal(searches, 1, "one search for everyone");
     const today = new Date().toISOString().slice(0, 10);
-    assert.equal(await env.SHOEBOX.get(`aiq:${reg.device}:${today}`), null, "shared topics don't use the asker's allowance");
+    assert.equal(await env.SHOEBOX.get(`aiq:${reg.device}:${today.slice(0, 7)}`), null, "shared topics don't use the asker's allowance");
     assert.ok(+await env.SHOEBOX.get(`aiq:all:${today}`) > 0);
     await ask({ topic: "local", place: "Wilmington" });
-    assert.ok(+await env.SHOEBOX.get(`aiq:${reg.device}:${today}`) > 0, "local does");
+    assert.ok(+await env.SHOEBOX.get(`aiq:${reg.device}:${today.slice(0, 7)}`) > 0, "local does");
     const [s4] = await ask({ topic: "astrology" });
     assert.equal(s4, 400);
     // While a search is running, others are told to come back.
