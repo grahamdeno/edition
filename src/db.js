@@ -28,15 +28,31 @@ export function open() {
       if (!db.objectStoreNames.contains("meta")) db.createObjectStore("meta", { keyPath: "key" });
       if (!db.objectStoreNames.contains("shares")) db.createObjectStore("shares", { keyPath: "id", autoIncrement: true });
     };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
+    req.onsuccess = () => {
+      const db = req.result;
+      // iOS can close the connection while the app sits in the background; open a fresh one next time.
+      const forget = () => { if (dbPromise === mine) dbPromise = null; };
+      db.onclose = forget;
+      db.onversionchange = () => { try { db.close(); } catch { /* closing */ } forget(); };
+      resolve(db);
+    };
+    req.onerror = () => { if (dbPromise === mine) dbPromise = null; reject(req.error); };
   });
+  const mine = dbPromise;
   return dbPromise;
 }
 
-function tx(store, mode, fn) {
+/** A connection iOS has closed throws InvalidStateError ("The database connection is closing"). */
+const closedConn = (e) => e && (e.name === "InvalidStateError" || /connection is clos/i.test(e.message || ""));
+
+function tx(store, mode, fn, retry = true) {
   return open().then((db) => new Promise((resolve, reject) => {
-    const t = db.transaction(store, mode);
+    let t;
+    try { t = db.transaction(store, mode); } catch (e) {
+      // The connection went stale: drop it and try once more on a new one.
+      if (retry && closedConn(e)) { if (dbPromise) dbPromise = null; resolve(tx(store, mode, fn, false)); return; }
+      reject(e); return;
+    }
     const s = t.objectStore(store);
     let result;
     Promise.resolve(fn(s)).then((r) => { result = r; });

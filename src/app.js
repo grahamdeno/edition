@@ -41,7 +41,7 @@ import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 import * as songs from "./songs.js";
 import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone, mixStories, followOrder } from "./onboard.js";
 
-export const VERSION = "4.65.0";
+export const VERSION = "4.65.1";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -5942,8 +5942,14 @@ function size(b) { return b > 1048576 ? (b / 1048576).toFixed(1) + " MB" : Math.
 function withTimeout(p, ms) { return Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error("Timed out")), ms))]); }
 
 
-boot().catch((e) => {
+boot().then(() => { try { sessionStorage.removeItem("edition.bootRetry"); } catch { /* private */ } }).catch((e) => {
   noteError(e, { quiet: true, where: "start" });
+  // A storage hiccup on the way in (iOS closed the database in the background): one quiet reload fixes it.
+  const once = "edition.bootRetry";
+  let tried = false; try { tried = sessionStorage.getItem(once) === "1"; sessionStorage.setItem(once, "1"); } catch { tried = true; }
+  if (!tried) { location.reload(); return; }
   $("#splash")?.remove();
-  app.innerHTML = `<main class="tl"><section class="end"><h2>Something broke.</h2><p>${esc(e && e.message)}</p></section></main>`;
+  app.innerHTML = `<main class="tl"><section class="end"><h2>Something broke.</h2><p>${esc(e && e.message)}</p>
+    <p>Your saves are still on this phone.</p><button class="btn primary" type="button" id="boot-retry">Try again</button></section></main>`;
+  $("#boot-retry")?.addEventListener("click", () => { try { sessionStorage.removeItem(once); } catch { /* private */ } location.reload(); });
 });
