@@ -24,7 +24,7 @@ import {
   canonTags, tagVocab, tagStats, renameTag, addAlias, releaseTags, renameInSuggestProfile, localTags, normTag, MAX_TAGS,
   friendlyWhen, usablePicture, discoveryItems, schoolToday,
   setAside, startOfDay, wakeAside, bringBackNow, asideChoices, fromDateInput, toDateInput, shortDate, reminderIcs,
-  senderName, plainEntities, cleanEmail, emailPreview,
+  senderName, plainEntities, cleanEmail, emailPreview, plainSubject,
 } from "./model.js";
 import * as db from "./db.js";
 import * as push from "./push.js";
@@ -41,7 +41,7 @@ import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 import * as songs from "./songs.js";
 import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone, mixStories, followOrder } from "./onboard.js";
 
-export const VERSION = "4.64.1";
+export const VERSION = "4.64.2";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -1924,7 +1924,7 @@ async function checkInbox({ statusEl = null } = {}) {
         }
         const link = (m.links || [])[0];
         const body = plainEntities(String(m.text || "").trim());
-        m.subject = plainEntities(m.subject || "");
+        m.subject = plainSubject(plainEntities(m.subject || ""));
         // The same message twice (forwarded to two addresses while moving): keep one.
         const twin = state.items.find((i) => i.email && i.title === (m.subject || "") && i.email.from === m.from && Math.abs((i.email.at || 0) - (m.at || 0)) < 2 * 864e5);
         if (twin) { done.push(m.id); continue; }
@@ -3104,7 +3104,7 @@ function emailSay(item, expanded) {
   const items = item.post?.items?.length ? `<ul class="email-items">${item.post.items.map((i) =>
     `<li>${i.date ? `<b>${esc(shortDate(fromDateInput(i.date)))}</b> · ` : ""}${esc(i.text)}</li>`).join("")}</ul>` : "";
   const whole = expanded ? cleanEmail(item.text) : "";
-  return `<p class="school-head">${esc(item.title)}</p><p class="body">${esc(body)}</p>${items}`
+  return `<p class="school-head">${esc(item.post?.by === "ai" ? item.title : plainSubject(item.title) || item.title)}</p><p class="body">${esc(body)}</p>${items}`
     + (whole && whole.replace(/\s+/g, " ") !== body.replace(/…$/, "") ? `<div class="email-whole"><h3>The whole email</h3><p class="body full">${esc(whole)}</p></div>` : "");
 }
 function moreHtml(item) {

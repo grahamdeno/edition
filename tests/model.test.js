@@ -309,3 +309,13 @@ test("an email is cut to what its sender wrote: no forward headers, footers, rep
   const long = "First sentence here. " + "word ".repeat(80);
   assert.ok(emailPreview(long, 100).length <= 101);
 });
+
+test("a greeting and Fwd:/Re: are left off an email post (4.64.2)", async () => {
+  const { cleanEmail, plainSubject } = await import("../src/model.js");
+  assert.equal(cleanEmail("Hello Graham,\n\nYour trip is confirmed."), "Your trip is confirmed.");
+  assert.equal(cleanEmail("Hi there!\nPractice is at 5."), "Practice is at 5.");
+  assert.equal(cleanEmail("Hello, world is a fine first program.\nMore."), "Hello, world is a fine first program.\nMore.");
+  assert.equal(cleanEmail("Thanks!"), "Thanks!");
+  assert.equal(plainSubject("Fwd: Re: FW: Your trip"), "Your trip");
+  assert.equal(plainSubject("Refund issued"), "Refund issued");
+});
