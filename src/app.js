@@ -41,7 +41,7 @@ import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 import * as songs from "./songs.js";
 import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone, mixStories, followOrder } from "./onboard.js";
 
-export const VERSION = "4.64.2";
+export const VERSION = "4.65.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -3920,9 +3920,23 @@ function openEdit(id) {
         ? `<textarea id="ed-${key}" rows="4" placeholder="${esc(ph)}">${esc(value || "")}</textarea>`
         : `<input id="ed-${key}" type="${type}" autocomplete="off" ${type === "url" ? 'inputmode="url" autocapitalize="off" spellcheck="false"' : ""} placeholder="${esc(ph)}" value="${esc(value ?? "")}">`}
     </div>`;
+  // What people come here to change goes first (the words), then when it shows, the picture, the details.
+  // Done sits in the pinned header; any way out (Done, a swipe down, a tap outside) keeps the changes, with Undo.
+  const words1 = sch ? `${f("title", "Headline", item.title)}${f("text", "Post", sch.body || item.text, { area: true })}`
+    : words ? f("text", item.kind === KIND.QUOTE ? "Quote" : "Note", item.text, { area: true }) : f("title", "Title", item.title);
   const wrap = sheet(`
-    <div class="sheet-head"><h2>Edit</h2><button class="x" type="button" data-close aria-label="Close">${I.close}</button></div>
+    <div class="sheet-head"><h2>Edit</h2><button class="btn primary head-done" type="button" id="ed-done">Done</button></div>
     <p class="note">${sch ? `From ${esc(sch.name || "school")}` : esc(KIND_LABEL[item.kind] || "Item")} · ${sch ? "" : "saved "}${esc(ago(item.created))}${item.fileName ? ` · ${esc(item.fileName)}` : ""}</p>
+    ${words1}
+    ${item.kind === KIND.QUOTE || item.kind === KIND.VIDEO ? f("author", item.kind === KIND.QUOTE ? "Who said it" : "Channel", item.author) : ""}
+    ${sch ? "" : f("why", "Why you saved it", item.why, { hint: "(shown at the top of the post)", ph: item.hook || "Read this before the roadmap review" })}
+    ${!sch && !item.why && item.hook ? `<button class="chip use-guess" type="button" id="ed-guess">Start from ${APP}'s guess</button>` : ""}
+    ${!words ? f("note", "Your note", item.kind === KIND.LINK ? item.text : item.note, { area: true, ph: "Anything you want to remember about it" }) : ""}
+    ${hasUrl ? f("url", "Link", item.url, { type: "url", ph: "https://" }) : ""}
+    ${sch ? `${f("sdate", "Date", sch.date || "", { type: "date" })}
+      <div class="row"><span class="rk">This is</span><div class="seg" role="group" aria-label="This is">${Object.entries(SCHOOL_TYPES).map(([k, v]) => `<button type="button" data-stype="${k}" aria-pressed="${(sch.type || "info") === k}">${v}</button>`).join("")}</div></div>` : ""}
+    ${item.kind === KIND.PHOTO ? `<label class="check"><input type="checkbox" id="ed-book" ${item.book ? "checked" : ""}><span>This is a book I want to read<small>Done becomes "I've read it", and counts toward what you like rather than as a recent read.</small></span></label>
+      ${f("author", "Author", item.book?.author || item.author)}` : ""}
     ${item.status === STATUS.DONE || item.status === STATUS.ARCHIVED ? "" : asideHtml("ed", item.status === STATUS.ASIDE ? item.until : null)}
     ${item.kind !== KIND.PHOTO ? `<div class="pic-edit">
       <div class="lbl"><span id="ed-pic-l">Picture</span></div>
@@ -3930,19 +3944,7 @@ function openEdit(id) {
       <span class="note" id="ed-pic-note" role="status"></span>
       <input type="file" id="ed-pic-file" accept="image/*" hidden>
     </div>` : ""}
-    ${sch ? `${f("title", "Headline", item.title)}
-      ${f("text", "Post", sch.body || item.text, { area: true })}
-      ${f("overlay", "Line over the photo", sch.overlay, { ph: schoolSettings().child ? `${schoolSettings().child}, …` : "A line over the photo" })}
-      ${f("sdate", "Date", sch.date || "", { type: "date" })}
-      <div class="row"><span class="rk">This is</span><div class="seg" role="group" aria-label="This is">${Object.entries(SCHOOL_TYPES).map(([k, v]) => `<button type="button" data-stype="${k}" aria-pressed="${(sch.type || "info") === k}">${v}</button>`).join("")}</div></div>`
-    : words ? f("text", item.kind === KIND.QUOTE ? "Quote" : "Note", item.text, { area: true }) : f("title", "Title", item.title)}
-    ${item.kind === KIND.QUOTE || item.kind === KIND.VIDEO ? f("author", item.kind === KIND.QUOTE ? "Who said it" : "Channel", item.author) : ""}
-    ${item.kind === KIND.PHOTO ? `<label class="check"><input type="checkbox" id="ed-book" ${item.book ? "checked" : ""}><span>This is a book I want to read<small>Done becomes "I've read it", and counts toward what you like rather than as a recent read.</small></span></label>
-      ${f("author", "Author", item.book?.author || item.author)}` : ""}
-    ${hasUrl ? f("url", "Link", item.url, { type: "url", ph: "https://" }) : ""}
-    ${sch ? "" : f("why", "Why you saved it", item.why, { hint: "(shown at the top of the post)", ph: item.hook || "Read this before the roadmap review" })}
-    ${!sch && !item.why && item.hook ? `<button class="chip use-guess" type="button" id="ed-guess">Start from ${APP}'s guess</button>` : ""}
-    ${!words ? f("note", "Your note", item.kind === KIND.LINK ? item.text : item.note, { area: true, ph: "Anything you want to remember about it" }) : ""}
+    ${sch ? f("overlay", "Line over the photo", sch.overlay, { ph: schoolSettings().child ? `${schoolSettings().child}, …` : "A line over the photo" }) : ""}
     ${sch ? f("tags", "Tags", (item.tags || []).join(", "), { ph: "band, soccer" }) : `<div class="two">
       ${f("tags", "Tags", (item.tags || []).join(", "), { ph: "scrum, ai" })}
       ${f("minutes", "Minutes", estimateMinutes(item), { type: "number" })}
@@ -3950,7 +3952,6 @@ function openEdit(id) {
     ${ai.settings.enabled() ? `<button class="btn retag" type="button" id="ed-retag">Re-tag with AI</button>` : ""}
     <span class="st" id="ed-st" role="status"></span>
     ${item.email ? `<button class="btn" type="button" id="ed-to-school">Turn into school posts</button>` : ""}
-    <button class="btn primary" type="button" id="ed-save">Save</button>
     <div class="danger">
       <button class="btn ghost-danger" type="button" id="ed-delete">${I.trash}Delete for good</button>
       <p class="note">Removes it${item.blobId ? " and its file" : ""} from this phone. To keep it in your history so ${APP} learns from it, use Let go instead.</p>
@@ -3960,10 +3961,16 @@ function openEdit(id) {
   if (item.kind !== KIND.PHOTO) bindPictureEdit(wrap, id);
   const wasUntil = item.status === STATUS.ASIDE ? item.until : null;
   let edUntil = wasUntil;
-  if ($(".aside-pick", wrap)) bindAside(wrap, "ed", (u) => { edUntil = u; $("#ed-save", wrap).textContent = u && u !== wasUntil ? `Set aside until ${shortDate(u)}` : "Save"; });
-  const save = async () => {
+  if ($(".aside-pick", wrap)) bindAside(wrap, "ed", (u) => { edUntil = u; });
+  // What's in the form now, to tell whether anything changed since it opened.
+  const formNow = () => JSON.stringify([...wrap.querySelectorAll("input:not([type=file]), textarea")].map((e) => e.type === "checkbox" ? e.checked : e.value)
+    .concat([...wrap.querySelectorAll("[data-stype][aria-pressed='true']")].map((x) => x.dataset.stype), [edUntil]));
+  let opened = "";
+  const bad = (msg) => { $("#ed-st", wrap).textContent = msg; $("#ed-st", wrap).classList.add("err"); return false; };
+  /** Save what's in the form. auto: closing without Done, so a bad field keeps its old value instead of stopping. */
+  const commit = async ({ auto = false } = {}) => {
     const cur = byId(id);
-    if (!cur) { closeSheet(); return; }
+    if (!cur) return true;
     // The calendar alert goes first, while this is still the tap.
     const remindMe = edUntil && edUntil !== wasUntil && $("#ed-remind", wrap)?.checked;
     if (remindMe && !notifyOn()) {
@@ -3978,9 +3985,9 @@ function openEdit(id) {
         type: wrap.querySelector("[data-stype][aria-pressed='true']")?.dataset.stype || cur.school.type || "info" };
     } else if (words) {
       const t = (val("text") || "").trim();
-      if (!t) { $("#ed-st", wrap).textContent = "It can't be empty."; $("#ed-st", wrap).classList.add("err"); return; }
-      next.text = t;
-      next.title = t.slice(0, 140);
+      if (!t && !auto) return bad("It can't be empty.");
+      next.text = t || cur.text;
+      next.title = (t || cur.text || "").slice(0, 140);
     } else {
       next.title = (val("title") || "").trim().slice(0, 140) || cur.title;
       if (cur.kind === KIND.LINK) next.text = (val("note") || "").trim() || undefined;
@@ -3988,8 +3995,12 @@ function openEdit(id) {
     }
     if (val("author") !== undefined) next.author = (val("author") || "").trim() || undefined;
     if (hasUrl) {
-      const u = (val("url") || "").trim();
-      if (u && !/^https?:\/\//i.test(u)) { $("#ed-st", wrap).textContent = "A link starts with https://"; $("#ed-st", wrap).classList.add("err"); return; }
+      let u = (val("url") || "").trim();
+      if (u && !/^https?:\/\//i.test(u)) {
+        if (/^[\w-]+(\.[\w-]+)+(\/\S*)?$/.test(u)) u = "https://" + u; // "example.com/page"
+        else if (auto) u = cur.url || "";
+        else return bad("A link starts with https://");
+      }
       next.url = u || undefined;
       const vid = u ? youtubeId(u) : null;
       if (cur.kind === KIND.VIDEO || vid) { next.videoId = vid || undefined; if (vid) next.kind = KIND.VIDEO; }
@@ -4022,15 +4033,25 @@ function openEdit(id) {
     await saveItem(done);
     if (remindMe && notifyOn()) scheduleReminder(done);
     tick(true);
-    closeSheet();
     render();
-    toast(msg);
+    toast(msg, { action: "Undo", onAction: async () => { dropReminder(done); state.recent.delete(id); await saveItem(cur); render({ top: false }); live("Undone."); } });
+    return true;
   };
+  // Done checks the form first and stays open on a mistake; every way out then saves through _beforeClose.
+  const done = async () => {
+    if (formNow() === opened) { closeSheet(); return; }
+    const probe = wrap._beforeClose; wrap._beforeClose = null;
+    const ok = await commit();
+    if (!ok) { wrap._beforeClose = probe; return; }
+    closeSheet();
+  };
+  wrap._beforeClose = () => { if (formNow() !== opened) commit({ auto: true }); };
   wrap.querySelectorAll("[data-stype]").forEach((b) => b.addEventListener("click", () => {
     wrap.querySelectorAll("[data-stype]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
   }));
-  $("#ed-save", wrap).addEventListener("click", save);
-  wrap.querySelectorAll("input").forEach((i) => i.addEventListener("keydown", (e) => { if (e.key === "Enter") save(); }));
+  $("#ed-done", wrap).addEventListener("click", done);
+  wrap.querySelectorAll("input").forEach((i) => i.addEventListener("keydown", (e) => { if (e.key === "Enter") done(); }));
+  opened = formNow();
   $("#ed-guess", wrap)?.addEventListener("click", (e) => {
     const input = $("#ed-why", wrap);
     input.value = byId(id)?.hook || "";
@@ -4060,7 +4081,7 @@ function openEdit(id) {
       st.classList.add("err");
     } finally { btn.disabled = false; }
   });
-  $("#ed-delete", wrap).addEventListener("click", () => { closeSheet(); deleteItem(id); });
+  $("#ed-delete", wrap).addEventListener("click", () => { wrap._beforeClose = null; closeSheet(); deleteItem(id); });
   // An email that was really a school newsletter: one post per piece that matters, then the email goes.
   $("#ed-to-school", wrap)?.addEventListener("click", async (e) => {
     const cur = byId(id);
@@ -5606,6 +5627,9 @@ function sheet(html, { tall = false, label = "", guard = null } = {}) {
   });
   wrap.querySelectorAll("[data-close]").forEach((b) => b.addEventListener("click", closeSheet));
   const panel = $(".sheet", wrap), body = $(".sheet-body", panel);
+  // The title bar stays put above the body, so its buttons are always in reach and it's always a handle.
+  const head = body.firstElementChild?.classList.contains("sheet-head") ? body.firstElementChild : null;
+  if (head) panel.insertBefore(head, body);
   const foot = $(".sheet-foot", body);
   if (foot) {
     panel.appendChild(foot);
@@ -5648,7 +5672,11 @@ function sheet(html, { tall = false, label = "", guard = null } = {}) {
 
 function closeSheet() {
   const s = $(".sheet-wrap");
-  if (s) { const cb = s._onClose; s._onClose = null; s.remove(); if (cb) cb(); }
+  if (s) {
+    // A sheet that keeps what was typed (Edit) saves on the way out, however it was closed.
+    const keep = s._beforeClose; s._beforeClose = null; if (keep) keep();
+    const cb = s._onClose; s._onClose = null; s.remove(); if (cb) cb();
+  }
   if (state.staleToday && state.tab === "today" && !$(".reader")) { state.staleToday = false; render({ top: false }); }
   if (!$(".reader")) $("#app")?.removeAttribute("inert");
   $(".reader")?.removeAttribute("inert");
@@ -5678,7 +5706,7 @@ function bindPull({ scroller, target, host, label, onBack, guard = null, pos = n
     tip.innerHTML = `${I.down}<span>${esc(label)}</span>`;
     host.appendChild(tip);
   }
-  let x0 = 0, y0 = null, t0 = 0, dy = 0, lit = false, typing = false;
+  let x0 = 0, y0 = null, t0 = 0, dy = 0, lit = false, typing = false, handle = false;
   const willClose = () => drag ? dy >= DRAG_CLOSE || (dy > 40 && dy / Math.max(1, Date.now() - t0) > 0.6) : dy >= PULL;
   const reset = () => {
     y0 = null; dy = 0; lit = false;
@@ -5688,12 +5716,14 @@ function bindPull({ scroller, target, host, label, onBack, guard = null, pos = n
   };
   scroller.addEventListener("touchstart", (e) => {
     if (y0 == null && target.style.transform) { target.style.transition = "transform 0.2s ease"; target.style.transform = ""; }
-    if (at.scrollTop > 0 || e.touches.length !== 1) return;
+    // The handle and title bar close a sheet from anywhere; inside the body, only from the top.
+    handle = drag && Boolean(e.target.closest(".grab, .sheet-head"));
+    if ((!handle && at.scrollTop > 0) || e.touches.length !== 1) return;
     if (e.target.closest("input, textarea, iframe, video, audio, .chips, .tray, .picks")) return;
     if (drag) {
       // While typing, a pull down only puts the keyboard away. With a draft, only the handle and title bar close it.
       typing = document.activeElement && host.contains(document.activeElement) && /^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName);
-      if (!typing && guard && guard() && !e.target.closest(".grab, .sheet-head")) return;
+      if (!typing && guard && guard() && !handle) return;
     }
     x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; t0 = Date.now(); dy = 0;
   }, { passive: true });
@@ -5701,7 +5731,7 @@ function bindPull({ scroller, target, host, label, onBack, guard = null, pos = n
     if (y0 == null) return;
     const dx = e.touches[0].clientX - x0;
     dy = e.touches[0].clientY - y0;
-    if (dy <= 0 || at.scrollTop > 0 || Math.abs(dx) > dy) { if (dy < -4 || Math.abs(dx) > Math.max(dy, 12)) reset(); return; }
+    if (dy <= 0 || (!handle && at.scrollTop > 0) || Math.abs(dx) > dy) { if (dy < -4 || Math.abs(dx) > Math.max(dy, 12)) reset(); return; }
     // A few pixels of give first: a scroll that starts with a wobble stays a scroll.
     if (dy < 6 && !target.style.transform) return;
     if (drag && typing) { if (dy > 24) { document.activeElement?.blur?.(); y0 = null; } return; }
