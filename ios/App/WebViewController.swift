@@ -170,13 +170,35 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
     }
 
     /// Song of the day, from the music library on this iPhone: one of the songs played least recently
-    /// (a different one each day, from the oldest 30). Nothing leaves the phone. "play" plays it in Music.
+    /// (a different one each day, from the oldest 30, minus any Shoebox says to skip). Nothing leaves the phone.
+    /// "play" plays it in Music; "check" says whether it's been played since; "keep" adds it to a Rediscovered playlist.
     /// Asks for access only when Shoebox says the person tapped to turn it on.
     private func music(_ body: [String: Any]) {
         guard let id = body["id"] as? String else { return }
         let op = body["op"] as? String ?? "pick"
         let go = { [weak self] in
             guard let self else { return }
+            // "check": has it been played since? (play count and last played, as Music keeps them)
+            if op == "check" || op == "keep" {
+                guard let pid = (body["song"] as? String).flatMap({ UInt64($0) }) else { self.reply(id, ["ok": false, "status": "missing"]); return }
+                let q = MPMediaQuery.songs()
+                q.addFilterPredicate(MPMediaPropertyPredicate(value: NSNumber(value: pid), forProperty: MPMediaItemPropertyPersistentID))
+                guard let item = q.items?.first else { self.reply(id, ["ok": false, "status": "missing"]); return }
+                if op == "check" {
+                    self.reply(id, ["ok": true, "plays": item.playCount, "lastPlayed": (item.lastPlayedDate?.timeIntervalSince1970 ?? 0) * 1000])
+                    return
+                }
+                // "keep": add it to a "Rediscovered" playlist in the person's Music library (made the first time).
+                let uuid = UUID(uuidString: "5B0E1C7A-5D0E-4B6F-9C1A-7E3D2F4A8B21")!
+                let meta = MPMediaPlaylistCreationMetadata(name: "Rediscovered")
+                meta.descriptionText = "Songs Shoebox brought back that you loved."
+                MPMediaLibrary.default().getPlaylist(with: uuid, creationMetadata: meta) { list, error in
+                    guard let list else { self.reply(id, ["ok": false, "status": error?.localizedDescription ?? "failed"]); return }
+                    if list.items.contains(where: { $0.persistentID == item.persistentID }) { self.reply(id, ["ok": true, "already": true]); return }
+                    list.add([item]) { err in self.reply(id, err == nil ? ["ok": true] : ["ok": false, "status": err!.localizedDescription]) }
+                }
+                return
+            }
             if op == "play" {
                 guard let pid = (body["song"] as? String).flatMap({ UInt64($0) }) else { self.reply(id, ["ok": false, "status": "missing"]); return }
                 let q = MPMediaQuery.songs()
@@ -191,8 +213,9 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
                 return
             }
             DispatchQueue.global(qos: .userInitiated).async {
+                let skip = Set((body["skip"] as? [String]) ?? [])
                 let played = (MPMediaQuery.songs().items ?? [])
-                    .filter { $0.playCount > 0 && $0.lastPlayedDate != nil && $0.mediaType.contains(.music) }
+                    .filter { $0.playCount > 0 && $0.lastPlayedDate != nil && $0.mediaType.contains(.music) && !skip.contains(String($0.persistentID)) }
                     .sorted { ($0.lastPlayedDate ?? .distantPast) < ($1.lastPlayedDate ?? .distantPast) }
                     .prefix(30)
                 guard !played.isEmpty else { self.reply(id, ["ok": false, "status": "empty"]); return }

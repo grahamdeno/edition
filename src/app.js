@@ -38,9 +38,10 @@ import { I, LOGO } from "./icons.js";
 import { topicColor, dominantColor, tintInks, focusOf } from "./visuals.js";
 import { problems, noteError as logError, onFirstProblem, clearProblems, formatProblem } from "./problems.js";
 import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
+import * as songs from "./songs.js";
 import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone, mixStories, followOrder } from "./onboard.js";
 
-export const VERSION = "4.43.1";
+export const VERSION = "4.44.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -202,6 +203,7 @@ async function boot() {
   checkInbox();
   dailyStories();
   dailyBackup();
+  maybeAskSong();
   setInterval(() => { if (document.visibilityState === "visible") refreshCalendar(); }, 15 * 60e3);
   setInterval(() => { if (document.visibilityState === "visible") checkInbox(); }, 5 * 60e3);
 }
@@ -1092,7 +1094,7 @@ function sectionHead(title, note = "") {
 
 function todayHtml() {
   const s = todaySections();
-  let h = stripHtml(s) + welcomeHtml() + aiAskHtml() + calendarHtml() + morningHtml() + schoolAskHtml();
+  let h = stripHtml(s) + songAskHtml() + welcomeHtml() + aiAskHtml() + calendarHtml() + morningHtml() + schoolAskHtml();
   if (s.school.length) h += sectionHead("From school", `${s.school.filter(isOpen).length || "All"} to do`) + s.school.map((i) => postHtml(i)).join("");
   if (s.fresh.length) h += sectionHead("New", `${s.fresh.filter(isOpen).length || "All"} to sort`) + s.fresh.map((i) => postHtml(i)).join("");
   if (s.six.length) h += sectionHead("Today's six", `${s.six.filter(isOpen).length} of ${s.six.length} left`) + s.six.map((i) => postHtml(i)).join("");
@@ -1177,6 +1179,64 @@ function setMorningSettings(v) { try { localStorage.setItem(MORNING_KEY, JSON.st
 function morningCache() {
   try { const c = JSON.parse(localStorage.getItem(MORNING_CACHE) || "null"); return c && c.day === dayKey() ? c : { day: dayKey() }; } catch { return { day: dayKey() }; }
 }
+const SONG_LOG = "edition.songLog";
+function songLog() { try { return JSON.parse(localStorage.getItem(SONG_LOG) || "[]") || []; } catch { return []; } }
+function saveSongLog(l) { try { localStorage.setItem(SONG_LOG, JSON.stringify(l)); } catch { /* full */ } }
+
+/** Back in the app 10 minutes or more after playing the song of the day: ask how it landed. */
+async function maybeAskSong() {
+  if (!nativeCan("music") || state.songAsk) return;
+  const e = songs.pendingAsk(songLog());
+  if (!e) return;
+  const r = await nativeAsk("music", { op: "check", song: e.id }, 15000).catch(() => null);
+  if (!r || !r.ok) { saveSongLog(songs.markAsked(songLog(), e.id)); return; }
+  const heard = songs.heardIt(e, r);
+  saveSongLog(songs.markAsked(songLog(), e.id, { heard }));
+  state.songAsk = { ...e, heard };
+  track(heard ? "song_heard" : "song_unheard");
+  if (state.tab === "today" && !$(".sheet-wrap") && !state.reader) render({ top: false });
+}
+
+function songAskHtml() {
+  const e = state.songAsk;
+  if (!e) return "";
+  const gap = e.prevLast ? friendlyWhen(e.prevLast).replace(/^in /, "") : "";
+  const name = `<b>${esc(e.title)}</b>${e.artist ? ` by ${esc(e.artist)}` : ""}`;
+  const head = e.heard ? "Welcome back. How was it?" : "Not the right moment?";
+  const body = e.heard
+    ? `You listened to ${name} all the way through${e.prevLast ? `, for the first time since ${esc(gap)}` : ""}.`
+    : `${name} didn't play all the way through. That's fine; some songs need a different day.`;
+  const acts = e.heard
+    ? `<button class="btn primary" type="button" data-song-ans="loved">Loved it</button><button class="btn" type="button" data-song-ans="fine">It was fine</button><button class="btn ghost" type="button" data-song-ans="never">Not for me</button>`
+    : `<button class="btn primary" type="button" data-song-ans="again">Play it again</button><button class="btn" type="button" data-song-ans="later">Skip it for now</button><button class="btn ghost" type="button" data-song-ans="never">Not for me</button>`;
+  return `<section class="ask song-ask" aria-labelledby="song-ask-h">
+      <div class="ask-top"><span class="av av-day" aria-hidden="true">${I.music}</span><div><h2 id="song-ask-h">${head}</h2><p>${body}</p></div></div>
+      <div class="ask-acts">${acts}</div></section>`;
+}
+
+async function songAnswer(v) {
+  const e = state.songAsk;
+  if (!e) return;
+  state.songAsk = null;
+  track(`song_${v}`);
+  if (v === "again") {
+    saveSongLog(songs.markAsked(songs.logPlay(songLog(), { id: e.id, title: e.title, artist: e.artist, plays: e.prevPlays, lastPlayed: e.prevLast }), "__"));
+    const r = await nativeAsk("music", { op: "play", song: e.id }).catch(() => ({ ok: false }));
+    render({ top: false });
+    toast(r.ok ? "Playing in Music. Give it the whole song." : "Couldn't play it. It may not be on this iPhone any more.");
+    return;
+  }
+  saveSongLog(songs.answer(songLog(), e.id, v === "again" ? "fine" : v));
+  render({ top: false });
+  if (v === "loved") {
+    const r = await nativeAsk("music", { op: "keep", song: e.id }, 20000).catch(() => ({ ok: false }));
+    const n = songs.songStats(songLog()).loved;
+    toast(r.ok ? `Added to your Rediscovered playlist in Music. ${n === 1 ? "Your first one." : `${n} songs there now.`}` : "Loved. (Couldn't add it to a playlist in Music.)");
+  } else if (v === "never") toast("Got it. That one won't come back.");
+  else if (v === "later") toast("Skipped for a few months.");
+  else toast("Noted.");
+}
+
 /** A song from the iPhone's library, as the morning card keeps it. */
 function nativeSong(r) {
   return { native: true, id: String(r.id || ""), title: r.title || "Untitled", artist: r.artist || "", album: r.album || "", year: r.year || "",
@@ -1225,7 +1285,7 @@ async function loadMorning() {
     }
     if (m.song && nativeCan("music") && !c.song && !c.songTried) {
       c.songTried = true; changed = true;
-      try { const r = await nativeAsk("music", { op: "pick", seed: daily.dayOfYear() }, 20000); if (r.ok) c.song = nativeSong(r); else c.songStatus = r.status; }
+      try { const r = await nativeAsk("music", { op: "pick", seed: daily.dayOfYear(), skip: songs.skipIds(songLog()) }, 20000); if (r.ok) c.song = nativeSong(r); else c.songStatus = r.status; }
       catch (e) { noteError(e, { quiet: true, where: "song of the day (iPhone)" }); }
     } else if (m.song && !nativeCan("music") && relay && c.relayInfo?.apple && (!c.songAt || Date.now() - c.songAt > 30 * 60e3)) {
       try {
@@ -1309,7 +1369,8 @@ function morningHtml() {
       `<div class="song">${sg.art ? `<img class="art" alt="" src="${esc(sg.art)}">` : ""}
         <div class="song-t"><p class="ttl">${esc(sg.title)}</p><p class="wx-line">${esc(sg.artist || "")}${sg.year ? ` · ${esc(sg.year)}` : ""}</p>${last ? `<p class="wx-line">${esc(last)}</p>` : ""}</div></div>
        <div class="song-acts"><button class="btn sm primary" type="button" data-song-play="${esc(sg.id)}">${I.play}<span>Play</span></button>
-         <button class="btn sm" type="button" data-song-next="1">Another one</button></div>`));
+         <button class="btn sm" type="button" data-song-next="1">Another one</button></div>
+       ${(() => { const st = songs.songStats(songLog()); return st.month || st.loved ? `<p class="song-tally">${st.month ? `${st.month} song${st.month === 1 ? "" : "s"} brought back this month` : ""}${st.month && st.loved ? " · " : ""}${st.loved ? `${st.loved} in your Rediscovered playlist` : ""}</p>` : ""; })()}`));
   } else if (m.song && nativeCan("music") && c.songStatus === "empty") {
     cards.push(card("song", `<span class="av av-day" aria-hidden="true">${I.music}</span>`, `<span class="who">Song of the day</span>${cardMore("cards", "Daily cards")}`,
       `<p class="wx-line">Song of the day picks from songs you've played in the Music app. Play a few there and one shows up here tomorrow.</p>`));
@@ -2728,12 +2789,17 @@ async function onTimelineClick(e) {
   if ((b = hit("[data-preview]"))) { playPreview(b); return; }
   if ((b = hit("[data-song-play]"))) {
     const r = await nativeAsk("music", { op: "play", song: b.dataset.songPlay }).catch(() => ({ ok: false }));
-    if (r.ok) { buzz(8); toast("Playing in Music."); } else toast("Couldn't play it. It may not be on this iPhone any more.");
+    if (r.ok) {
+      const sg = morningCache().song;
+      if (sg?.native && sg.id === b.dataset.songPlay) saveSongLog(songs.logPlay(songLog(), sg));
+      buzz(8); toast("Playing in Music.");
+    } else toast("Couldn't play it. It may not be on this iPhone any more.");
     return;
   }
+  if ((b = hit("[data-song-ans]"))) { await songAnswer(b.dataset.songAns); return; }
   if ((b = hit("[data-song-next]"))) {
     b.disabled = true;
-    const r = await nativeAsk("music", { op: "pick", seed: Math.floor(Math.random() * 1000) }, 20000).catch(() => ({ ok: false }));
+    const r = await nativeAsk("music", { op: "pick", seed: Math.floor(Math.random() * 1000), skip: songs.skipIds(songLog()) }, 20000).catch(() => ({ ok: false }));
     if (r.ok) { const c = morningCache(); c.song = nativeSong(r); saveMorningCache(c); render({ top: false }); } else b.disabled = false;
     return;
   }
@@ -5080,6 +5146,7 @@ function wireGlobal() {
     refreshCalendar();
     loadMorning();
     checkInbox();
+    maybeAskSong();
     await ensureEdition();
     if (woke || state.items.length !== before || (state.edition && state.edition.date !== day)) {
       if (state.edition && state.edition.date !== day) state.recent.clear();
