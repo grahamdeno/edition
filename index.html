@@ -6,7 +6,11 @@
   <meta name="theme-color" content="#FBF8FF" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#1B1033" media="(prefers-color-scheme: dark)">
   <meta name="color-scheme" content="light dark">
-  <meta name="description" content="Shoebox. Keep it. Come back to it. The things you saved for yourself, back as a short daily timeline.">
+  <meta name="description" content="Shoebox hands back what you save, the mail you forward, your calendar and the weather as one calm morning. A few things, then you're done.">
+  <meta property="og:title" content="Shoebox: keep it in my shoebox">
+  <meta property="og:description" content="What you save, the mail you forward, your day and the weather, handed back as one calm morning.">
+  <meta property="og:image" content="https://inmyshoebox.com/site/og.png">
+  <meta name="twitter:card" content="summary_large_image">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="Shoebox">
@@ -19,6 +23,16 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap">
   <link rel="stylesheet" href="styles.css">
+  <script>
+    // A first visit in a browser gets the front page; the app itself opens for the iPhone apps, the Home Screen
+    // app, links into the app (?app=1, ?share=1, ?me=1) and anyone who has used it here before.
+    try {
+      var q = location.search, ls = localStorage;
+      if (/[?&]app=1/.test(q)) ls.setItem("edition.web", "1");
+      var inApp = window.shoeboxNative || /[?&](native|me|share|app)=/.test(q) || (window.matchMedia && matchMedia("(display-mode: standalone)").matches) || navigator.standalone;
+      if (!inApp && !ls.getItem("edition.web") && !ls.getItem("edition.onboarded") && !ls.getItem("edition.inboxKey")) location.replace("welcome" + location.hash);
+    } catch (e) {}
+  </script>
   <script>
     // Appearance chosen in Settings, applied before the first paint so the screen never flashes the other look.
     try { var t = localStorage.getItem("edition.theme"); if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t); if (localStorage.getItem("edition.palette") === "plain") document.documentElement.setAttribute("data-palette", "plain"); } catch (e) {}
