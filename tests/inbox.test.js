@@ -215,18 +215,25 @@ test("a second mail domain: new addresses show the first, every listed domain st
   assert.equal(await mailBox(env, `${local}@example.com`), null);
 });
 
-test("the owner can choose the four letters; the old address keeps working; others can't", async () => {
+test("Shoebox Me phones get firstname-keep; the old address keeps working; nobody else can ask for it", async () => {
   const env = { SHOEBOX: fakeKv(), EMAIL_ALIASES: "1", EMAIL_DOMAIN: "inmyshoebox.com,tangomike.app", EMAIL_ADDRESS: "shoebox@teamd503.com", ANTHROPIC_API_KEY: "k" };
   const origin = "https://shoebox.tangomike.app";
   const post = (path, headers, body) => relay.fetch(new Request(`https://relay.test${path}`, { method: "POST", headers: { origin, "content-type": "application/json", ...headers }, body: body && JSON.stringify(body) }), env);
   const reg = await (await post("/ai/register", { "cf-connecting-ip": "7.7.7.7" })).json();
-  env.AI_OWNER_DEVICES = reg.device;
+  const reg2 = await (await post("/ai/register", { "cf-connecting-ip": "7.7.7.8" })).json();
+  env.AI_OWNER_DEVICES = `${reg.device},${reg2.device}`;
+  const staff = { "x-shoebox-device": reg.device, "x-shoebox-token": reg.token };
   const key = { "x-inbox-key": "g".repeat(30) };
   const first = await (await post("/inbox/address", key, { name: "graham" })).json();
-  const mine = await (await post("/inbox/address", { ...key, "x-shoebox-device": reg.device, "x-shoebox-token": reg.token }, { name: "graham", word: "keep" })).json();
+  assert.match(first.address, /^graham-[a-z2-9]{4}@/, "public: random letters");
+  const mine = await (await post("/inbox/address", { ...key, ...staff }, { name: "graham", keep: true })).json();
   assert.equal(mine.address, "graham-keep@inmyshoebox.com");
   assert.ok(await mailBox(env, "graham-keep@tangomike.app"));
   assert.ok(await mailBox(env, first.address), "the earlier address still delivers");
-  assert.equal((await post("/inbox/address", { "x-inbox-key": "o".repeat(30) }, { name: "graham", word: "keep" })).status, 403, "not for everyone");
-  assert.equal((await post("/inbox/address", { ...key, "x-shoebox-device": reg.device, "x-shoebox-token": reg.token }, { name: "graham", word: "k3ep" })).status, 400);
+  const again = await (await post("/inbox/address", { ...key, ...staff }, { name: "graham" })).json();
+  assert.equal(again.address, "graham-keep@inmyshoebox.com", "asking again keeps it");
+  const other = await (await post("/inbox/address", { "x-inbox-key": "h".repeat(30), "x-shoebox-device": reg2.device, "x-shoebox-token": reg2.token }, { name: "Graham" })).json();
+  assert.equal(other.address, "graham2-keep@inmyshoebox.com", "a second Graham on staff");
+  assert.equal((await post("/inbox/address", { "x-inbox-key": "o".repeat(30) }, { name: "graham", keep: true })).status, 403, "not for everyone");
+  assert.equal((await post("/inbox/address", { "x-inbox-key": "o".repeat(30), "x-shoebox-device": reg.device, "x-shoebox-token": "wrong" }, { name: "graham", keep: true })).status, 403, "needs the real token");
 });
