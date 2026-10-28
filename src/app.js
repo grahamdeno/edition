@@ -41,7 +41,7 @@ import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 import * as songs from "./songs.js";
 import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone, mixStories, followOrder } from "./onboard.js";
 
-export const VERSION = "4.50.0";
+export const VERSION = "4.50.1";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -2012,7 +2012,7 @@ function spotlight({ sel, text = "", key = "", next = ".fab" } = {}) {
   endSpot(false);
   const el = document.createElement("div");
   el.className = "spot";
-  el.innerHTML = `<div class="spot-p" data-p="t"></div><div class="spot-p" data-p="b"></div><div class="spot-p" data-p="l"></div><div class="spot-p" data-p="r"></div>
+  el.innerHTML = `<div class="spot-dim" aria-hidden="true"></div><div class="spot-p" data-p="t"></div><div class="spot-p" data-p="b"></div><div class="spot-p" data-p="l"></div><div class="spot-p" data-p="r"></div>
     <div class="spot-ring" aria-hidden="true"></div>
     ${text ? `<div class="spot-tip" role="dialog" aria-label="Tip"><p>${esc(text)}</p><button class="btn sm" type="button" data-spot-ok>Got it</button></div>` : ""}`;
   el.querySelectorAll(".spot-p").forEach((p) => p.addEventListener("click", () => endSpot()));
@@ -2035,6 +2035,11 @@ function placeSpot() {
   set("l", { left: "0px", top: `${y0}px`, width: `${x0}px`, height: `${Math.max(0, y1 - y0)}px` });
   set("r", { left: `${x1}px`, top: `${y0}px`, width: `${Math.max(0, W - x1)}px`, height: `${Math.max(0, y1 - y0)}px` });
   Object.assign($(".spot-ring", spot.el).style, { left: `${x0}px`, top: `${y0}px`, width: `${x1 - x0}px`, height: `${y1 - y0}px` });
+  // The dimmed, blurred layer has a hole with rounded corners, matching the ring (the four tap panels are invisible).
+  const hole = `M0 0H${W}V${H}H0Z M${x0 + 18} ${y0}H${x1 - 18}A18 18 0 0 1 ${x1} ${y0 + 18}V${y1 - 18}A18 18 0 0 1 ${x1 - 18} ${y1}H${x0 + 18}A18 18 0 0 1 ${x0} ${y1 - 18}V${y0 + 18}A18 18 0 0 1 ${x0 + 18} ${y0}Z`;
+  const mask = `url("data:image/svg+xml,${encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' width='${W}' height='${H}'><path fill-rule='evenodd' d='${hole}'/></svg>`)}")`;
+  const dim = $(".spot-dim", spot.el).style;
+  dim.webkitMaskImage = dim.maskImage = mask;
   const tip = $(".spot-tip", spot.el);
   if (tip) {
     const below = H - y1 > tip.offsetHeight + 24 || y0 < tip.offsetHeight + 24;
@@ -4398,7 +4403,7 @@ function openSettings(panel = "", { fromCard = false } = {}) {
         <input id="set-mo-zip" type="text" autocomplete="postal-code" value="${esc(m.useLocation ? "" : m.zip || placeOf(m)?.name || "")}" placeholder="e.g. 28409"></div>
       <div class="field"><label for="set-mo-cam">Camera <span class="hint">(optional)</span></label>
         <input id="set-mo-cam" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="A webcam picture or a YouTube live link" value="${esc(m.cam)}"></div>
-      ${placeOf(m) && ai.settings.enabled() ? `<button class="btn" type="button" id="set-cam-find">Find live cameras near ${esc(placeOf(m).name)}</button><div class="cam-picks" id="set-cam-picks"></div>` : ""}
+      ${placeOf(m) && ai.settings.enabled() ? `<button class="btn" type="button" id="set-cam-find">Find live cameras near ${esc(placeOf(m).name)}</button><div class="cam-picks" id="set-cam-picks"></div><span class="st" id="set-cam-st" role="status"></span>` : ""}
       <p class="note">Blank shows the weather radar. ${placeOf(m) && ai.settings.enabled() ? "Or paste" : "Paste"} a webcam's picture address (often ending in .jpg) or a YouTube live link.</p>
       <button class="btn primary" type="button" id="set-mo-save">Save</button>
       <span class="st" id="set-mo-st" role="status"></span>
@@ -4613,14 +4618,16 @@ function openSettings(panel = "", { fromCard = false } = {}) {
     loadMorning();
   }));
   $("#set-cam-find", wrap)?.addEventListener("click", async (e) => {
-    const st2 = $("#set-mo-st", wrap), box = $("#set-cam-picks", wrap), place = placeOf(morningSettings());
-    e.target.disabled = true;
-    say(st2, `The first look for a town can take a minute. Looking for live cameras near ${place.name}…`);
+    const st2 = $("#set-cam-st", wrap), box = $("#set-cam-picks", wrap), place = placeOf(morningSettings()), label = e.target.textContent;
+    const waitBox = (html, err = false) => { box.innerHTML = `<div class="cam-wait${err ? " err" : ""}" role="status">${err ? "" : '<span class="spin" aria-hidden="true"></span>'}<span>${html}</span></div>`; box.scrollIntoView({ block: "nearest", behavior: reduced() ? "auto" : "smooth" }); };
+    e.target.disabled = true; e.target.textContent = "Looking…"; say(st2, "");
+    waitBox(`Looking for live cameras near ${esc(place.name)}. The first look for a town can take a minute.`);
+    const done = () => { e.target.disabled = false; e.target.textContent = label; };
     try {
       const cams = await ai.findCams(place.name);
       track("cams_found");
-      if (!cams.length) { say(st2, `Couldn't find a live camera near ${place.name} that works. The radar it is, or paste one you know.`, true); e.target.disabled = false; return; }
-      say(st2, "");
+      done();
+      if (!cams.length) { waitBox(`Couldn't find a live camera near ${esc(place.name)} that works. Keep the radar, or paste one you know.`, true); return; }
       box.innerHTML = cams.map((c, k) => `<button type="button" class="cam-pick" data-cam="${k}"><img alt="" src="${esc(c.thumb)}" referrerpolicy="no-referrer" onerror="this.closest('.cam-pick').remove()">
         <span><b>${esc(c.title)}</b>${c.where ? `<i>${esc(c.where)}</i>` : ""}<em>${c.kind === "youtube" ? "Live video" : "Webcam picture"}</em></span></button>`).join("")
         + `<button type="button" class="cam-pick radar" data-cam="radar"><span><b>Weather radar</b><em>No camera</em></span></button>`;
@@ -4632,8 +4639,7 @@ function openSettings(panel = "", { fromCard = false } = {}) {
         affirm(st2, c ? `Your weather card now shows ${c.title}.` : "Your weather card shows the radar.");
         render({ top: false });
       }));
-    } catch (err) { say(st2, err.message || "Couldn't look right now.", true); }
-    e.target.disabled = false;
+    } catch (err) { done(); waitBox(esc(err.message || "Couldn't look right now. Try again in a bit."), true); }
   });
   $("#set-mo-save", wrap)?.addEventListener("click", async () => {
     const st2 = $("#set-mo-st", wrap);

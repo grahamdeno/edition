@@ -967,7 +967,8 @@ input.time { font: 600 1rem var(--sans); color: var(--fg); background: var(--sof
 @keyframes reveal-in { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
 .spot { position: fixed; inset: 0; z-index: 70; pointer-events: none; opacity: 0; transition: opacity 0.2s ease-out; }
 .spot.on { opacity: 1; }
-.spot-p { position: fixed; pointer-events: auto; background: rgba(27, 16, 51, 0.42); -webkit-backdrop-filter: blur(3px) saturate(0.7); backdrop-filter: blur(3px) saturate(0.7); }
+.spot-dim { position: fixed; inset: 0; pointer-events: none; background: rgba(27, 16, 51, 0.42); -webkit-backdrop-filter: blur(3px) saturate(0.7); backdrop-filter: blur(3px) saturate(0.7); -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat; -webkit-mask-size: 100% 100%; mask-size: 100% 100%; }
+.spot-p { position: fixed; pointer-events: auto; background: transparent; }
 .spot-ring { position: fixed; border-radius: 18px; box-shadow: 0 0 0 2px var(--sig), 0 0 0 6px rgba(123, 63, 242, 0.25); pointer-events: none; }
 .spot-tip { position: fixed; left: 16px; right: 16px; max-width: 420px; margin: 0 auto; pointer-events: auto; padding: 12px 14px; border-radius: 16px; background: var(--sig); color: #fff; display: flex; align-items: center; gap: 12px; font-size: 0.9375rem; line-height: 1.4; animation: pop 0.25s ease-out; }
 .spot-tip p { margin: 0; flex: 1; }
@@ -1051,3 +1052,9 @@ details.adv > summary, .group details.adv > summary, .ag-more summary { min-heig
 .cam-pick b { font-size: 0.875rem; line-height: 1.25; }
 .cam-pick i, .cam-pick em { font-style: normal; font-size: 0.75rem; color: var(--muted); }
 .cam-pick.radar { justify-content: center; min-height: 96px; }
+
+/* While typing, the "More below" pill would sit on the field: hide it. */
+.kb .more-hint, .kb .sheet.more-below .sheet-foot::before { display: none !important; }
+.cam-wait { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; padding: 14px; border-radius: 14px; background: var(--sig-soft); color: var(--sig-ink); font-size: 0.9375rem; font-weight: 600; }
+.cam-wait .spin { width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--line-2); border-top-color: var(--sig); animation: spin 0.9s linear infinite; flex: none; }
+.cam-wait.err { background: transparent; color: var(--warn); padding: 4px 0; font-weight: 500; }
