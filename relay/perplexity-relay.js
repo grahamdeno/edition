@@ -37,7 +37,7 @@
  */
 
 /** What this copy of the relay can do; the app checks it to say when an update is needed. */
-export const RELAY_VERSION = 16;
+export const RELAY_VERSION = 17;
 export const RELAY_FEATURES = ["preview", "image", "photo", "agent", "push", "remind", "ical", "nhl", "inbox", "apple", "ai", "stats", "stories"];
 
 const ALLOWED_ORIGINS = ["https://shoebox.tangomike.app", "https://grahamdeno.github.io"];
@@ -976,6 +976,7 @@ async function aiRoute(request, env, pathname, cors, ctx = null) {
   if (request.method === "GET" && pathname === "/ai/usage") {
     return aiJson(200, { device, owner, cents: mine / 100, limit: owner ? null : deviceCap / 100 }, cors);
   }
+  if (request.method === "POST" && pathname === "/ai/cams") return camsRoute(request, env, { kv, ctx, cors, charge, over: all >= allCap });
   if (request.method === "POST" && pathname === "/ai/stories") return storiesRoute(request, env, { kv, today, owner, ctx, cors, charge, over: all >= allCap, mineOver: !owner && (mine >= deviceCap || net >= ipCap) });
   if (request.method !== "POST" || pathname !== "/ai/messages") return json(404, "Not found.", cors);
   if (all >= allCap) return aiJson(429, { error: { message: "Shoebox's AI is resting for today. It's back tomorrow." } }, cors);
@@ -1037,6 +1038,91 @@ function slowAnswer(job, ctx, cors) {
   if (ctx && ctx.waitUntil) ctx.waitUntil(work);
   w.write(enc.encode(" ")).catch(() => {});
   return new Response(readable, { status: 200, headers: { ...cors, "content-type": "application/json", "cache-control": "no-store" } });
+}
+
+/* ---- Live cameras near a place ----
+ * Claude searches once a week per town for public live views (YouTube live
+ * streams and webcam pictures that refresh); each one is checked before it's
+ * offered. Shared by everyone in that town; charged to the relay's total.
+ */
+export function camYoutubeId(url) {
+  let u;
+  try { u = new URL(String(url || "").trim()); } catch { return ""; }
+  const host = u.hostname.replace(/^(www\.|m\.)/, "");
+  let id = "";
+  if (host === "youtu.be") id = u.pathname.slice(1);
+  else if (/(^|\.)youtube\.com$/.test(host)) id = u.searchParams.get("v") || (u.pathname.match(/^\/(?:live|embed)\/([^/?#]+)/) || [])[1] || "";
+  return /^[\w-]{6,20}$/.test(id) ? id : "";
+}
+export function camPlace(place) {
+  const p = String(place || "").replace(/[^A-Za-z0-9 .,'-]/g, "").replace(/\s+/g, " ").trim().slice(0, 60);
+  return p.length >= 2 ? p : "";
+}
+/** Keep the cameras that are really there: a YouTube video that exists, or a picture that loads. */
+export async function checkCams(list) {
+  const out = [], seen = new Set();
+  for (const c of (list || []).slice(0, 10)) {
+    const url = String(c?.url || "").trim();
+    if (!/^https:\/\//.test(url) || seen.has(url)) continue;
+    seen.add(url);
+    const yt = camYoutubeId(url);
+    try {
+      if (yt) {
+        const r = await fetch(`https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(`https://www.youtube.com/watch?v=${yt}`)}`);
+        if (!r.ok) continue;
+        const d = await r.json().catch(() => ({}));
+        out.push({ kind: "youtube", url: `https://www.youtube.com/watch?v=${yt}`, title: String(d.title || c.title || "Live camera").slice(0, 100), where: String(c.where || "").slice(0, 80), thumb: `https://i.ytimg.com/vi/${yt}/hqdefault_live.jpg` });
+      } else {
+        const r = await fetch(url, { headers: { "user-agent": "Mozilla/5.0 (ShoeboxRelay)", accept: "image/*" } });
+        const type = r.headers.get("content-type") || "";
+        if (!r.ok || !type.startsWith("image/")) continue;
+        const size = (await r.arrayBuffer()).byteLength;
+        if (size < 5000) continue;
+        out.push({ kind: "image", url, title: String(c.title || "Webcam").slice(0, 100), where: String(c.where || "").slice(0, 80), thumb: url });
+      }
+    } catch { /* unreachable: skip it */ }
+    if (out.length >= 6) break;
+  }
+  return out;
+}
+
+async function camsRoute(request, env, { kv, ctx, cors, charge, over }) {
+  const { place } = await request.json().catch(() => ({}));
+  const where = camPlace(place);
+  if (!where) return aiJson(400, { error: { message: "No place." } }, cors);
+  const key = `cams:${where.toLowerCase()}`;
+  const cached = await kv.get(key, "json");
+  if (cached) return aiJson(200, { ...cached, shared: true }, cors);
+  if (over) return aiJson(429, { error: { message: "Shoebox's AI is resting for today. It's back tomorrow." } }, cors);
+  const lock = `camsl:${where.toLowerCase()}`;
+  if (await kv.get(lock)) return aiJson(202, { pending: true, retry: 20 }, cors);
+  await kv.put(lock, "1", { expirationTtl: 180 });
+  const job = async () => {
+    const body = {
+      model: STORY_MODEL, max_tokens: 1500,
+      messages: [{ role: "user", content:
+        `Find public live cameras in or near ${where} that show the outdoors and the weather: beaches, piers, harbors, downtown streets, skylines, mountains. ` +
+        "Only ones anyone can view free: YouTube live streams (24/7 cams), or a webcam's still picture that refreshes, given as the direct image address (often ending in .jpg). " +
+        "No traffic cameras behind logins, no pages that only embed a player. Prefer the closest and best-known. " +
+        'Search, then reply with JSON only: {"cams":[{"title":string (short, e.g. \"Wrightsville Beach pier\"),"where":string (town or spot),"url":string}]} with up to 8.' }],
+      tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 5 }],
+    };
+    let res;
+    try { res = await fetch(ANTHROPIC_URL, { method: "POST", headers: { "content-type": "application/json", "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" }, body: JSON.stringify(body) }); }
+    catch { await kv.delete(lock); return [502, { error: { message: "The relay couldn't reach Claude." } }]; }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) { await kv.delete(lock); return [502, { error: { message: data?.error?.message || "Couldn't search right now." } }]; }
+    await charge(aiCost(STORY_MODEL, data.usage), { device: false });
+    const text = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n");
+    let list = [];
+    try { const a = text.indexOf("{"), b = text.lastIndexOf("}"); list = JSON.parse(text.slice(a, b + 1)).cams || []; } catch { /* nothing usable */ }
+    const cams = await checkCams(list);
+    const out = { cams, place: where, at: Date.now() };
+    if (cams.length) await kv.put(key, JSON.stringify(out), { expirationTtl: 7 * 86400 });
+    await kv.delete(lock);
+    return [200, out];
+  };
+  return slowAnswer(job, ctx, cors);
 }
 
 /* ---- Shared top stories ----

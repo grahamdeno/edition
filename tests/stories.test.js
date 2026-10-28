@@ -60,3 +60,29 @@ test("a topic is searched once a day and shared; local news counts against the a
     assert.equal(pending.pending, true);
   } finally { globalThis.fetch = realFetch; }
 });
+
+import { camYoutubeId, camPlace, checkCams } from "../relay/perplexity-relay.js";
+
+test("cameras: only real YouTube videos and real pictures are offered", async () => {
+  assert.equal(camYoutubeId("https://www.youtube.com/live/abcDEF12345"), "abcDEF12345");
+  assert.equal(camYoutubeId("https://youtu.be/abcDEF12345"), "abcDEF12345");
+  assert.equal(camPlace("Wilmington, NC <x>"), "Wilmington, NC x");
+  const real = globalThis.fetch;
+  try {
+    globalThis.fetch = async (u) => {
+      if (u.includes("oembed") && u.includes("good")) return new Response(JSON.stringify({ title: "Pier cam" }), { status: 200 });
+      if (u.includes("oembed")) return new Response("Not found", { status: 404 });
+      if (u.endsWith("cam.jpg")) return new Response(new Uint8Array(9000), { status: 200, headers: { "content-type": "image/jpeg" } });
+      return new Response("<html>", { status: 200, headers: { "content-type": "text/html" } });
+    };
+    const out = await checkCams([
+      { title: "A", url: "https://www.youtube.com/watch?v=goodVideo01" },
+      { title: "B", url: "https://www.youtube.com/watch?v=goneVideo01" },
+      { title: "C", url: "https://example.com/cam.jpg", where: "Downtown" },
+      { title: "D", url: "https://example.com/page" },
+      { title: "E", url: "http://example.com/cam.jpg" },
+    ]);
+    assert.deepEqual(out.map((c) => [c.kind, c.title]), [["youtube", "Pier cam"], ["image", "C"]]);
+    assert.match(out[0].thumb, /i\.ytimg\.com\/vi\/goodVideo01/);
+  } finally { globalThis.fetch = real; }
+});
