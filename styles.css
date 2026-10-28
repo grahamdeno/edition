@@ -1111,3 +1111,9 @@ details.adv > summary, .group details.adv > summary, .ag-more summary { min-heig
 /* Quote of the day */
 .q-src { margin-left: 4px; color: var(--sig-ink); font-weight: 600; text-underline-offset: 3px; }
 .q-from .q-picks { margin-top: 10px; gap: 8px; }
+/* Morning cards done for today: one line of chips under This morning */
+.fold-row { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px var(--gutter-r) 14px var(--gutter-l); border-bottom: 1px solid var(--line); }
+.fold-chip { display: inline-flex; align-items: center; gap: 6px; min-height: 40px; color: var(--muted); }
+.fold-chip .i { width: 15px; height: 15px; color: var(--sig-ink); stroke-width: 2.4; }
+.fold-chip span { max-width: 22ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fold-acts { margin-top: 10px; }
