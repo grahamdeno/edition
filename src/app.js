@@ -24,6 +24,7 @@ import {
   canonTags, tagVocab, tagStats, renameTag, addAlias, releaseTags, renameInSuggestProfile, localTags, normTag, MAX_TAGS,
   friendlyWhen, usablePicture, discoveryItems, schoolToday,
   setAside, wakeAside, bringBackNow, asideChoices, fromDateInput, toDateInput, shortDate, reminderIcs,
+  senderName, plainEntities,
 } from "./model.js";
 import * as db from "./db.js";
 import * as push from "./push.js";
@@ -39,7 +40,7 @@ import { problems, noteError as logError, onFirstProblem, clearProblems, formatP
 import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone, mixStories, followOrder } from "./onboard.js";
 
-export const VERSION = "4.42.0";
+export const VERSION = "4.43.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -163,6 +164,9 @@ async function boot() {
   state.wonDay = await db.meta.get("wonDay", null);
   await loadAvatar();
   await migratePictures();
+  for (const i of state.items.filter((x) => x.email && /&#\d+;|&#x[0-9a-f]+;|&amp;|&nbsp;/i.test(`${x.text || ""} ${x.title || ""}`))) {
+    await saveItem({ ...i, text: plainEntities(i.text), title: plainEntities(i.title) });
+  }
   // No sample items any more: a new phone gets the welcome steps instead. Anyone with saves is past them.
   const seeded = 0;
   if (state.items.some((i) => !i.sample) || migrated) { setFlag(ONBOARDED, true); setFlag(FIRST_SAVE, true); }
@@ -1538,7 +1542,11 @@ async function checkInbox({ statusEl = null } = {}) {
           } catch (e) { noteError(e, { quiet: true, where: "inbox: attachment" }); }
         }
         const link = (m.links || [])[0];
-        const body = String(m.text || "").trim();
+        const body = plainEntities(String(m.text || "").trim());
+        m.subject = plainEntities(m.subject || "");
+        // The same message twice (forwarded to two addresses while moving): keep one.
+        const twin = state.items.find((i) => i.email && i.title === (m.subject || "") && i.email.from === m.from && Math.abs((i.email.at || 0) - (m.at || 0)) < 2 * 864e5);
+        if (twin) { done.push(m.id); continue; }
         const item = createItem({ kind: KIND.NOTE, text: body.slice(0, 8000), title: m.subject || body.slice(0, 80) || "Email" }, { id: db.newId(), source: "email" });
         Object.assign(item, { title: m.subject || item.title, email: { from: m.from, fromName: m.fromName || m.from, at: m.at }, url: link || undefined });
         await saveItem(item);
@@ -2518,7 +2526,7 @@ function tideHtml(waiting) {
 function byline(item) {
   if (item.suggested) return { who: APP, when: friendlyWhen(item.created) };
   if (item.school) return { who: item.school.name || "School", when: friendlyWhen(item.created) };
-  if (item.email) return { who: item.email.fromName || "Email", when: friendlyWhen(item.created) };
+  if (item.email) return { who: senderName(item.email.fromName, item.email.from), when: friendlyWhen(item.created) };
   return { who: "You", when: friendlyWhen(item.created) };
 }
 

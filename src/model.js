@@ -902,3 +902,22 @@ export function schoolToday(items, now = Date.now()) {
     .filter((i) => !i.school.date || i.school.date >= today)
     .sort((a, b) => (a.school.date || "9999") .localeCompare(b.school.date || "9999") || a.created - b.created);
 }
+
+/** A sender as a person reads it: their name, or for a bare address like noreply@mg.infinitecampus.com, the site (infinitecampus.com). */
+export function senderName(fromName, from) {
+  const n = String(fromName || "").trim();
+  if (n && !n.includes("@")) return n;
+  const addr = (n || String(from || "")).replace(/^.*</, "").replace(/>.*$/, "").trim();
+  const host = addr.split("@")[1] || "";
+  const parts = host.toLowerCase().split(".").filter(Boolean);
+  if (parts.length < 2) return addr || "Email";
+  const two = parts.slice(-2).join(".");
+  return /^(co|com|org|net|gov|edu|ac)\.[a-z]{2}$/.test(two) && parts.length > 2 ? parts.slice(-3).join(".") : two;
+}
+/** Text from mail sometimes arrives with HTML codes still in it (&#160;, &amp;). */
+export function plainEntities(t) {
+  return String(t || "").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+    .replace(/&#x([0-9a-f]{1,6});/gi, (m, h) => { try { return String.fromCodePoint(parseInt(h, 16)); } catch { return m; } })
+    .replace(/&#(\d{1,7});/g, (m, d) => { try { return String.fromCodePoint(+d); } catch { return m; } }).replace(/\u00a0/g, " ");
+}
+

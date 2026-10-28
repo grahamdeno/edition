@@ -274,3 +274,18 @@ test("school posts show daily until done, soonest first, and never take one of t
   assert.deepEqual(schoolToday(items, now).map((i) => i.id), ["s5", "s1", "s2"]);
   assert.deepEqual(be2(items, null, { now }).ids, ["q1"]);
 });
+
+import { senderName, plainEntities } from "../src/model.js";
+import { htmlToText } from "../relay/perplexity-relay.js";
+
+test("senders read like names; bare addresses become the site", () => {
+  assert.equal(senderName("Myrtle Grove Middle", "news@nhcs.net"), "Myrtle Grove Middle");
+  assert.equal(senderName("noreply@psu650nc.mg.infinitecampus.com", ""), "infinitecampus.com");
+  assert.equal(senderName("", "Alerts <alerts@mail.bbc.co.uk>"), "bbc.co.uk");
+  assert.equal(senderName("", ""), "Email");
+});
+
+test("HTML codes left in mail text are turned back into characters", () => {
+  assert.equal(plainEntities("Dear&#160; Graham &amp; family&#x2019;s"), "Dear  Graham & family’s");
+  assert.equal(htmlToText("<p>Dear&#160;Graham &amp;#160;</p>"), "Dear Graham");
+});
