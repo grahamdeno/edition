@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Shoebox iPhone Beta</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="Ask to try the Shoebox iPhone app before it's in the App Store. Six quick questions.">
+<meta property="og:title" content="Try the Shoebox iPhone beta">
+<meta property="og:description" content="Your own feed of everything you meant to come back to. Six quick questions and you're on the list.">
+<meta property="og:image" content="https://inmyshoebox.com/site/og.png">
+<meta property="og:url" content="https://inmyshoebox.com/beta">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="icons/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif&family=Geist:wght@400;600&display=swap">
+<link rel="stylesheet" href="site/site.css">
+</head>
+<body>
+<header class="doc-top"><div class="wrap bar">
+  <a class="mark" href="welcome" aria-label="Shoebox home"><svg viewBox="0 0 64 64" aria-hidden="true"><rect x="10" y="22" width="9" height="12" rx="1.5" fill="#FFF7DA" stroke="#22123B" stroke-width="2"/><rect x="21" y="19" width="10" height="15" rx="1.5" fill="#FFF7DA" stroke="#22123B" stroke-width="2"/><rect x="33" y="21" width="9" height="13" rx="1.5" fill="#FFF7DA" stroke="#22123B" stroke-width="2"/><path d="M5 31h54v19a5 5 0 0 1-5 5H10a5 5 0 0 1-5-5z" fill="#FFD23F"/><rect x="3" y="17" width="58" height="10" rx="3" fill="#22123B" transform="rotate(-16 6 26)"/></svg>Shoebox</a>
+  <a class="open" href="./?app=1">Open Shoebox</a>
+</div><div class="lidline"></div></header>
+
+<main class="doc beta">
+<h1>Try the iPhone beta</h1>
+<p class="sub">Six quick questions. A person reads every answer and sends invites in small batches through TestFlight.</p>
+
+<form id="beta" novalidate>
+  <fieldset>
+    <legend>About you</legend>
+    <label class="field">Your name<input name="name" autocomplete="name" required maxlength="80"></label>
+    <label class="field">The email on your Apple ID<span class="hint">TestFlight sends the invite there.</span><input name="email" type="email" autocomplete="email" inputmode="email" required maxlength="120"></label>
+    <div class="field" role="radiogroup" aria-labelledby="q-iphone"><span id="q-iphone">Do you have an iPhone?</span>
+      <div class="chips"><label><input type="radio" name="iphone" value="Yes" required><span>Yes</span></label><label><input type="radio" name="iphone" value="No"><span>No</span></label></div>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>1. Where do things you mean to come back to end up?</legend>
+    <p class="hint">Pick all that apply.</p>
+    <div class="chips" id="places"></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>2. How much of it do you actually get back to?</legend>
+    <div class="chips" data-one="back">Almost all of it|About half|A few things|Almost none</div>
+  </fieldset>
+
+  <fieldset>
+    <legend>3. What's the last thing you saved and never got back to?</legend>
+    <p class="hint">A sentence or two. An article, a recipe, a school form, a gift idea.</p>
+    <textarea name="story" rows="4" maxlength="1200"></textarea>
+  </fieldset>
+
+  <fieldset>
+    <legend>4. How often would you open a feed that ends each day?</legend>
+    <div class="chips" data-one="often">Every day|A few times a week|Once a week or so|Not sure yet</div>
+  </fieldset>
+
+  <fieldset>
+    <legend>5. Will you tell us what's broken?</legend>
+    <div class="chips" data-one="feedback">Yes, a short note every week or two|When something breaks or bugs me|Probably not</div>
+  </fieldset>
+
+  <fieldset>
+    <legend>6. How did you hear about Shoebox? <span class="opt">Optional</span></legend>
+    <input name="heard" maxlength="120" placeholder="LinkedIn, a friend…">
+  </fieldset>
+
+  <label class="trap" aria-hidden="true">Website<input name="website" tabindex="-1" autocomplete="off"></label>
+
+  <p class="err" id="err" role="alert"></p>
+  <button class="btn gold" type="submit" id="send">Ask for an invite</button>
+  <p class="hint small">Your answers are kept for 90 days to decide on invites, then deleted. <a href="privacy">Privacy</a></p>
+</form>
+
+<div class="contact done" id="done" hidden tabindex="-1">
+  <h2>You're on the list.</h2>
+  <p>Thanks. If there's room in the next batch, an invite comes to your Apple ID email from TestFlight. Meanwhile, Shoebox works in your browser today.</p>
+  <a class="btn gold" href="./?app=1">Open Shoebox</a>
+</div>
+</main>
+
+<footer class="foot"><div class="wrap">
+  <a href="welcome">Home</a><a href="support">Support</a><a href="privacy">Privacy</a>
+  <span class="made">Made by Graham D. at <a href="https://tangomike.app">tangomike.app</a></span>
+</div></footer>
+
+<script>
+(function () {
+  var RELAY = "https://shoebox-api.tangomike.app";
+  var PLACES = ["Texts to myself", "Screenshots", "Notes app", "Starred or snoozed email", "Open browser tabs", "Bookmarks", "A read-later app", "A paper notebook", "I don't really save things"];
+  var form = document.getElementById("beta"), err = document.getElementById("err"), send = document.getElementById("send");
+  var esc = function (s) { return s.replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); };
+  document.getElementById("places").innerHTML = PLACES.map(function (p) { return '<label><input type="checkbox" name="places" value="' + esc(p) + '"><span>' + esc(p) + "</span></label>"; }).join("");
+  [].forEach.call(document.querySelectorAll("[data-one]"), function (box) {
+    var name = box.getAttribute("data-one");
+    box.setAttribute("role", "radiogroup");
+    box.innerHTML = box.textContent.split("|").map(function (v) { return '<label><input type="radio" name="' + name + '" value="' + esc(v) + '"><span>' + esc(v) + "</span></label>"; }).join("");
+  });
+  // Picking "I don't really save things" clears the others, and the reverse.
+  form.addEventListener("change", function (e) {
+    if (e.target.name !== "places" || !e.target.checked) return;
+    var none = e.target.value === PLACES[PLACES.length - 1];
+    [].forEach.call(form.querySelectorAll('input[name="places"]'), function (b) { if (b !== e.target && (none || b.value === PLACES[PLACES.length - 1])) b.checked = false; });
+  });
+  var val = function (n) { var el = form.querySelector('[name="' + n + '"]:checked') || (form.elements[n] && form.elements[n].value !== undefined ? form.elements[n] : null); return el ? String(el.value || "").trim() : ""; };
+  form.addEventListener("submit", function (e) {
+    e.preventDefault();
+    err.textContent = "";
+    var body = {
+      name: form.elements.name.value.trim(), email: form.elements.email.value.trim(),
+      iphone: val("iphone"), back: val("back"), often: val("often"), feedback: val("feedback"),
+      places: [].map.call(form.querySelectorAll('input[name="places"]:checked'), function (b) { return b.value; }),
+      story: form.elements.story.value.trim(), heard: form.elements.heard.value.trim(), website: form.elements.website.value
+    };
+    var missing = !body.name ? "Please add your name." : !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(body.email) ? "Please add the email you use for your Apple ID." : !body.iphone ? "Please say whether you have an iPhone." : (!body.back || !body.often || !body.feedback) ? "Please answer questions 2, 4 and 5." : "";
+    if (missing) { err.textContent = missing; return; }
+    send.disabled = true; send.textContent = "Sending…";
+    fetch(RELAY + "/beta", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
+      .then(function (res) { return res.json().catch(function () { return {}; }).then(function (d) { if (!res.ok) throw new Error((d.error && d.error.message) || "Something went wrong."); }); })
+      .then(function () { form.hidden = true; var d = document.getElementById("done"); d.hidden = false; d.focus(); window.scrollTo(0, 0); })
+      .catch(function (x) { err.textContent = (x && x.message && !/fetch|network|load failed/i.test(x.message)) ? x.message : "Couldn't send. Check your connection, or email support@inmyshoebox.com."; send.disabled = false; send.textContent = "Ask for an invite"; });
+  });
+})();
+</script>
+</body>
+</html>
