@@ -1,6 +1,6 @@
 # Shoebox
 
-*Keep it. Come back to it.*
+*Your own feed.*
 
 <img src="icons/logo.svg" alt="" width="72" align="right">
 
@@ -126,7 +126,7 @@ Bump `VERSION` in `sw.js` and `src/app.js` with each release so installed copies
 
 ## Design
 
-**Grape soda.** A lavender-white page, deep grape ink and one violet signature (`#7B3FF2`) for buttons, tabs and the mark. Dark mode is a deep plum (`#1B1033`), not black, with the same violet. Your own words carry a soft gold underline. Later and Let go are tinted chips; Done is a solid violet pill. The + button is gold (`#FFD23F`), so it never blends with the violet buttons scrolling under it. Photos carry the rest of the colour, and each tints its post faintly. Instrument Serif for your own words and headlines, Geist for everything else. The mark is a box with its lid lifted and things standing inside; the app opens on a loading screen with the mark, the name and *Keep it. Come back to it.*
+**Grape soda.** A lavender-white page, deep grape ink and one violet signature (`#7B3FF2`) for buttons, tabs and the mark. Dark mode is a deep plum (`#1B1033`), not black, with the same violet. Your own words carry a soft gold underline. Later and Let go are tinted chips; Done is a solid violet pill. The + button is gold (`#FFD23F`), so it never blends with the violet buttons scrolling under it. Photos carry the rest of the colour, and each tints its post faintly. Instrument Serif for your own words and headlines, Geist for everything else. The mark is a box with its lid lifted and things standing inside; the app opens on a loading screen with the mark, the name and *Your own feed.*
 
 On iPhone, the installed app blurs a band under the status bar; the header, sheets and reader all start below it.
 
