@@ -195,7 +195,7 @@ import { fileAt } from "../relay/perplexity-relay.js";
 test("a linked PDF is fetched for the app; web pages and private addresses aren't", async () => {
   const real = globalThis.fetch;
   try {
-    globalThis.fetch = async (u) => new Response(u.includes("cal") ? "%PDF-1.7 calendar" : "<html>hi</html>", { status: 200 });
+    globalThis.fetch = async (u) => new Response(/calendar/i.test(u) ? "%PDF-1.7 calendar" : "<html>hi</html>", { status: 200 });
     const ok = await (await fileAt("https://resources.finalsite.net/images/x/TraditionalCalendar11-5-25.pdf", {})).json();
     assert.equal(ok.name, "TraditionalCalendar11-5-25.pdf");
     assert.equal(Buffer.from(ok.data, "base64").toString(), "%PDF-1.7 calendar");
