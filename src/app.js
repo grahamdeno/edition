@@ -41,7 +41,7 @@ import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 import * as songs from "./songs.js";
 import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone, mixStories, followOrder } from "./onboard.js";
 
-export const VERSION = "4.64.0";
+export const VERSION = "4.64.1";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -3333,15 +3333,30 @@ function tintVisible(root) {
   });
 }
 
+/** The Later date chip names the day being chosen, or asks for one. */
+function laterDateLabel(inp) {
+  const dl = inp.parentElement?.querySelector(".dl"), u = fromDateInput(inp.value), min = fromDateInput(inp.min);
+  if (dl) dl.textContent = u && (!min || u >= min) ? shortDate(u) : "Pick a date";
+}
+
 /* ---- What a tap does ---- */
 
 /* Taps anywhere on the screen go through one listener, set once at start. */
 function bindScreen() {
   app.addEventListener("click", onTimelineClick);
+  // 4.64.1: iPhone fills an empty date field with today the moment its picker opens, and says it changed.
+  // So a change only shows the day on the chip; the choice is made when the picker closes, and only a day
+  // from tomorrow on counts. Closing it on today (or nothing) leaves the post where it was.
   app.addEventListener("change", (e) => {
     const inp = e.target.closest?.("[data-later-date]");
-    const u = inp && fromDateInput(inp.value);
-    if (u) laterTo(inp.dataset.laterDate, u);
+    if (inp) laterDateLabel(inp);
+  });
+  app.addEventListener("focusout", (e) => {
+    const inp = e.target.closest?.("[data-later-date]");
+    if (!inp) return;
+    const u = fromDateInput(inp.value), min = fromDateInput(inp.min);
+    if (u && (!min || u >= min)) laterTo(inp.dataset.laterDate, u);
+    else { inp.value = ""; laterDateLabel(inp); }
   });
   // Double-tap a photo to love it.
   let lastTap = { id: "", at: 0 };
