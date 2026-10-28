@@ -400,3 +400,10 @@ test("school posts carry the child's name, which never goes to the AI", () => {
   assert.equal(nameIn("{child}'s concert is Thursday", "Gunner"), "Gunner's concert is Thursday");
   assert.equal(nameIn("{child}'s concert is Thursday", ""), "Your child's concert is Thursday");
 });
+
+test("parseJson forgives trailing commas and curly quotes", async () => {
+  const { parseJson } = await import("../src/ai.js");
+  assert.deepEqual(parseJson('```json\n{"questions": [{"q": "a",},],}\n```'), { questions: [{ q: "a" }] });
+  assert.deepEqual(parseJson('{“q”: "b"}'), { q: "b" });
+  assert.throws(() => parseJson('{"q": "unfinished'), /malformed/);
+});

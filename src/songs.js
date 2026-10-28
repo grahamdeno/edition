@@ -48,3 +48,21 @@ export function ordinal(n) {
   const s = ["th", "st", "nd", "rd"], v = n % 100;
   return `${n}${s[(v - 20) % 10] || s[v] || s[0]}`;
 }
+
+/** The cover's strongest colour: pixels grouped by hue, the most vivid group wins, averaged (grey covers fall back to the average). */
+export function coverTint(d) {
+  const groups = Array.from({ length: 12 }, () => ({ r: 0, g: 0, b: 0, w: 0 }));
+  let all = { r: 0, g: 0, b: 0, w: 0 };
+  for (let i = 0; i < d.length; i += 4) {
+    const r = d[i], g = d[i + 1], b = d[i + 2], mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 510, c = (mx - mn) / 255;
+    all.r += r; all.g += g; all.b += b; all.w++;
+    if (c < 0.2 || l < 0.12 || l > 0.92) continue;
+    let h = mx === mn ? 0 : mx === r ? ((g - b) / (mx - mn)) % 6 : mx === g ? (b - r) / (mx - mn) + 2 : (r - g) / (mx - mn) + 4;
+    h = (h * 60 + 360) % 360;
+    const k = groups[Math.floor(h / 30)], w = c * c;
+    k.r += r * w; k.g += g * w; k.b += b * w; k.w += w;
+  }
+  const best = groups.reduce((a, k) => (k.w > a.w ? k : a), { w: 0 });
+  const src = best.w > 0.5 ? best : all;
+  return `rgb(${Math.round(src.r / src.w)}, ${Math.round(src.g / src.w)}, ${Math.round(src.b / src.w)})`;
+}

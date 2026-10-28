@@ -32,6 +32,8 @@ export const I = {
   play: svg('<path d="M8 5.5v13l10.5-6.5z"/>'),
   menu: svg('<circle cx="6" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="18" cy="12" r="1.3"/>'),
   next: svg('<path d="M9 5l7 7-7 7"/>'),
+  pause: svg('<path d="M8.5 5.5v13M15.5 5.5v13"/>'),
+  shuffle: svg('<path d="M4 7h3.5c4 0 5 10 9 10H20M4 17h3.5c1.6 0 2.7-1.6 3.6-3.6M13 9.6C13.9 8.1 15 7 16.5 7H20M17.5 4.5 20 7l-2.5 2.5M17.5 14.5 20 17l-2.5 2.5"/>'),
   prev: svg('<path d="M15 5l-7 7 7 7"/>'),
   down: svg('<path d="M12 5v13M6.5 12.5L12 18l5.5-5.5"/>'),
   edit: svg('<path d="M4.5 19.5l1-4.2L15.8 5a2 2 0 0 1 2.9 0l.3.3a2 2 0 0 1 0 2.9L8.7 18.5z"/><path d="M13.5 7.3l3.2 3.2"/>'),

@@ -179,7 +179,10 @@ export function parseJson(text) {
   if (start === Infinity) throw new AiError("The reply had no JSON in it.");
   const close = src[start] === "{" ? "}" : "]";
   const end = src.lastIndexOf(close);
-  try { return JSON.parse(src.slice(start, end + 1)); } catch { throw new AiError("The reply's JSON was malformed."); }
+  const body = src.slice(start, end + 1);
+  try { return JSON.parse(body); } catch { /* try the usual slips below */ }
+  // Trailing commas and smart quotes around keys are the common model slips.
+  try { return JSON.parse(body.replace(/,\s*([}\]])/g, "$1").replace(/[\u201c\u201d]/g, '"')); } catch { throw new AiError("The reply's JSON was malformed."); }
 }
 
 /** Check a key works with a tiny request. */
@@ -913,7 +916,10 @@ export async function cpmaiQuestions({ count = 3, seed = 0, recent = [] } = {}) 
     "",
     'Return JSON: {"questions": [{"topic": string (short), "q": string (max 320 chars), "options": array of 4 or 5 strings (max 140 chars each), "answer": array of the correct option indexes (one, or two for choose-two), "why": string (max 300 chars: why the answer is right and the best distractor is wrong)}]}',
   ].filter(Boolean).join("\n");
-  const out = parseJson(textOf(await call({ content: prompt, system: "You write accurate certification practice questions. Reply with JSON only.", maxTokens: 2500, model: QUIZ_MODEL })));
+  // A long reply can be cut off mid-JSON; one more try usually comes back whole.
+  const ask = async () => parseJson(textOf(await call({ content: prompt, system: "You write accurate certification practice questions. Reply with JSON only, with straight double quotes and no comments.", maxTokens: 4000, model: QUIZ_MODEL })));
+  let out;
+  try { out = await ask(); } catch (e) { if (!/JSON/.test(e.message)) throw e; out = await ask(); }
   return cleanQuestions(out, count);
 }
 

@@ -32,3 +32,10 @@ test("answers shape the picks and the tally", () => {
   assert.deepEqual(songStats(log, T + 3 * D), { month: 1, loved: 1 });
   assert.equal(ordinal(1), "1st"); assert.equal(ordinal(2), "2nd"); assert.equal(ordinal(3), "3rd"); assert.equal(ordinal(11), "11th"); assert.equal(ordinal(22), "22nd");
 });
+
+test("cover tint: the most vivid colour wins over a bigger grey area", async () => {
+  const { coverTint } = await import("../src/songs.js");
+  const px = (n, rgb) => Array.from({ length: n }, () => [...rgb, 255]).flat();
+  assert.equal(coverTint(new Uint8ClampedArray([...px(200, [128, 128, 128]), ...px(56, [230, 40, 40])])), "rgb(230, 40, 40)");
+  assert.equal(coverTint(new Uint8ClampedArray(px(10, [100, 100, 100]))), "rgb(100, 100, 100)", "grey cover: plain average");
+});
