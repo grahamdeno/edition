@@ -37,7 +37,7 @@
  */
 
 /** What this copy of the relay can do; the app checks it to say when an update is needed. */
-export const RELAY_VERSION = 15;
+export const RELAY_VERSION = 16;
 export const RELAY_FEATURES = ["preview", "image", "photo", "agent", "push", "remind", "ical", "nhl", "inbox", "apple", "ai", "stats", "stories"];
 
 const ALLOWED_ORIGINS = ["https://shoebox.tangomike.app", "https://grahamdeno.github.io"];
@@ -801,6 +801,19 @@ async function appleToken(env, kind, now = Math.floor(Date.now() / 1000)) {
   return token;
 }
 
+/** The best Apple Music catalog match for a title and artist, or null. */
+async function findSong(env, title, artist = "") {
+  const term = `${title} ${artist}`.trim();
+  const r = await fetch(`https://api.music.apple.com/v1/catalog/us/search?types=songs&limit=5&term=${encodeURIComponent(term)}`, { headers: { authorization: `Bearer ${await appleToken(env, "music")}` } });
+  const d = r.ok ? await r.json() : {};
+  const songs = d?.results?.songs?.data || [];
+  const best = songs.find((x) => x.attributes?.name?.toLowerCase() === title.toLowerCase() && (!artist || x.attributes?.artistName?.toLowerCase().includes(artist.toLowerCase().split(/[,&]/)[0].trim()))) || songs[0];
+  if (!best) return null;
+  const a = best.attributes || {};
+  return { id: best.id, name: a.name, artist: a.artistName, album: a.albumName, url: a.url, preview: a.previews?.[0]?.url || null,
+    artwork: a.artwork?.url ? a.artwork.url.replace("{w}", "600").replace("{h}", "600") : null, year: (a.releaseDate || "").slice(0, 4) || null };
+}
+
 async function appleRoute(request, env, pathname, params, cors) {
   const out = (status, body, extra = {}) => new Response(JSON.stringify(body), { status, headers: { ...cors, "content-type": "application/json", ...extra } });
   // The Shortcut on your phone posts the song; it has no web origin, so it proves itself with the song key.
@@ -830,6 +843,12 @@ async function appleRoute(request, env, pathname, params, cors) {
       if (!res.ok) return out(502, { error: { message: `Apple Weather said ${res.status}.` } });
       return new Response(await res.text(), { headers: { ...cors, "content-type": "application/json", "cache-control": "private, max-age=600" } });
     }
+    // A song from the phone's own library, looked up in Apple Music: its page (to open it there), a 30-second preview and artwork.
+    if (pathname === "/apple/find") {
+      const title = String(params.get("title") || "").slice(0, 200), artist = String(params.get("artist") || "").slice(0, 200);
+      if (!title) return out(400, { error: { message: "No title." } });
+      return out(200, { match: await findSong(env, title, artist) }, { "cache-control": "private, max-age=86400" });
+    }
     if (pathname === "/apple/song") {
       // The app (owner of the inbox) reads the song of the day, and gets the key for its Shortcut.
       const kv = env.SHOEBOX;
@@ -851,17 +870,8 @@ async function appleRoute(request, env, pathname, params, cors) {
       if (song) {
         match = song.match || null;
         if (!match) {
-          const term = `${song.title} ${song.artist}`.trim();
-          const r = await fetch(`https://api.music.apple.com/v1/catalog/us/search?types=songs&limit=5&term=${encodeURIComponent(term)}`, { headers: { authorization: `Bearer ${await appleToken(env, "music")}` } });
-          const d = r.ok ? await r.json() : {};
-          const songs = d?.results?.songs?.data || [];
-          const best = songs.find((x) => x.attributes?.name?.toLowerCase() === song.title.toLowerCase() && (!song.artist || x.attributes?.artistName?.toLowerCase().includes(song.artist.toLowerCase().split(/[,&]/)[0].trim()))) || songs[0];
-          if (best) {
-            const a = best.attributes || {};
-            match = { id: best.id, name: a.name, artist: a.artistName, album: a.albumName, url: a.url, preview: a.previews?.[0]?.url || null,
-              artwork: a.artwork?.url ? a.artwork.url.replace("{w}", "600").replace("{h}", "600") : null, year: (a.releaseDate || "").slice(0, 4) || null };
-            await kv.put("song", JSON.stringify({ ...song, match }));
-          }
+          match = await findSong(env, song.title, song.artist);
+          if (match) await kv.put("song", JSON.stringify({ ...song, match }));
         }
       }
       return out(200, { song, match, songKey }, { "cache-control": "no-store" });
