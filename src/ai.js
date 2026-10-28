@@ -1037,6 +1037,31 @@ export async function topicStories(topic, { place = "" } = {}, retried = false) 
   return [];
 }
 
+/** Today's quotes from a person or on a theme: found once a day on the relay, shared, each with its source. */
+export async function dailyQuotes(from, retried = false) {
+  if (!settings.consented()) throw new AiError("AI is off. Turn it on in Settings › AI.");
+  const base = relayBase();
+  await ensureSignedUp(base);
+  for (let tries = 0; tries < 5; tries++) {
+    let res;
+    try {
+      res = await fetch(`${base}/ai/quotes`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-shoebox-device": safeGet(DEVICE_STORE), "x-shoebox-token": safeGet(TOKEN_STORE) },
+        body: JSON.stringify({ from }),
+      });
+    } catch { throw new AiError("Couldn't reach Shoebox's AI. Check your connection.", 0); }
+    const data = await res.json().catch(() => ({}));
+    const trouble = signUpTrouble(res, data, retried);
+    if (trouble === "retry") return dailyQuotes(from, true);
+    if (trouble === "closed") throw new AiError(WEB_AI_NOTE, 403);
+    if (res.status === 202) { await new Promise((r) => setTimeout(r, Math.min(30, data.retry || 15) * 1000)); continue; }
+    if (!res.ok || data.error) throw new AiError(data?.error?.message || `Quotes failed (${res.status}).`, data.status || res.status);
+    return data.quotes || [];
+  }
+  return [];
+}
+
 /** This install's AI sign-up headers (empty when it hasn't signed up), for owner-only relay calls. */
 export function ownerHeaders() {
   const d = safeGet(DEVICE_STORE), t = safeGet(TOKEN_STORE);

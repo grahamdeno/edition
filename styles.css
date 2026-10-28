@@ -1108,3 +1108,6 @@ details.adv > summary, .group details.adv > summary, .ag-more summary { min-heig
 .cam-wait { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; padding: 14px; border-radius: 14px; background: var(--sig-soft); color: var(--sig-ink); font-size: 0.9375rem; font-weight: 600; }
 .cam-wait .spin { width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--line-2); border-top-color: var(--sig); animation: spin 0.9s linear infinite; flex: none; }
 .cam-wait.err { background: transparent; color: var(--warn); padding: 4px 0; font-weight: 500; }
+/* Quote of the day */
+.q-src { margin-left: 4px; color: var(--sig-ink); font-weight: 600; text-underline-offset: 3px; }
+.q-from .q-picks { margin-top: 10px; gap: 8px; }
