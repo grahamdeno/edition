@@ -41,7 +41,7 @@ import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 import * as songs from "./songs.js";
 import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone, mixStories, followOrder } from "./onboard.js";
 
-export const VERSION = "4.53.1";
+export const VERSION = "4.54.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -1102,7 +1102,7 @@ function render({ top = false } = {}) {
   bindTimeline(tl);
   tintVisible(tl);
   if (state.reveal) $("#panel", tl)?.classList.add("reveal");
-  requestAnimationFrame(() => { placeSpot(); coachPass(tl); });
+  requestAnimationFrame(() => { placeSpot(); coachPass(tl); tintSongCard(); });
   updateWidget();
 }
 
@@ -1428,25 +1428,18 @@ function morningHtml() {
   if (m.song && c.song?.native) {
     const sg = c.song;
     if (!sg.looked && !findInAppleMusic.busy) { findInAppleMusic.busy = true; setTimeout(() => findInAppleMusic().finally(() => { findInAppleMusic.busy = false; }), 0); }
-    const last = sg.lastPlayed ? `You last played it ${friendlyWhen(sg.lastPlayed)}` : "";
+    const st = songs.songStats(songLog());
     cards.push(card("song", `<span class="av av-day" aria-hidden="true">${I.music}</span>`, `<span class="who">Song of the day</span>${cardMore("cards", "Daily cards")}`,
-      `<div class="song">${sg.art || sg.artwork ? `<img class="art" alt="" src="${esc(sg.art || sg.artwork)}" referrerpolicy="no-referrer" onerror="this.remove()">` : ""}
-        <div class="song-t"><p class="ttl">${esc(sg.title)}</p><p class="wx-line">${esc(sg.artist || "")}${sg.year ? ` · ${esc(sg.year)}` : ""}</p>${last ? `<p class="wx-line">${esc(last)}</p>` : ""}</div></div>
-       <div class="song-acts">${sg.preview ? `<button class="btn sm" type="button" data-preview="${esc(sg.preview)}">${I.play}<span>Preview</span></button>` : ""}
-         ${sg.url ? `<a class="btn sm primary" href="${esc(sg.url)}" target="_blank" rel="noopener" data-song-open="${esc(sg.id)}">Open in Apple Music</a>` : ""}
-         <button class="btn sm" type="button" data-song-next="1">Another one</button></div>
-       ${(() => { const st = songs.songStats(songLog()); return st.month || st.loved ? `<p class="song-tally">${st.month ? `${st.month} song${st.month === 1 ? "" : "s"} brought back this month` : ""}${st.month && st.loved ? " · " : ""}${st.loved ? `${st.loved} in your Rediscovered playlist` : ""}</p>` : ""; })()}`));
+      songCard({ art: sg.art || sg.artwork, title: sg.title, artist: sg.artist, year: sg.year, when: sg.lastPlayed, preview: sg.preview, url: sg.url, openId: sg.id, next: true, tint: sg.tint,
+        tally: [st.month ? `${st.month} song${st.month === 1 ? "" : "s"} brought back this month` : "", st.loved ? `${st.loved} in your Rediscovered playlist` : ""].filter(Boolean).join(" · ") })));
   } else if (m.song && nativeCan("music") && c.songStatus === "empty") {
     cards.push(card("song", `<span class="av av-day" aria-hidden="true">${I.music}</span>`, `<span class="who">Song of the day</span>${cardMore("cards", "Daily cards")}`,
       `<p class="wx-line">Song of the day picks from songs you've played in the Music app. Play a few there and one shows up here tomorrow.</p>`));
   } else if (m.song && c.song) {
     const sg = c.song, mt = sg.match || {};
-    const last = sg.lastPlayed ? (() => { const t = Date.parse(sg.lastPlayed); return Number.isFinite(t) ? `last played ${friendlyWhen(t)}` : ""; })() : "";
+    const t = sg.lastPlayed ? Date.parse(sg.lastPlayed) : NaN;
     cards.push(card("song", `<span class="av av-day" aria-hidden="true">${I.music}</span>`, `<span class="who">Song of the day</span>${cardMore("cards", "Daily cards")}`,
-      `<div class="song">${mt.artwork ? `<img class="art" alt="" src="${esc(mt.artwork)}" referrerpolicy="no-referrer" onerror="this.remove()">` : ""}
-        <div class="song-t"><p class="ttl">${esc(mt.name || sg.title)}</p><p class="wx-line">${esc(mt.artist || sg.artist || "")}${mt.year ? ` · ${esc(mt.year)}` : ""}</p>${last ? `<p class="wx-line">You ${esc(last)}</p>` : ""}</div></div>
-       <div class="song-acts">${mt.preview ? `<button class="btn sm" type="button" data-preview="${esc(mt.preview)}">${I.play}<span>Preview</span></button>` : ""}
-         ${mt.url ? `<a class="btn sm primary" href="${esc(mt.url)}" target="_blank" rel="noopener">Open in Apple Music</a>` : ""}</div>`));
+      songCard({ art: mt.artwork, title: mt.name || sg.title, artist: mt.artist || sg.artist, year: mt.year, when: Number.isFinite(t) ? t : 0, preview: mt.preview, url: mt.url, tint: sg.tint })));
   }
   if (m.hockey) for (const g of c.games || []) {
     if (!g.done) continue;
@@ -1543,16 +1536,63 @@ async function dayAction(what) {
   render({ top: false });
 }
 
-/** Play or stop a song's 30-second preview. */
+/**
+ * The song card: the album cover large, with the preview's play button on it (a ring fills as it plays),
+ * when you last played it, one way to open it in Apple Music, and a shuffle button for another one.
+ * The card takes its colour from the cover.
+ */
+function songCard({ art = "", title = "", artist = "", year = "", when = 0, preview = "", url = "", openId = "", next = false, tint = "", tally = "" }) {
+  const ago = when ? friendlyWhen(when) : "";
+  return `<div class="disc"${tint ? ` style="--tint:${esc(tint)}"` : ""}>
+    <div class="disc-top">
+      <div class="disc-art">${art ? `<img alt="" src="${esc(art)}" referrerpolicy="no-referrer" onerror="this.remove()" data-tint-from="1">` : `<span class="disc-blank">${I.music}</span>`}
+        ${preview ? `<button class="disc-play" type="button" data-preview="${esc(preview)}" aria-label="Play a preview of ${esc(title)}"><svg class="ring" viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="21"/><circle class="fill" cx="24" cy="24" r="21"/></svg>${I.play}${I.pause}</button>` : ""}</div>
+      <div class="disc-t">
+        ${ago ? `<p class="disc-when">Last played ${esc(ago)}</p>` : ""}
+        <p class="ttl">${esc(title)}</p>
+        <p class="by">${esc(artist || "")}${year ? ` · ${esc(year)}` : ""}</p>
+      </div>
+    </div>
+    <div class="disc-acts">
+      ${url ? `<a class="btn primary" href="${esc(url)}" target="_blank" rel="noopener"${openId ? ` data-song-open="${esc(openId)}"` : ""}>${I.music}<span>Play in Apple Music</span></a>` : ""}
+      ${next ? `<button class="btn disc-next" type="button" data-song-next="1" aria-label="Another song" title="Another song">${I.shuffle}</button>` : ""}
+    </div>
+    ${tally ? `<p class="song-tally">${esc(tally)}</p>` : ""}
+  </div>`;
+}
+
+/** The cover's colour, kept with today's song so the card is tinted from the first paint. */
+function tintSongCard() {
+  const img = $("#panel .disc-art img[data-tint-from]");
+  const c = morningCache();
+  if (!img || !c.song || c.song.tint) return;
+  const probe = new Image();
+  probe.crossOrigin = "anonymous";
+  probe.onload = () => {
+    try {
+      const cv = document.createElement("canvas"); cv.width = cv.height = 16;
+      const g = cv.getContext("2d"); g.drawImage(probe, 0, 0, 16, 16);
+      const d = g.getImageData(0, 0, 16, 16).data;
+      const tint = songs.coverTint(d);
+      const now = morningCache(); if (!now.song) return;
+      now.song.tint = tint; saveMorningCache(now);
+      img.closest(".disc")?.style.setProperty("--tint", tint);
+    } catch { /* the cover's server doesn't allow reading it: the card keeps its plain colour */ }
+  };
+  probe.src = img.src;
+}
+
+/** Play or stop a song's 30-second preview; the ring around the button fills as it plays. */
 let previewAudio = null;
 function playPreview(btn) {
   const src = btn.dataset.preview;
-  const label = $("span", btn);
-  if (previewAudio && !previewAudio.paused && previewAudio.src === src) { previewAudio.pause(); label.textContent = "Preview"; return; }
-  if (previewAudio) previewAudio.pause();
+  const show = (on) => { btn.classList.toggle("playing", on); btn.setAttribute("aria-label", on ? "Stop the preview" : "Play a preview"); if (!on) btn.style.setProperty("--p", 0); };
+  if (previewAudio && !previewAudio.paused && previewAudio.src === src) { previewAudio.pause(); show(false); return; }
+  if (previewAudio) { previewAudio.pause(); document.querySelectorAll(".disc-play.playing").forEach((x) => { x.classList.remove("playing"); x.style.setProperty("--p", 0); }); }
   previewAudio = new Audio(src);
-  previewAudio.addEventListener("ended", () => { label.textContent = "Preview"; });
-  previewAudio.play().then(() => { label.textContent = "Stop"; }).catch(() => { label.textContent = "Preview"; });
+  previewAudio.addEventListener("timeupdate", () => { const a = previewAudio; if (a.duration) btn.style.setProperty("--p", (a.currentTime / a.duration).toFixed(3)); });
+  previewAudio.addEventListener("ended", () => show(false));
+  previewAudio.play().then(() => show(true)).catch(() => show(false));
 }
 
 /** A tap on a CPMAI option: pick it; once enough are picked, show the answer. */
