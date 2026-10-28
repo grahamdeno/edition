@@ -15,7 +15,11 @@
  *   POST /remind        keep a reminder: { id, token, at, title, body, url, sub }
  *   DELETE /remind/:id  forget one (?token= must match)
  *   (every 15 minutes)  send the reminders that are due, then forget them
- *   POST /ai/register   a device id and token for AI calls
+ *   POST /ai/register   a device id and token for AI calls (owner devices only,
+ *                       unless AI_ATTEST=off)
+ *   POST /ai/challenge  App Attest: a one-time challenge
+ *   POST /ai/attest     App Attest: an iPhone proves it's Shoebox, gets a
+ *                       device id and token that can use AI
  *   POST /ai/messages   Claude calls, with Shoebox's own key (ANTHROPIC_API_KEY
  *                       secret): allowed models only, capped size, a daily
  *                       budget per device and for the whole relay
@@ -40,8 +44,8 @@
  */
 
 /** What this copy of the relay can do; the app checks it to say when an update is needed. */
-export const RELAY_VERSION = 23;
-export const RELAY_FEATURES = ["preview", "image", "photo", "agent", "push", "remind", "ical", "nhl", "inbox", "apple", "ai", "stats", "stories", "beta"];
+export const RELAY_VERSION = 24;
+export const RELAY_FEATURES = ["preview", "image", "photo", "agent", "push", "remind", "ical", "nhl", "inbox", "apple", "ai", "stats", "stories", "beta", "attest"];
 
 // inmyshoebox.com is home; shoebox.tangomike.app stays allowed while phones move over.
 const ALLOWED_ORIGINS = ["https://inmyshoebox.com", "https://shoebox.tangomike.app", "https://grahamdeno.github.io"];
@@ -981,7 +985,7 @@ async function aiRoute(request, env, pathname, cors, ctx = null) {
   const today = dayOf();
 
   if (request.method === "POST" && pathname === "/ai/register") {
-    // A few installs a day per network address; App Attest replaces this before launch.
+    // A few installs a day per network address. These ids can use AI only on owner devices (see App Attest below).
     const ip = request.headers.get("cf-connecting-ip") || "unknown";
     const rk = `air:${ip}:${today}`;
     const n = await spent(kv, rk);
@@ -991,6 +995,8 @@ async function aiRoute(request, env, pathname, cors, ctx = null) {
     await kv.put(`aid:${device}`, JSON.stringify({ hash: await sha256(token), at: Date.now() }));
     return aiJson(200, { device, token }, cors);
   }
+
+  if (pathname === "/ai/challenge" || pathname === "/ai/attest") return attestRoute(request, env, pathname, cors);
 
   const device = request.headers.get("x-shoebox-device") || "";
   const token = request.headers.get("x-shoebox-token") || "";
@@ -1013,6 +1019,8 @@ async function aiRoute(request, env, pathname, cors, ctx = null) {
   if (request.method === "GET" && pathname === "/ai/usage") {
     return aiJson(200, { device, owner, cents: mine / 100, limit: owner ? null : deviceCap / 100 }, cors);
   }
+  // Shoebox pays for AI, so it's for the iPhone app (proved by App Attest) and the owner's devices, not any web page.
+  if (attestRequired(env) && !owner && !rec.attested) return aiJson(403, { error: { message: "AI comes with the Shoebox iPhone app.", code: "attest" } }, cors);
   if (request.method === "POST" && pathname === "/ai/cams") return camsRoute(request, env, { kv, ctx, cors, charge, over: all >= allCap });
   if (request.method === "POST" && pathname === "/ai/stories") return storiesRoute(request, env, { kv, today, owner, ctx, cors, charge, over: all >= allCap, mineOver: !owner && (mine >= deviceCap || net >= ipCap) });
   if (request.method !== "POST" || pathname !== "/ai/messages") return json(404, "Not found.", cors);
@@ -1457,4 +1465,220 @@ async function betaRoute(request, env, cors) {
   const post = betaPost(r, verdict);
   await kv.put(`m:${id}`, JSON.stringify({ id, at: Date.now(), from: "beta@inmyshoebox.com", fromName: "Shoebox beta", ...post, links: [], attachments: [] }), { expirationTtl: 30 * 86400 });
   return ok();
+}
+
+/* ================= App Attest: AI for the iPhone app only =================
+ * Anyone can open the web app, so the relay's AI (which Shoebox pays for) is
+ * kept for installs that prove they are the real Shoebox app on a real iPhone,
+ * using Apple's App Attest, plus the owner's own devices (AI_OWNER_DEVICES).
+ *
+ *   POST /ai/challenge  a one-time challenge, good for 5 minutes
+ *   POST /ai/attest     { challenge, keyId, attestation } from DeviceCheck:
+ *                       checked against Apple's root certificate, then a
+ *                       device id and token like /ai/register's, marked attested
+ *
+ * AI_ATTEST=off in the dashboard opens AI to every install again (an escape hatch).
+ */
+const APPLE_APP_ATTEST_ROOT = "MIICITCCAaegAwIBAgIQC/O+DvHN0uD7jG5yH2IXmDAKBggqhkjOPQQDAzBSMSYwJAYDVQQDDB1BcHBsZSBBcHAgQXR0ZXN0YXRpb24gUm9vdCBDQTETMBEGA1UECgwKQXBwbGUgSW5jLjETMBEGA1UECAwKQ2FsaWZvcm5pYTAeFw0yMDAzMTgxODMyNTNaFw00NTAzMTUwMDAwMDBaMFIxJjAkBgNVBAMMHUFwcGxlIEFwcCBBdHRlc3RhdGlvbiBSb290IENBMRMwEQYDVQQKDApBcHBsZSBJbmMuMRMwEQYDVQQIDApDYWxpZm9ybmlhMHYwEAYHKoZIzj0CAQYFK4EEACIDYgAERTHhmLW07ATaFQIEVwTtT4dyctdhNbJhFs/Ii2FdCgAHGbpphY3+d8qjuDngIN3WVhQUBHAoMeQ/cLiP1sOUtgjqK9auYen1mMEvRq9Sk3Jm5X8U62H+xTD3FE9TgS41o0IwQDAPBgNVHRMBAf8EBTADAQH/MB0GA1UdDgQWBBSskRBTM72+aEH/pwyp5frq5eWKoTAOBgNVHQ8BAf8EBAMCAQYwCgYIKoZIzj0EAwMDaAAwZQIwQgFGnByvsiVbpTKwSga0kP0e8EeDS4+sQmTvb7vn53O5+FRXgeLhpJ06ysC5PrOyAjEAp5U4xDgEgllF7En3VcE3iexZZtKeYnpqtijVoyFraWVIyd/dganmrduC1bmTBGwD";
+// The App IDs (Team ID . bundle ID) whose attestations count: Shoebox and Shoebox Me.
+export const APP_ATTEST_APP_IDS = ["7MHDTK68M2.com.grahamdeno.shoebox", "7MHDTK68M2.com.grahamdeno.shoebox.me"];
+
+export const attestRequired = (env) => !/^(off|0|false|no)$/i.test(String(env.AI_ATTEST || ""));
+
+const b64 = {
+  dec: (s) => Uint8Array.from(atob(String(s || "")), (c) => c.charCodeAt(0)),
+  enc: (u) => btoa(String.fromCharCode(...u)),
+};
+const hex = (u) => [...u].map((b) => b.toString(16).padStart(2, "0")).join("");
+const same = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
+const sha256b = async (bytes) => new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+
+/** A small CBOR reader: enough for an attestation object (maps, arrays, strings, bytes, integers). */
+export function cborDecode(u) {
+  let i = 0;
+  const len = (info) => {
+    if (info < 24) return info;
+    const n = { 24: 1, 25: 2, 26: 4, 27: 8 }[info];
+    if (!n) throw new Error("cbor: length");
+    let v = 0;
+    for (let k = 0; k < n; k++) v = v * 256 + u[i++];
+    return v;
+  };
+  const item = () => {
+    if (i >= u.length) throw new Error("cbor: short");
+    const b = u[i++], major = b >> 5, n = len(b & 31);
+    if (major === 0) return n;
+    if (major === 1) return -1 - n;
+    if (major === 2) { const v = u.slice(i, i + n); i += n; return v; }
+    if (major === 3) { const v = new TextDecoder().decode(u.slice(i, i + n)); i += n; return v; }
+    if (major === 4) return Array.from({ length: n }, item);
+    if (major === 5) { const o = {}; for (let k = 0; k < n; k++) { const key = item(); o[key] = item(); } return o; }
+    throw new Error("cbor: type");
+  };
+  return item();
+}
+
+/** A small DER reader: one element at p, as { tag, at (its first byte), start (of contents), end, len }. */
+function der(u, p) {
+  const tag = u[p];
+  let len = u[p + 1], start = p + 2;
+  if (len & 0x80) {
+    const n = len & 0x7f;
+    if (!n || n > 4) throw new Error("der: length");
+    len = 0;
+    for (let k = 0; k < n; k++) len = len * 256 + u[start + k];
+    start += n;
+  }
+  if (start + len > u.length) throw new Error("der: short");
+  return { tag, at: p, start, end: start + len, len };
+}
+function derKids(u, el) {
+  const out = [];
+  for (let p = el.start; p < el.end;) { const k = der(u, p); out.push(k); p = k.end; }
+  return out;
+}
+function oidText(u, el) {
+  const b = u.slice(el.start, el.end), parts = [Math.floor(b[0] / 40), b[0] % 40];
+  let v = 0;
+  for (let k = 1; k < b.length; k++) { v = v * 128 + (b[k] & 0x7f); if (!(b[k] & 0x80)) { parts.push(v); v = 0; } }
+  return parts.join(".");
+}
+function derTime(u, el) {
+  const s = new TextDecoder().decode(u.slice(el.start, el.end));
+  const m = /^(\d{2}|\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})Z$/.exec(s);
+  if (!m) throw new Error("der: time");
+  const y = m[1].length === 2 ? (Number(m[1]) < 50 ? 2000 : 1900) + Number(m[1]) : Number(m[1]);
+  return Date.UTC(y, m[2] - 1, m[3], m[4], m[5], m[6]);
+}
+
+/** The parts of an X.509 certificate App Attest needs. */
+export function readCert(u) {
+  const top = der(u, 0), [tbs, alg, sig] = derKids(u, top);
+  const t = derKids(u, tbs);
+  const off = t[0].tag === 0xa0 ? 1 : 0; // the version, when present
+  const validity = derKids(u, t[off + 3]), spki = t[off + 5];
+  const [spkiAlg, spkiKey] = derKids(u, spki);
+  const curve = oidText(u, derKids(u, spkiAlg)[1]);
+  const exts = {};
+  const extWrap = t.slice(off + 6).find((e) => e.tag === 0xa3);
+  if (extWrap) {
+    for (const e of derKids(u, derKids(u, extWrap)[0])) {
+      const k = derKids(u, e);
+      exts[oidText(u, k[0])] = u.slice(k[k.length - 1].start, k[k.length - 1].end);
+    }
+  }
+  return {
+    tbs: u.slice(tbs.at, tbs.end),
+    sigAlg: oidText(u, derKids(u, alg)[0]),
+    sig: u.slice(sig.start + 1, sig.end), // BIT STRING: skip the unused-bits byte
+    spki: u.slice(spki.at, spki.end),
+    point: u.slice(spkiKey.start + 1, spkiKey.end),
+    curve: { "1.2.840.10045.3.1.7": "P-256", "1.3.132.0.34": "P-384" }[curve] || null,
+    notBefore: derTime(u, validity[0]),
+    notAfter: derTime(u, validity[1]),
+    exts,
+  };
+}
+
+/** An ECDSA signature in DER (SEQUENCE of two INTEGERs) as the fixed-size r|s WebCrypto checks. */
+function rawSig(sig, size) {
+  const [r, s] = derKids(sig, der(sig, 0)).map((k) => {
+    let v = sig.slice(k.start, k.end);
+    while (v.length > size && v[0] === 0) v = v.slice(1);
+    const out = new Uint8Array(size);
+    out.set(v, size - v.length);
+    return out;
+  });
+  const out = new Uint8Array(size * 2);
+  out.set(r, 0); out.set(s, size);
+  return out;
+}
+
+/** Is cert signed by the issuer's key? */
+async function signedBy(cert, issuer) {
+  const hash = { "1.2.840.10045.4.3.2": "SHA-256", "1.2.840.10045.4.3.3": "SHA-384" }[cert.sigAlg];
+  if (!hash || !issuer.curve) return false;
+  const key = await crypto.subtle.importKey("spki", issuer.spki, { name: "ECDSA", namedCurve: issuer.curve }, false, ["verify"]);
+  return crypto.subtle.verify({ name: "ECDSA", hash }, key, rawSig(cert.sig, issuer.curve === "P-384" ? 48 : 32), cert.tbs);
+}
+
+/**
+ * Apple's steps for checking an attestation (Validating apps that connect to
+ * your server). Returns { environment } or throws with what failed.
+ */
+export async function verifyAttestation({ attestation, challenge, keyId, appIds = APP_ATTEST_APP_IDS, now = Date.now() }) {
+  const obj = cborDecode(attestation);
+  const x5c = obj?.attStmt?.x5c, authData = obj?.authData;
+  if (obj?.fmt !== "apple-appattest" || !Array.isArray(x5c) || x5c.length !== 2 || !(authData instanceof Uint8Array)) throw new Error("not an App Attest attestation");
+  // 1. The chain: leaf, Apple App Attestation CA 1, Apple's root.
+  const root = readCert(b64.dec(APPLE_APP_ATTEST_ROOT));
+  const [leaf, mid] = x5c.map(readCert);
+  if (!(await signedBy(mid, root))) throw new Error("intermediate not signed by Apple");
+  if (!(await signedBy(leaf, mid))) throw new Error("certificate not signed by Apple's App Attest CA");
+  for (const c of [leaf, mid]) if (now < c.notBefore || now > c.notAfter) throw new Error("certificate out of date");
+  // 2-4. nonce = SHA256(authData | SHA256(challenge)), inside the leaf's 1.2.840.113635.100.8.2 extension.
+  const both = new Uint8Array(authData.length + 32);
+  both.set(authData, 0); both.set(await sha256b(challenge), authData.length);
+  const nonce = await sha256b(both);
+  const ext = leaf.exts["1.2.840.113635.100.8.2"];
+  if (!ext) throw new Error("no nonce in the certificate");
+  const tagged = derKids(ext, der(ext, 0))[0], inner = derKids(ext, tagged)[0];
+  if (!same(ext.slice(inner.start, inner.end), nonce)) throw new Error("nonce doesn't match");
+  // 5. The key id is the hash of the leaf's public key.
+  const kid = b64.dec(keyId);
+  if (!same(await sha256b(leaf.point), kid)) throw new Error("key id doesn't match");
+  // 6. The App ID: one of Shoebox's.
+  const rp = authData.slice(0, 32);
+  let appId = null;
+  for (const id of appIds) if (same(await sha256b(new TextEncoder().encode(id)), rp)) appId = id;
+  if (!appId) throw new Error("not Shoebox");
+  // 7. A fresh key: counter 0. 8. Apple's environment. 9. The credential is the key.
+  if (authData[33] | authData[34] | authData[35] | authData[36]) throw new Error("counter isn't 0");
+  const aaguid = new TextDecoder().decode(authData.slice(37, 53));
+  const environment = aaguid === "appattestdevelop" ? "development" : aaguid === "appattest\0\0\0\0\0\0\0" ? "production" : null;
+  if (!environment) throw new Error("unknown environment");
+  const n = authData[53] * 256 + authData[54];
+  if (!same(authData.slice(55, 55 + n), kid)) throw new Error("credential doesn't match");
+  return { environment, appId };
+}
+
+async function attestRoute(request, env, pathname, cors) {
+  const kv = env.SHOEBOX;
+  const today = dayOf();
+  const ip = request.headers.get("cf-connecting-ip") || "unknown";
+  if (request.method === "POST" && pathname === "/ai/challenge") {
+    const rk = `ach-n:${ip}:${today}`, n = await spent(kv, rk);
+    if (n >= 30) return aiJson(429, { error: { message: "Too many tries from this network today." } }, cors);
+    await kv.put(rk, String(n + 1), { expirationTtl: 2 * 86400 });
+    const c = crypto.getRandomValues(new Uint8Array(32));
+    const challenge = b64.enc(c);
+    await kv.put(`ach:${hex(c)}`, "1", { expirationTtl: 300 });
+    return aiJson(200, { challenge }, cors);
+  }
+  if (request.method === "POST" && pathname === "/ai/attest") {
+    const body = await request.json().catch(() => ({}));
+    const { challenge, keyId, attestation } = body || {};
+    if (typeof challenge !== "string" || typeof keyId !== "string" || typeof attestation !== "string" || attestation.length > 20000) return aiJson(400, { error: { message: "Bad request." } }, cors);
+    let c;
+    try { c = b64.dec(challenge); } catch { return aiJson(400, { error: { message: "Bad challenge." } }, cors); }
+    const ck = `ach:${hex(c)}`;
+    if (!(await kv.get(ck))) return aiJson(401, { error: { message: "That challenge expired. Try again.", code: "challenge" } }, cors);
+    await kv.delete(ck);
+    let result;
+    try { result = await verifyAttestation({ attestation: b64.dec(attestation), challenge: c, keyId }); } catch (e) {
+      return aiJson(403, { error: { message: `This copy of Shoebox couldn't be confirmed (${String(e.message || e).slice(0, 80)}).`, code: "attest" } }, cors);
+    }
+    const proof = { attested: true, env: result.environment, app: result.appId, key: keyId };
+    // A sign-up from before App Attest keeps its id (owner devices are listed by it); it's only marked attested.
+    const oldDevice = request.headers.get("x-shoebox-device") || "", oldToken = request.headers.get("x-shoebox-token") || "";
+    const old = /^[a-z0-9]{1,40}$/.test(oldDevice) ? await kv.get(`aid:${oldDevice}`, "json") : null;
+    if (old && old.hash === await sha256(oldToken)) {
+      await kv.put(`aid:${oldDevice}`, JSON.stringify({ ...old, ...proof }));
+      return aiJson(200, { device: oldDevice, token: oldToken }, cors);
+    }
+    const device = randomId(10), token = randomId(24);
+    await kv.put(`aid:${device}`, JSON.stringify({ hash: await sha256(token), at: Date.now(), ...proof }));
+    return aiJson(200, { device, token }, cors);
+  }
+  return json(404, "Not found.", cors);
 }

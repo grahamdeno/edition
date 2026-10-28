@@ -66,5 +66,6 @@ The relay now makes every Claude call with Shoebox's own key, so the app never a
 
 - Secret `ANTHROPIC_API_KEY` (required for AI).
 - Optional variables: `AI_DEVICE_DAILY_CENTS` (per install per day, default 25), `AI_DAILY_CENTS` (whole relay per day, default 500), `AI_OWNER_DEVICES` (install ids with no per-install limit; the app shows its id in Settings › AI once it has used AI).
+- **AI is for the iPhone app.** The relay's AI answers only installs that proved themselves with Apple's App Attest (the iPhone app does this on its own) and the ids in `AI_OWNER_DEVICES`. The web app has no AI unless the browser is one of yours. `AI_ATTEST=off` opens AI to every existing install again, as an escape hatch.
 
 Updates deploy on their own from GitHub (`.github/workflows/relay.yml`) once the repo has `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` and the `SHOEBOX_KV_ID` variable.

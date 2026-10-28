@@ -30,7 +30,7 @@ test("picks are read safely", () => {
 });
 
 test("a topic is searched once a day and shared; local news counts against the asker", async () => {
-  const env = { SHOEBOX: fakeKv(), ANTHROPIC_API_KEY: "k" };
+  const env = { SHOEBOX: fakeKv(), ANTHROPIC_API_KEY: "k", AI_ATTEST: "off" };
   let searches = 0;
   const realFetch = globalThis.fetch;
   globalThis.fetch = async () => { searches++; return new Response(JSON.stringify(reply(PICKS)), { status: 200 }); };

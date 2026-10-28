@@ -244,7 +244,7 @@ test("the proxy only takes the app's own kind of request", () => {
 
 test("proxy: register, call with the relay's key, charge the budget, stop at the limit", async () => {
   const kv = memKv();
-  const env = { SHOEBOX: kv, ANTHROPIC_API_KEY: "sk-relay", AI_DEVICE_MONTHLY_CENTS: "0.1" };
+  const env = { SHOEBOX: kv, ANTHROPIC_API_KEY: "sk-relay", AI_DEVICE_MONTHLY_CENTS: "0.1", AI_ATTEST: "off" };
   const origin = "https://inmyshoebox.com";
   const reg = await relay.fetch(new Request("https://w.test/ai/register", { method: "POST", headers: { origin } }), env);
   const { device, token } = await reg.json();
@@ -282,8 +282,8 @@ test("an older Anthropic key counts as having agreed to AI; Perplexity keys are 
   assert.equal(aiSettings.relay(), DEFAULT_RELAY);
 });
 
-test("the app falls back to an older key while the relay has no AI, then drops the key once it does", async () => {
-  const { hook } = await import("../src/ai.js");
+test("the app falls back to an older key while the relay has no AI, then drops the key once it does (iPhone app)", async () => {
+  const { hook, setAttester } = await import("../src/ai.js");
   const store = { "edition.aiConsent": "1", "edition.apiKey": "sk-old", "edition.aiDevice": "d", "edition.aiToken": "t" };
   globalThis.localStorage = { getItem: (k) => store[k] ?? null, setItem: (k, v) => { store[k] = v; }, removeItem: (k) => { delete store[k]; } };
   const reply = { ok: true, status: 200, json: async () => ({ content: [{ type: "text", text: "A note" }] }) };
@@ -292,9 +292,59 @@ test("the app falls back to an older key while the relay has no AI, then drops t
   assert.equal(await hook({ kind: "link", title: "x" }), "A note");
   assert.match(urls[1], /api\.anthropic\.com/);
   assert.equal(store["edition.apiKey"], "sk-old");
+  // On the web the key stays: the relay's AI is the iPhone app's.
   globalThis.fetch = async () => reply;
   await hook({ kind: "link", title: "x" });
+  assert.equal(store["edition.apiKey"], "sk-old");
+  store["edition.aiAttested"] = "1";
+  setAttester(async () => ({ ok: true }));
+  await hook({ kind: "link", title: "x" });
   assert.equal(store["edition.apiKey"], undefined);
+  setAttester(null);
+});
+
+test("AI in the browser: off without a sign-up, never signs up, and closes when the relay says so", async () => {
+  const ai = await import("../src/ai.js");
+  const store = { "edition.aiConsent": "1" };
+  globalThis.localStorage = { getItem: (k) => store[k] ?? null, setItem: (k, v) => { store[k] = v; }, removeItem: (k) => { delete store[k]; } };
+  const urls = [];
+  globalThis.fetch = async (url) => { urls.push(url); return { ok: false, status: 403, json: async () => ({ error: { message: "AI comes with the Shoebox iPhone app.", code: "attest" } }) }; };
+  assert.equal(ai.available(), false);
+  assert.equal(ai.settings.enabled(), false);
+  await assert.rejects(ai.hook({ kind: "link", title: "x" }), /iPhone app/);
+  assert.equal(urls.length, 0);
+  // An owner's browser with a sign-up from before: tried, and closed once the relay refuses it.
+  Object.assign(store, { "edition.aiDevice": "d", "edition.aiToken": "t" });
+  assert.equal(ai.settings.enabled(), true);
+  await assert.rejects(ai.hook({ kind: "link", title: "x" }), /iPhone app/);
+  assert.equal(store["edition.aiClosed"], "1");
+  assert.equal(ai.settings.enabled(), false);
+});
+
+test("AI in the iPhone app: attests first, keeps an existing id, and attests again when asked", async () => {
+  const ai = await import("../src/ai.js");
+  const store = { "edition.aiConsent": "1", "edition.aiDevice": "old", "edition.aiToken": "tok" };
+  globalThis.localStorage = { getItem: (k) => store[k] ?? null, setItem: (k, v) => { store[k] = v; }, removeItem: (k) => { delete store[k]; } };
+  const calls = [];
+  let refuseOnce = true;
+  globalThis.fetch = async (url, opts = {}) => {
+    calls.push({ url, headers: opts.headers || {} });
+    const ok = (b) => ({ ok: true, status: 200, json: async () => b });
+    if (/\/ai\/challenge$/.test(url)) return ok({ challenge: "Y2g=" });
+    if (/\/ai\/attest$/.test(url)) return ok({ device: "old", token: "tok" });
+    if (/\/ai\/messages$/.test(url) && refuseOnce && calls.filter((c) => /attest$/.test(c.url)).length === 1) { refuseOnce = false; return { ok: false, status: 403, json: async () => ({ error: { code: "attest" } }) }; }
+    return ok({ content: [{ type: "text", text: "A note" }] });
+  };
+  const seen = [];
+  ai.setAttester(async (c) => { seen.push(c); return { ok: true, keyId: "k", attestation: "a" }; });
+  try {
+    assert.equal(await ai.hook({ kind: "link", title: "x" }), "A note");
+    const att = calls.filter((c) => /\/ai\/attest$/.test(c.url));
+    assert.equal(att.length, 2); // once to upgrade the old sign-up, once more after the relay asked
+    assert.equal(att[0].headers["x-shoebox-device"], "old");
+    assert.deepEqual(seen, ["Y2g=", "Y2g="]);
+    assert.equal(store["edition.aiAttested"], "1");
+  } finally { ai.setAttester(null); }
 });
 
 /* ---- Study deck and names that stay on the phone ---- */
@@ -357,7 +407,7 @@ test("school posts come back labeled Action, Decision or Info", async () => {
 
 test("proxy: a web-search call keeps the line open, then sends Claude's answer (or the error) in the body", async () => {
   const kv = memKv();
-  const env = { SHOEBOX: kv, ANTHROPIC_API_KEY: "sk-relay" };
+  const env = { SHOEBOX: kv, ANTHROPIC_API_KEY: "sk-relay", AI_ATTEST: "off" };
   const origin = "https://inmyshoebox.com";
   const { device, token } = await (await relay.fetch(new Request("https://w.test/ai/register", { method: "POST", headers: { origin } }), env)).json();
   const realFetch = globalThis.fetch;

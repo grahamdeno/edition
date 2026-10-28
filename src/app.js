@@ -41,7 +41,7 @@ import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 import * as songs from "./songs.js";
 import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone, mixStories, followOrder } from "./onboard.js";
 
-export const VERSION = "4.57.0";
+export const VERSION = "4.58.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -1958,6 +1958,10 @@ function openBuild(step = 1) {
       <label class="bm-l" for="bm-study">Studying for something? <span>Optional. Three practice questions a day.</span></label>
       <input id="bm-study" type="text" autocomplete="off" placeholder="AWS Solutions Architect, Spanish verbs" value="${esc(b.study || (m.study ? m.studyTopic : ""))}">
       <div class="sheet-foot two"><button class="btn" type="button" data-bm="5">Skip</button><button class="btn primary" type="button" data-bm="topics">Next</button></div>`;
+  } else if (!ai.available()) {
+    html = `${head("You're set")}
+      <p class="note">${esc(ai.WEB_AI_NOTE)} Top stories, summaries and found pictures turn on there.</p>
+      <div class="sheet-foot"><button class="btn primary" type="button" data-bm="ai-0">Show me Today</button></div>`;
   } else {
     html = `${head("Turn on AI?")}
       <p class="note">With AI on, Shoebox writes a line about each thing you save, finds pictures, turns school email into posts, and picks stories on your topics. With it off, everything else still works.</p>
@@ -2381,7 +2385,7 @@ export const AI_DISCLOSURE = "Shoebox uses Claude, an AI model made by Anthropic
   + "Anthropic doesn't use them to train its models, and Shoebox's server doesn't keep them. You can turn AI off any time in Settings.";
 
 function aiAskHtml() {
-  if (ai.settings.asked() || !flag(ONBOARDED)) return "";
+  if (ai.settings.asked() || !flag(ONBOARDED) || !ai.available()) return "";
   return `<section class="ask" aria-labelledby="ai-ask-h">
       <div class="ask-top"><span class="av av-school av-ai" aria-hidden="true">AI</span>
         <div><h2 id="ai-ask-h">Turn on AI?</h2><p>${esc(AI_SHORT)}</p></div></div>
@@ -4019,6 +4023,8 @@ function nativeAsk(type, payload = {}, ms = 15000) {
   });
 }
 if (NATIVE) window.shoeboxReply = (id, r) => { const f = nativeWaits.get(id); if (f) { nativeWaits.delete(id); f(r || {}); } };
+// The iPhone app proves itself to the relay (App Attest) so it can use Shoebox's AI; a web page can't.
+if (nativeCan("attest")) ai.setAttester((challenge) => nativeAsk("attest", { challenge }, 30000));
 
 /** Roughly where the phone is: the iPhone app's own location, or the browser's. Asks only when told to. */
 async function getLocation({ ask = false } = {}) {
@@ -4737,7 +4743,12 @@ function openSettings(panel = "", { fromCard = false } = {}) {
       <span class="st" id="set-push-st" role="status"></span>
       <p class="note">Notifications need permission once${push.needsHomeScreen() ? ". On iPhone, open Shoebox from your Home Screen first" : ""}.</p>
       </div>`) },
-    ai: { title: "AI", value: ai.settings.enabled() ? "On" : "Off", body: `
+    ai: { title: "AI", value: ai.settings.enabled() ? "On" : ai.available() ? "Off" : "iPhone app", body: !ai.available() ? `
+      <div class="group">
+      <p class="note">${esc(ai.WEB_AI_NOTE)}</p>
+      <p class="note">On iPhone, AI writes a line about each thing you save, finds its picture, picks the day's top stories and turns school newsletters into posts.</p>
+      <a class="btn" href="beta">Get the iPhone beta</a>
+      </div>` : `
       <div class="group">
       <div class="row"><span class="rk">Use AI</span>
         <div class="seg" role="group" aria-label="Use AI">

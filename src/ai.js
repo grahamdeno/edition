@@ -31,6 +31,27 @@ const RELAY_STORE = "edition.perplexityRelay";
 const CONSENT_STORE = "edition.aiConsent";
 const DEVICE_STORE = "edition.aiDevice";
 const TOKEN_STORE = "edition.aiToken";
+const ATTESTED_STORE = "edition.aiAttested"; // "1" once this install proved itself with App Attest
+const CLOSED_STORE = "edition.aiClosed";     // "1" once the relay said AI isn't for this install
+
+/**
+ * Shoebox pays for AI, so the relay serves it only to the iPhone app (which
+ * proves itself with Apple's App Attest) and the owner's own devices. The
+ * iPhone app hands Shoebox a function that attests a challenge; a web page
+ * has none, so AI stays off there unless this browser is already one of the
+ * owner's (it has a sign-up from before, and the relay still accepts it).
+ */
+let attester = null;
+export function setAttester(fn) {
+  attester = typeof fn === "function" ? fn : null;
+  if (attester) safeSet(CLOSED_STORE, "");
+}
+/** Can AI work here at all? */
+export function available() {
+  if (attester || settings.key()) return true; // a key of your own (older versions) pays its own way
+  return Boolean(safeGet(DEVICE_STORE) && safeGet(TOKEN_STORE)) && safeGet(CLOSED_STORE) !== "1";
+}
+export const WEB_AI_NOTE = "AI comes with the Shoebox iPhone app. Here in the browser, Shoebox works without it.";
 
 /** Shoebox's own relay. A relay address saved by an older version still wins. */
 export const DEFAULT_RELAY = "https://shoebox-api.tangomike.app";
@@ -40,8 +61,8 @@ export const settings = {
   setKey: (k) => safeSet(KEY_STORE, k),
   model: () => safeGet(MODEL_STORE) || DEFAULT_MODEL,
   setModel: (m) => safeSet(MODEL_STORE, m),
-  /** AI is on once the reader has agreed to send their saves to Anthropic. */
-  enabled: () => safeGet(CONSENT_STORE) === "1",
+  /** AI is on once the reader has agreed to send their saves to Anthropic, where AI is offered (see available). */
+  enabled: () => safeGet(CONSENT_STORE) === "1" && available(),
   consented: () => safeGet(CONSENT_STORE) === "1",
   asked: () => safeGet(CONSENT_STORE) !== "",
   setConsent: (on) => safeSet(CONSENT_STORE, on ? "1" : "0"),
@@ -50,7 +71,7 @@ export const settings = {
   pplxEnabled: () => false, // top stories now come through Claude's web search
   relay: () => safeGet(RELAY_STORE) || DEFAULT_RELAY,
   setRelay: (u) => safeSet(RELAY_STORE, u),
-  canDiscover: () => safeGet(CONSENT_STORE) === "1",
+  canDiscover: () => safeGet(CONSENT_STORE) === "1" && available(),
   device: () => safeGet(DEVICE_STORE),
 };
 
@@ -75,6 +96,7 @@ export class AiError extends Error {
 
 async function call({ content, system, maxTokens = 600, tools, model = null }) {
   if (!settings.consented()) throw new AiError("AI is off. Turn it on in Settings › AI.");
+  if (!available()) throw new AiError(WEB_AI_NOTE, 403);
   const body = {
     model: model || settings.model(),
     max_tokens: maxTokens,
@@ -84,27 +106,70 @@ async function call({ content, system, maxTokens = 600, tools, model = null }) {
   if (tools) body.tools = tools;
   try {
     const data = await viaRelay(body);
-    if (settings.key()) settings.setKey(""); // the relay works: no reason to keep a key on the phone
+    if (settings.key() && attester) settings.setKey(""); // the relay works: no reason to keep a key on the phone
     return data;
   } catch (e) {
     // A relay without AI yet (older copy, or no key set there): fall back to a key from an older version.
-    if (settings.key() && (e.status === 404 || e.status === 503)) return direct(body, settings.key());
+    if (settings.key() && (e.status === 403 || e.status === 404 || e.status === 503)) return direct(body, settings.key());
     throw e;
   }
 }
 
-async function register(base) {
-  const res = await fetch(`${base}/ai/register`, { method: "POST" }).catch(() => null);
+/**
+ * Make sure this install can call the relay's AI: the iPhone app attests (once,
+ * or again to upgrade a sign-up from before App Attest); a web page uses the
+ * sign-up it already has, and never makes a new one.
+ */
+async function ensureSignedUp(base, { again = false } = {}) {
+  const has = safeGet(DEVICE_STORE) && safeGet(TOKEN_STORE);
+  if (attester) {
+    if (!has || again || safeGet(ATTESTED_STORE) !== "1") await attest(base);
+    return;
+  }
+  if (!has) throw new AiError(WEB_AI_NOTE, 403);
+}
+
+/** Prove this is the Shoebox iPhone app: a challenge from the relay, attested on the phone, checked by the relay. */
+async function attest(base) {
+  const post = (path, body, headers = {}) => fetch(`${base}${path}`, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body || {}) }).catch(() => null);
+  const ch = await post("/ai/challenge");
+  if (!ch) throw new AiError("Couldn't reach Shoebox's AI. Check your connection.", 0);
+  const { challenge, error } = await ch.json().catch(() => ({}));
+  if (!ch.ok || !challenge) throw new AiError(error?.message || `Couldn't start AI (${ch.status}).`, ch.status);
+  let r;
+  try { r = await attester(challenge); } catch { r = null; }
+  if (!r || !r.ok) throw new AiError(r?.status === "unsupported" ? "This iPhone can't confirm Shoebox for AI." : "Couldn't confirm this copy of Shoebox. Try again later.", 403);
+  // An install that already has a sign-up keeps its id (the owner's devices are listed by it).
+  const res = await post("/ai/attest", { challenge, keyId: r.keyId, attestation: r.attestation }, ownerHeaders());
   if (!res) throw new AiError("Couldn't reach Shoebox's AI. Check your connection.", 0);
   const data = await res.json().catch(() => ({}));
   if (!res.ok || !data.device) throw new AiError(data?.error?.message || `Couldn't start AI (${res.status}).`, res.status);
   safeSet(DEVICE_STORE, data.device);
   safeSet(TOKEN_STORE, data.token);
+  safeSet(ATTESTED_STORE, "1");
+}
+
+/**
+ * The relay's answer about this install: start over when it no longer knows it,
+ * attest again when it wants proof, or note that AI isn't offered here.
+ * Returns true when the caller should try once more.
+ */
+function signUpTrouble(res, data, retried) {
+  const code = data?.error?.code;
+  if (res.status === 401 && code === "register" && !retried) {
+    safeSet(DEVICE_STORE, ""); safeSet(TOKEN_STORE, ""); safeSet(ATTESTED_STORE, "");
+    return attester ? "retry" : "closed";
+  }
+  if (res.status === 403 && code === "attest") {
+    if (attester && !retried) { safeSet(ATTESTED_STORE, ""); return "retry"; }
+    if (!attester) { safeSet(CLOSED_STORE, "1"); return "closed"; }
+  }
+  return "";
 }
 
 async function viaRelay(body, retried = false) {
   const base = relayBase();
-  if (!safeGet(DEVICE_STORE) || !safeGet(TOKEN_STORE)) await register(base);
+  await ensureSignedUp(base);
   let res;
   try {
     res = await fetch(`${base}/ai/messages`, {
@@ -117,10 +182,9 @@ async function viaRelay(body, retried = false) {
     throw new AiError("Couldn't reach Shoebox's AI. Check your connection.", 0);
   }
   const data = await res.json().catch(() => ({}));
-  if (res.status === 401 && data?.error?.code === "register" && !retried) {
-    safeSet(DEVICE_STORE, ""); safeSet(TOKEN_STORE, "");
-    return viaRelay(body, true);
-  }
+  const trouble = signUpTrouble(res, data, retried);
+  if (trouble === "retry") return viaRelay(body, true);
+  if (trouble === "closed") throw new AiError(WEB_AI_NOTE, 403);
   if (!res.ok) throw new AiError(data?.error?.message || `AI request failed (${res.status}).`, res.status);
   // Long calls (web search) arrive as a stream that always starts 200; a failure is in the body.
   if (data && data.error && !data.content) throw new AiError(data.error.message || "AI request failed.", data.status || 502);
@@ -952,7 +1016,7 @@ export async function cpmaiQuestions({ count = 3, seed = 0, recent = [] } = {}) 
 export async function topicStories(topic, { place = "" } = {}, retried = false) {
   if (!settings.consented()) throw new AiError("AI is off. Turn it on in Settings › AI.");
   const base = relayBase();
-  if (!safeGet(DEVICE_STORE) || !safeGet(TOKEN_STORE)) await register(base);
+  await ensureSignedUp(base);
   for (let tries = 0; tries < 4; tries++) {
     let res;
     try {
@@ -963,10 +1027,9 @@ export async function topicStories(topic, { place = "" } = {}, retried = false) 
       });
     } catch { throw new AiError("Couldn't reach Shoebox's AI. Check your connection.", 0); }
     const data = await res.json().catch(() => ({}));
-    if (res.status === 401 && data?.error?.code === "register" && !retried) {
-      safeSet(DEVICE_STORE, ""); safeSet(TOKEN_STORE, "");
-      return topicStories(topic, { place }, true);
-    }
+    const trouble = signUpTrouble(res, data, retried);
+    if (trouble === "retry") return topicStories(topic, { place }, true);
+    if (trouble === "closed") throw new AiError(WEB_AI_NOTE, 403);
     if (res.status === 202) { await new Promise((r) => setTimeout(r, Math.min(30, data.retry || 20) * 1000)); continue; }
     if (!res.ok || data.error) throw new AiError(data?.error?.message || `Top stories failed (${res.status}).`, data.status || res.status);
     return data.picks || [];
@@ -984,7 +1047,7 @@ export function ownerHeaders() {
 export async function findCams(place, retried = false) {
   if (!settings.consented()) throw new AiError("This uses AI. Turn it on in Settings › AI.");
   const base = relayBase();
-  if (!safeGet(DEVICE_STORE) || !safeGet(TOKEN_STORE)) await register(base);
+  await ensureSignedUp(base);
   for (let tries = 0; tries < 5; tries++) {
     let res;
     try {
@@ -995,7 +1058,9 @@ export async function findCams(place, retried = false) {
       });
     } catch { throw new AiError("Couldn't reach Shoebox's AI. Check your connection.", 0); }
     const data = await res.json().catch(() => ({}));
-    if (res.status === 401 && data?.error?.code === "register" && !retried) { safeSet(DEVICE_STORE, ""); safeSet(TOKEN_STORE, ""); return findCams(place, true); }
+    const trouble = signUpTrouble(res, data, retried);
+    if (trouble === "retry") return findCams(place, true);
+    if (trouble === "closed") throw new AiError(WEB_AI_NOTE, 403);
     if (res.status === 202) { await new Promise((r) => setTimeout(r, Math.min(30, data.retry || 20) * 1000)); continue; }
     if (!res.ok || data.error) throw new AiError(data?.error?.message || `Camera search failed (${res.status}).`, data.status || res.status);
     return data.cams || [];
