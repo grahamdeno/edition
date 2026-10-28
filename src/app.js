@@ -2923,10 +2923,10 @@ const EMAIL_CUT = 280;
 function moreHtml(item) {
   const parts = [];
   const said = item.suggestReason || item.summary;
-  if (item.extended && !item.suggested) parts.push(`<div class="x-summary">${item.extended.split(/\n\s*\n/).map((p) => `<p>${esc(p.trim())}</p>`).join("")}</div>`);
-  else if (item.summary && !(item.suggested && said === item.summary) && !item.school) parts.push(`<p class="x-summary">${esc(item.summary)}</p>`);
+  if (item.extended && !item.suggested) parts.push(`<div class="more-summary">${item.extended.split(/\n\s*\n/).map((p) => `<p>${esc(p.trim())}</p>`).join("")}</div>`);
+  else if (item.summary && !(item.suggested && said === item.summary) && !item.school) parts.push(`<p class="more-summary">${esc(item.summary)}</p>`);
   const note = item.kind === KIND.LINK ? item.text : item.kind === KIND.NOTE || item.kind === KIND.QUOTE || item.email ? "" : item.note;
-  if (note && String(note).trim()) parts.push(`<p class="x-note"><span>Your note</span>${esc(note)}</p>`);
+  if (note && String(note).trim()) parts.push(`<p class="more-note"><span>Your note</span>${esc(note)}</p>`);
   return parts.join("");
 }
 function hasMore(item, compact) {
@@ -3269,7 +3269,7 @@ async function onTimelineClick(e) {
     return;
   }
   // A tap on a post's words opens it in place (and closes it again); picture and title still open the reader.
-  if ((b = hit("[data-expand]")) || (b = hit(".post[data-id] .main :is(.say, .body, .guess, .school-head, .why-line, .quote, .x-summary, .x-note, .quick)"))) {
+  if ((b = hit("[data-expand]")) || (b = hit(".post[data-id] .main :is(.say, .body, .guess, .school-head, .why-line, .quote, .more-summary, .more-note, .quick)"))) {
     if (!b.dataset.expand && String(window.getSelection?.() || "").trim()) return; // selecting text isn't a tap
     toggleExpand(b.dataset.expand || b.closest(".post").dataset.id);
     return;
