@@ -41,7 +41,7 @@ import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 import * as songs from "./songs.js";
 import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone, mixStories, followOrder } from "./onboard.js";
 
-export const VERSION = "4.58.0";
+export const VERSION = "4.59.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -96,6 +96,7 @@ const state = {
   capForm: {},       // the other Add fields: title, note, author, tags, minutes (and which you typed)
   capPic: null,      // the picture picker in Add: { url, status, list, choice, ownFile, ownUrl }
   enriching: new Set(),
+  expanded: new Set(), // posts opened in place by a tap on their words
   reader: null,      // { mode: "single", ids: [id], index: 0, total: 1 }
   recent: new Map(), // verdicts given this session: id -> verdict, so a post keeps its stamp
   suggest: null,     // what your answers to suggestions taught (see model.js)
@@ -1119,7 +1120,12 @@ function refreshPost(id) {
   tmp.innerHTML = postHtml(item, { compact });
   const next = tmp.firstElementChild;
   if (!next) return;
+  // Replies hang under the post as their own block: swap them too.
+  const oldReplies = el.nextElementSibling?.matches?.(`.replies[data-for="${CSS.escape(id)}"]`) ? el.nextElementSibling : null;
+  const newReplies = next.nextElementSibling;
   el.replaceWith(next);
+  if (oldReplies) oldReplies.remove();
+  if (newReplies) { next.after(newReplies); hydrate(newReplies); }
   hydrate(next);
   tintVisible(next.parentElement || next);
 }
@@ -2912,8 +2918,40 @@ function byline(item) {
   return { who: "You", when: friendlyWhen(item.created) };
 }
 
+/** What a tap on a post's words adds: the rest of an email, the summary, your note, every key point and reply. */
+const EMAIL_CUT = 280;
+function moreHtml(item) {
+  const parts = [];
+  const said = item.suggestReason || item.summary;
+  if (item.extended && !item.suggested) parts.push(`<div class="x-summary">${item.extended.split(/\n\s*\n/).map((p) => `<p>${esc(p.trim())}</p>`).join("")}</div>`);
+  else if (item.summary && !(item.suggested && said === item.summary) && !item.school) parts.push(`<p class="x-summary">${esc(item.summary)}</p>`);
+  const note = item.kind === KIND.LINK ? item.text : item.kind === KIND.NOTE || item.kind === KIND.QUOTE || item.email ? "" : item.note;
+  if (note && String(note).trim()) parts.push(`<p class="x-note"><span>Your note</span>${esc(note)}</p>`);
+  return parts.join("");
+}
+function hasMore(item, compact) {
+  const pts = item.points?.length && [KIND.LINK, KIND.PDF, KIND.TEXT].includes(item.kind) ? item.points.length : 0;
+  return Boolean(moreHtml(item))
+    || (item.email && String(item.text || "").length > EMAIL_CUT)
+    || (pts && (compact || pts > 3))
+    || (item.replies || []).length > (compact ? 1 : 3);
+}
+function toggleExpand(id) {
+  const item = byId(id);
+  if (!item) return;
+  const el = document.getElementById("p-" + id);
+  if (state.expanded.has(id)) state.expanded.delete(id);
+  else if (hasMore(item, el?.classList.contains("compact"))) state.expanded.add(id);
+  else return;
+  track(state.expanded.has(id) ? "post_expand" : "post_collapse");
+  refreshPost(id);
+  const now = document.getElementById("p-" + id);
+  if (now && !state.expanded.has(id) && now.getBoundingClientRect().top < 0) now.scrollIntoView({ block: "start", behavior: reduced() ? "auto" : "smooth" });
+}
+
 function postHtml(item, { compact = false } = {}) {
   const words = item.kind === KIND.QUOTE || item.kind === KIND.NOTE;
+  const expanded = state.expanded.has(item.id);
   const settled = state.tab === "today" ? settledAs(item) : null;
   const open = state.tab === "today" ? isOpen(item) : item.status === STATUS.INBOX || item.status === STATUS.QUEUED;
   const b = byline(item);
@@ -2926,7 +2964,9 @@ function postHtml(item, { compact = false } = {}) {
   // The words at the top: your reason, else Shoebox's line about it (marked as a guess), else nothing.
   let say = "";
   if (item.suggested) say = `<p class="body">${esc(item.suggestReason || item.summary || "Picked from what you finish.")}</p>`;
-  else if (item.email) say = `<p class="school-head">${esc(item.title)}</p><p class="body">${esc(String(item.text || "").replace(/\s+/g, " ").slice(0, 280))}${String(item.text || "").length > 280 ? "…" : ""}</p>`;
+  else if (item.email) say = `<p class="school-head">${esc(item.title)}</p>` + (expanded
+    ? `<p class="body full">${esc(String(item.text || "").trim())}</p>`
+    : `<p class="body">${esc(String(item.text || "").replace(/\s+/g, " ").slice(0, EMAIL_CUT))}${String(item.text || "").length > EMAIL_CUT ? "…" : ""}</p>`);
   else if (item.school) say = `<p class="school-head">${esc(item.title)}</p><p class="body">${esc(item.school.body || "")}</p>`
     + (item.school.date ? `<p class="ev-place">${I.cal}<span>${esc(shortDate(fromDateInput(item.school.date)))}</span></p>` : "")
     + (item.school.fromFile ? `<p class="ev-place">${I.attach}<span>From the attached ${esc(item.school.fromFile)}</span></p>` : "");
@@ -2935,21 +2975,24 @@ function postHtml(item, { compact = false } = {}) {
   else if (item.hook && !words) say = `<p class="guess"><span class="sr-only">${APP}'s guess: </span>${esc(item.hook)}</p>`;
   const why = item.why && item.kind === KIND.NOTE ? `<p class="why-line"><span>Why you kept it</span>${esc(item.why)}</p>` : "";
   const quote = item.kind === KIND.QUOTE ? `<figure class="quote ${String(item.text || "").length > 160 ? "long" : ""}"><blockquote>“${esc(item.text || item.title)}”</blockquote>${item.author ? `<figcaption>${esc(item.author)}</figcaption>` : ""}</figure>${item.why ? `<p class="why-line"><span>Why you kept it</span>${esc(item.why)}</p>` : ""}` : "";
-  const points = !compact && item.points && item.points.length && [KIND.LINK, KIND.PDF, KIND.TEXT].includes(item.kind)
-    ? `<div class="quick"><h3>Quick read</h3><ul>${item.points.slice(0, 3).map((p) => `<li>${esc(p)}</li>`).join("")}</ul></div>` : "";
+  const points = (expanded || !compact) && item.points && item.points.length && [KIND.LINK, KIND.PDF, KIND.TEXT].includes(item.kind)
+    ? `<div class="quick"><h3>Quick read</h3><ul>${(expanded ? item.points : item.points.slice(0, 3)).map((p) => `<li>${esc(p)}</li>`).join("")}</ul></div>` : "";
+  const more = expanded ? moreHtml(item) : "";
+  const toggle = expanded || hasMore(item, compact)
+    ? `<button class="more-text" type="button" data-expand="${esc(item.id)}" aria-expanded="${expanded}">${expanded ? "Show less" : "More"}</button>` : "";
   const coming = item.school && item.school.items?.length ? `<div class="quick coming"><h3>For ${esc(schoolSettings().child || "your family")}</h3><ul>${item.school.items.map((i) =>
     `<li>${i.date ? `<b>${esc(shortDate(fromDateInput(i.date)))}</b> · ` : ""}${esc(i.text)}</li>`).join("")}</ul></div>` : "";
   const busy = state.enriching.has(item.id) ? `<p class="busy" role="status">Reading it…</p>` : "";
-  const replies = repliesHtml(item, compact);
+  const replies = repliesHtml(item, compact, expanded);
   const tintStyle = item.tint && tintInks(item.tint) ? ` style="--t:${esc(tintInks(item.tint).t)}"` : "";
-  return `<article class="post${compact ? " compact" : ""}${settled ? " settled" : ""}${item.tint ? " tinted" : ""}" id="p-${esc(item.id)}" data-id="${esc(item.id)}"${tintStyle}
+  return `<article class="post${compact ? " compact" : ""}${settled ? " settled" : ""}${item.tint ? " tinted" : ""}${expanded ? " expanded" : ""}" id="p-${esc(item.id)}" data-id="${esc(item.id)}"${tintStyle}
       aria-label="${esc(b.who)}, ${esc(b.when)}${item.title && !words ? ": " + esc(item.title) : ""}">
     <div class="rail">${item.suggested ? `<span class="av av-sb" aria-hidden="true">${LOGO}</span>` : item.school ? `<span class="av av-school" aria-hidden="true">${esc((item.school.name || "S").charAt(0))}</span>` : avatarHtml()}${replies ? '<span class="line" aria-hidden="true"></span>' : ""}</div>
     <div class="main">
       <div class="meta"><span class="who">${esc(b.who)},</span> <span class="when">${esc(b.when)}</span>${tag}<button class="act icon more" type="button" data-edit="${esc(item.id)}" aria-label="Edit">${I.menu}</button></div>
-      ${say}${quote}${why}
+      ${say}${quote}${why}${more}
       ${item.school ? schoolMediaHtml(item) : mediaHtml(item, compact)}
-      ${busy}${item.school ? coming : points}
+      ${busy}${item.school ? coming : points}${toggle}
     </div>
     <div class="acts-row">${settled ? stampHtml(item, settled) : actionsHtml(item, open)}</div>
   </article>${replies}`;
@@ -3049,11 +3092,11 @@ function actionsHtml(item, open) {
   </div>`;
 }
 
-function repliesHtml(item, compact) {
+function repliesHtml(item, compact, expanded = false) {
   const list = item.replies || [];
   if (!list.length) return "";
-  const shown = compact ? list.slice(-1) : list.slice(-3);
-  return `<div class="replies" data-for="${esc(item.id)}">${list.length > shown.length ? `<button class="more-replies" type="button" data-open="${esc(item.id)}">${list.length - shown.length} earlier repl${list.length - shown.length === 1 ? "y" : "ies"}</button>` : ""}
+  const shown = expanded ? list : compact ? list.slice(-1) : list.slice(-3);
+  return `<div class="replies" data-for="${esc(item.id)}">${list.length > shown.length ? `<button class="more-replies" type="button" data-expand="${esc(item.id)}">${list.length - shown.length} earlier repl${list.length - shown.length === 1 ? "y" : "ies"}</button>` : ""}
     ${shown.map((r) => `<div class="reply"><div class="rail">${avatarHtml("sm")}</div><div class="main">
       <div class="meta"><span class="who">You,</span> <span class="when">${esc(friendlyWhen(r.at))}</span></div>
       <p class="say">${esc(r.text)}</p></div></div>`).join("")}</div>`;
@@ -3223,6 +3266,12 @@ async function onTimelineClick(e) {
   if ((b = hit("[data-jump]"))) {
     const el = document.getElementById("p-" + b.dataset.jump);
     if (el) { el.scrollIntoView({ behavior: reduced() ? "auto" : "smooth", block: "start" }); el.querySelector("button")?.focus({ preventScroll: true }); }
+    return;
+  }
+  // A tap on a post's words opens it in place (and closes it again); picture and title still open the reader.
+  if ((b = hit("[data-expand]")) || (b = hit(".post[data-id] .main :is(.say, .body, .guess, .school-head, .why-line, .quote, .x-summary, .x-note, .quick)"))) {
+    if (!b.dataset.expand && String(window.getSelection?.() || "").trim()) return; // selecting text isn't a tap
+    toggleExpand(b.dataset.expand || b.closest(".post").dataset.id);
     return;
   }
   if ((b = hit("[data-open]"))) {
