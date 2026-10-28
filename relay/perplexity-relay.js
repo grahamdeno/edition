@@ -37,10 +37,11 @@
  */
 
 /** What this copy of the relay can do; the app checks it to say when an update is needed. */
-export const RELAY_VERSION = 20;
+export const RELAY_VERSION = 21;
 export const RELAY_FEATURES = ["preview", "image", "photo", "agent", "push", "remind", "ical", "nhl", "inbox", "apple", "ai", "stats", "stories"];
 
-const ALLOWED_ORIGINS = ["https://shoebox.tangomike.app", "https://grahamdeno.github.io"];
+// inmyshoebox.com is home; shoebox.tangomike.app stays allowed while phones move over.
+const ALLOWED_ORIGINS = ["https://inmyshoebox.com", "https://shoebox.tangomike.app", "https://grahamdeno.github.io"];
 const UPSTREAM = "https://api.perplexity.ai";
 const PATHS = new Set(["/v1/agent"]);
 
@@ -181,7 +182,7 @@ async function preview(target, cors, wantText = false) {
   try {
     res = await fetch(url.href, {
       redirect: "follow",
-      headers: { "user-agent": "Mozilla/5.0 (compatible; EditionPreview/1.0; +https://shoebox.tangomike.app/)", accept: "text/html,application/xhtml+xml" },
+      headers: { "user-agent": "Mozilla/5.0 (compatible; EditionPreview/1.0; +https://inmyshoebox.com/)", accept: "text/html,application/xhtml+xml" },
       cf: { cacheTtl: 86400, cacheEverything: true },
     });
   } catch {
@@ -479,7 +480,7 @@ async function vapidKeys(kv) {
 export async function vapidAuth(endpoint, keys, now = Date.now()) {
   const enc = new TextEncoder();
   const head = b64u.enc(enc.encode(JSON.stringify({ typ: "JWT", alg: "ES256" })));
-  const body = b64u.enc(enc.encode(JSON.stringify({ aud: new URL(endpoint).origin, exp: Math.floor(now / 1000) + 12 * 3600, sub: "mailto:support@tangomike.app" })));
+  const body = b64u.enc(enc.encode(JSON.stringify({ aud: new URL(endpoint).origin, exp: Math.floor(now / 1000) + 12 * 3600, sub: "mailto:support@inmyshoebox.com" })));
   const key = await crypto.subtle.importKey("jwk", keys.privateJwk, { name: "ECDSA", namedCurve: "P-256" }, false, ["sign"]);
   const sig = await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, key, enc.encode(`${head}.${body}`));
   return `vapid t=${head}.${body}.${b64u.enc(sig)}, k=${keys.publicKey}`;
@@ -549,7 +550,7 @@ export async function nhl(date, cors) {
  * phone picks it up, then it's deleted.
  *
  * Each phone can have its own address, <name>-<4 random>@<EMAIL_DOMAIN>
- * (e.g. graham-7k2m@tangomike.app), routed here by that domain's catch-all
+ * (e.g. graham-7k2m@inmyshoebox.com), routed here by that domain's catch-all
  * rule. The name is picked in the app; the random part keeps it private.
  * Its mail is kept under its own box (a hash of the phone's inbox key), so
  * nobody else's phone can read it. Personal addresses turn on with the
@@ -560,8 +561,8 @@ export async function nhl(date, cors) {
 const ALIAS_RE = /^([a-z][a-z0-9]{0,15}-[a-z2-9]{4})@/;
 const aliasesOn = (env) => env.EMAIL_ALIASES === "1" || env.EMAIL_ALIASES === 1 || env.EMAIL_ALIASES === true;
 /** Mail domains: EMAIL_DOMAIN may list several, comma-separated. The first is the one people see; all of them deliver. */
-export const mailDomains = (env) => String(env.EMAIL_DOMAIN || "tangomike.app").toLowerCase().split(",").map((d) => d.trim()).filter(Boolean);
-const mailDomain = (env) => mailDomains(env)[0] || "tangomike.app";
+export const mailDomains = (env) => String(env.EMAIL_DOMAIN || "inmyshoebox.com").toLowerCase().split(",").map((d) => d.trim()).filter(Boolean);
+const mailDomain = (env) => mailDomains(env)[0] || "inmyshoebox.com";
 /** The name part of an address: letters and digits, starting with a letter, up to 16. */
 export function addressName(name) {
   const n = String(name || "").toLowerCase().normalize("NFKD").replace(/[^a-z0-9]/g, "").replace(/^[0-9]+/, "").slice(0, 16);
@@ -810,20 +811,22 @@ export async function appleJwt(key, header, payload) {
 }
 
 const tokenCache = {};
-async function appleToken(env, kind, now = Math.floor(Date.now() / 1000)) {
-  const c = tokenCache[kind];
+async function appleToken(env, kind, now = Math.floor(Date.now() / 1000), origin = ALLOWED_ORIGINS[0]) {
+  // A maps token is tied to the page's address, so each allowed address gets its own.
+  const slot = kind === "maps" ? `maps ${origin}` : kind;
+  const c = tokenCache[slot];
   if (c && c.exp - now > 3600) return c.token;
   const key = await appleKey(env.APPLE_P8);
   const kid = env.APPLE_KEY_ID || APPLE_KEY_ID, iss = env.APPLE_TEAM_ID || APPLE_TEAM_ID;
   let token, exp;
   if (kind === "music") { exp = now + 30 * 86400; token = await appleJwt(key, { kid }, { iss, iat: now, exp }); }
-  else if (kind === "maps") { exp = now + 7 * 86400; token = await appleJwt(key, { kid, typ: "JWT" }, { iss, iat: now, exp, origin: ALLOWED_ORIGINS[0] }); }
+  else if (kind === "maps") { exp = now + 7 * 86400; token = await appleJwt(key, { kid, typ: "JWT" }, { iss, iat: now, exp, origin }); }
   else if (kind === "weather") {
     const sub = env.APPLE_WEATHER_SERVICE_ID;
     exp = now + 3600 * 6;
     token = await appleJwt(key, { kid, id: `${iss}.${sub}` }, { iss, iat: now, exp, sub });
   }
-  tokenCache[kind] = { token, exp };
+  tokenCache[slot] = { token, exp };
   return token;
 }
 
@@ -839,6 +842,9 @@ async function findSong(env, title, artist = "") {
   return { id: best.id, name: a.name, artist: a.artistName, album: a.albumName, url: a.url, preview: a.previews?.[0]?.url || null,
     artwork: a.artwork?.url ? a.artwork.url.replace("{w}", "600").replace("{h}", "600") : null, year: (a.releaseDate || "").slice(0, 4) || null };
 }
+
+/** The page address a maps token is for: the caller's, when it's one of Shoebox's. */
+const mapsOrigin = (request) => { const o = request.headers.get("origin") || ""; return ALLOWED_ORIGINS.includes(o) ? o : ALLOWED_ORIGINS[0]; };
 
 async function appleRoute(request, env, pathname, params, cors) {
   const out = (status, body, extra = {}) => new Response(JSON.stringify(body), { status, headers: { ...cors, "content-type": "application/json", ...extra } });
@@ -858,7 +864,7 @@ async function appleRoute(request, env, pathname, params, cors) {
   if (!env.APPLE_P8) return out(501, { error: { message: "Add your Apple key to the relay (secret APPLE_P8)." } });
   try {
     if (pathname === "/apple/music-token") return out(200, { token: await appleToken(env, "music") }, { "cache-control": "private, max-age=3600" });
-    if (pathname === "/apple/maps-token") return out(200, { token: await appleToken(env, "maps") }, { "cache-control": "private, max-age=3600" });
+    if (pathname === "/apple/maps-token") return out(200, { token: await appleToken(env, "maps", undefined, mapsOrigin(request)) }, { "cache-control": "private, max-age=3600" });
     if (pathname === "/apple/weather") {
       if (!env.APPLE_WEATHER_SERVICE_ID) return out(501, { error: { message: "Add your WeatherKit Services ID to the relay (APPLE_WEATHER_SERVICE_ID)." } });
       const lat = Number(params.get("lat")), lon = Number(params.get("lon"));

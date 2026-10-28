@@ -41,7 +41,7 @@ import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 import * as songs from "./songs.js";
 import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone, mixStories, followOrder } from "./onboard.js";
 
-export const VERSION = "4.52.2";
+export const VERSION = "4.53.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -155,7 +155,32 @@ window.visualViewport?.addEventListener("scroll", fitKeyboard);
 document.addEventListener("focusin", () => { setTimeout(fitKeyboard, 50); setTimeout(fitKeyboard, 400); });
 document.addEventListener("focusout", () => setTimeout(() => { if (!document.documentElement.classList.contains("kb")) window.scrollTo(0, 0); }, 250));
 
+/** Shoebox's first address. Saves live per address, so the iPhone app carries them over from its backup. */
+const OLD_HOST = "shoebox.tangomike.app";
+/**
+ * First open at inmyshoebox.com in the iPhone app: nothing is here yet, so bring in the newest
+ * daily backup (items, files, settings, the inbox key and AI sign-up). Once per install.
+ */
+async function restoreAfterMove() {
+  if (!nativeCan("restore") || location.hostname === OLD_HOST) return "";
+  try { if (localStorage.getItem("edition.moveChecked")) return ""; } catch { return ""; }
+  let note = "";
+  try {
+    if (!(await db.items.all()).length) {
+      const r = await nativeAsk("restore", {}, 90000);
+      if (r.ok && r.data) {
+        const n = await db.importJson(r.data);
+        note = `Shoebox moved to inmyshoebox.com and brought your ${n.items === 1 ? "save" : `${n.items} saves`} along.`;
+        track("moved");
+      }
+    }
+  } catch (e) { noteError(e, { quiet: true, where: "restore after move" }); }
+  try { localStorage.setItem("edition.moveChecked", "1"); } catch { /* full */ }
+  return note;
+}
+
 async function boot() {
+  const movedNote = await restoreAfterMove();
   const migrated = await db.migrateFromLocalStorage(migrateLegacy).catch(() => 0);
   ai.migrateAiSettings();
   state.items = await db.items.all();
@@ -191,7 +216,8 @@ async function boot() {
   await ensureEdition();
   bindScreen();
   render();
-  if (migrated) toast(`Brought over ${migrated} saved item${migrated === 1 ? "" : "s"} from the old version.`);
+  if (movedNote) toast(movedNote);
+  else if (migrated) toast(`Brought over ${migrated} saved item${migrated === 1 ? "" : "s"} from the old version.`);
   else if (seeded) toast(`Loaded ${seeded} sample items. Remove them in Settings.`);
   hideSplash();
   if (state.openId) { jumpTo(state.openId); state.openId = null; }
@@ -1606,7 +1632,9 @@ async function dailyStories() {
  */
 async function dailyBackup() {
   if (!nativeCan("backup")) return;
-  try { if (localStorage.getItem("edition.backupDay") === dayKey()) return; } catch { return; }
+  // On the old address, every open makes a fresh backup: it's what the app restores from at inmyshoebox.com.
+  const moving = location.hostname === OLD_HOST;
+  try { if (!moving && localStorage.getItem("edition.backupDay") === dayKey()) return; } catch { return; }
   try {
     const r = await nativeAsk("backup", { name: `shoebox-backup-${dayKey()}.json`, data: await db.exportJson() }, 60000);
     if (r.ok) { localStorage.setItem("edition.backupDay", dayKey()); localStorage.setItem("edition.backupAt", String(Date.now())); localStorage.setItem("edition.backupICloud", r.icloud ? "1" : "0"); }
@@ -1716,8 +1744,8 @@ function setSchoolSettings(v) { try { localStorage.setItem(SCHOOL_KEY, JSON.stri
 const schoolAsked = () => { try { return localStorage.getItem(SCHOOL_ASKED) === dayKey(); } catch { return false; } };
 const markSchoolAsked = () => { try { localStorage.setItem(SCHOOL_ASKED, dayKey()); } catch { /* private mode */ } };
 
-/** support@tangomike.app serves several apps: the subject says which, so mail can be sorted by app. */
-export const SUPPORT_EMAIL = "support@tangomike.app";
+/** Support mail: the subject carries the app, version and platform, so mail can be sorted. */
+export const SUPPORT_EMAIL = "support@inmyshoebox.com";
 function supportMail() {
   const where = NATIVE ? "iPhone app" : "web";
   const subject = `[${APP} ${VERSION} ${where}] `;
@@ -4571,7 +4599,7 @@ function openSettings(panel = "", { fromCard = false } = {}) {
     features: { title: "Things Shoebox can do", value: "", body: featuresBody() },
     help: { title: "Help and feedback", value: problems.length ? `${problems.length} logged` : "", body: `
       <div class="group help-links">
-        <a class="row" href="${supportMail()}"><span class="rk">Email support</span><span class="sv">support@tangomike.app</span></a>
+        <a class="row" href="${supportMail()}"><span class="rk">Email support</span><span class="sv">support@inmyshoebox.com</span></a>
         <a class="row" href="support" target="_blank" rel="noopener"><span class="rk">Questions and answers</span>${I.next}</a>
       </div>
       <div class="group">

@@ -35,7 +35,7 @@ test("a topic is searched once a day and shared; local news counts against the a
   const realFetch = globalThis.fetch;
   globalThis.fetch = async () => { searches++; return new Response(JSON.stringify(reply(PICKS)), { status: 200 }); };
   try {
-    const origin = "https://shoebox.tangomike.app";
+    const origin = "https://inmyshoebox.com";
     const reg = await (await relay.fetch(new Request("https://r.test/ai/register", { method: "POST", headers: { origin, "cf-connecting-ip": "1.2.3.4" } }), env)).json();
     const h = { origin, "x-shoebox-device": reg.device, "x-shoebox-token": reg.token, "cf-connecting-ip": "1.2.3.4", "content-type": "application/json" };
     const ask = async (body) => { const r = await relay.fetch(new Request("https://r.test/ai/stories", { method: "POST", headers: h, body: JSON.stringify(body) }), env); return [r.status, JSON.parse((await r.text()).trim())]; };

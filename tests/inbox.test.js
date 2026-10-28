@@ -94,7 +94,7 @@ test("attachments wait on the relay, are fetched one by one, and go when the mai
     list: async ({ prefix }) => ({ keys: [...store.keys()].filter((k) => k.startsWith(prefix)).map((name) => ({ name })) }) };
   const env = { SHOEBOX: kv };
   await relay.email({ raw: new Blob([MAIL]).stream(), from: "news@nhcs.net", setReject: () => { throw new Error("rejected"); } }, env);
-  const origin = "https://shoebox.tangomike.app", key = "k".repeat(30);
+  const origin = "https://inmyshoebox.com", key = "k".repeat(30);
   const h = { origin, "x-inbox-key": key };
   const list = await (await relay.fetch(new Request("https://w.test/inbox", { headers: h }), env)).json();
   const mail = list.mails[0];
@@ -111,7 +111,7 @@ import { mailBox, addressName } from "../relay/perplexity-relay.js";
 
 test("each phone picks its own address and only sees its own mail; the shared address still reaches its owner", async () => {
   const env = { SHOEBOX: fakeKv(), EMAIL_ADDRESS: "shoebox@teamd503.com", EMAIL_ALIASES: "1", EMAIL_DOMAIN: "tangomike.app" };
-  const origin = "https://shoebox.tangomike.app";
+  const origin = "https://inmyshoebox.com";
   const call = (method, path, key, body) => relay.fetch(new Request(`https://relay.test${path}`, { method, headers: { origin, "x-inbox-key": key, "content-type": "application/json" }, body: body && JSON.stringify(body) }), env);
   const owner = "o".repeat(30), tester = "t".repeat(30);
   await env.SHOEBOX.put("inbox-key", owner);
@@ -160,7 +160,7 @@ test("address names are tidy", () => {
 
 test("before personal addresses are on, nothing changes", async () => {
   const env = { SHOEBOX: fakeKv(), EMAIL_ADDRESS: "shoebox@tangomike.app" };
-  const origin = "https://shoebox.tangomike.app";
+  const origin = "https://inmyshoebox.com";
   const call = (key) => relay.fetch(new Request("https://relay.test/inbox", { headers: { origin, "x-inbox-key": key } }), env);
   const first = await (await call("a".repeat(30))).json();
   assert.equal(first.address, "shoebox@tangomike.app");
@@ -170,7 +170,7 @@ test("before personal addresses are on, nothing changes", async () => {
 
 test("delete my data clears this phone's address, mail and AI sign-up, and nobody else's", async () => {
   const env = { SHOEBOX: fakeKv(), EMAIL_ALIASES: "1", EMAIL_DOMAIN: "tangomike.app", ANTHROPIC_API_KEY: "k" };
-  const origin = "https://shoebox.tangomike.app";
+  const origin = "https://inmyshoebox.com";
   const mine = "m".repeat(30), theirs = "t".repeat(30);
   const post = (path, headers, body) => relay.fetch(new Request(`https://relay.test${path}`, { method: "POST", headers: { origin, "content-type": "application/json", ...headers }, body: body && JSON.stringify(body) }), env);
   const a = await (await post("/inbox/address", { "x-inbox-key": mine }, { name: "me" })).json();
@@ -206,7 +206,7 @@ test("a linked PDF is fetched for the app; web pages and private addresses aren'
 
 test("a second mail domain: new addresses show the first, every listed domain still delivers", async () => {
   const env = { SHOEBOX: fakeKv(), EMAIL_ALIASES: "1", EMAIL_DOMAIN: "inmyshoebox.com, tangomike.app", EMAIL_ADDRESS: "shoebox@teamd503.com" };
-  const origin = "https://shoebox.tangomike.app";
+  const origin = "https://inmyshoebox.com";
   const a = await (await relay.fetch(new Request("https://relay.test/inbox/address", { method: "POST", headers: { origin, "x-inbox-key": "k".repeat(30), "content-type": "application/json" }, body: JSON.stringify({ name: "graham" }) }), env)).json();
   assert.match(a.address, /^graham-[a-z2-9]{4}@inmyshoebox\.com$/);
   const local = a.address.split("@")[0];
@@ -217,7 +217,7 @@ test("a second mail domain: new addresses show the first, every listed domain st
 
 test("Shoebox Me phones get firstname-keep; the old address keeps working; nobody else can ask for it", async () => {
   const env = { SHOEBOX: fakeKv(), EMAIL_ALIASES: "1", EMAIL_DOMAIN: "inmyshoebox.com,tangomike.app", EMAIL_ADDRESS: "shoebox@teamd503.com", ANTHROPIC_API_KEY: "k" };
-  const origin = "https://shoebox.tangomike.app";
+  const origin = "https://inmyshoebox.com";
   const post = (path, headers, body) => relay.fetch(new Request(`https://relay.test${path}`, { method: "POST", headers: { origin, "content-type": "application/json", ...headers }, body: body && JSON.stringify(body) }), env);
   const reg = await (await post("/ai/register", { "cf-connecting-ip": "7.7.7.7" })).json();
   const reg2 = await (await post("/ai/register", { "cf-connecting-ip": "7.7.7.8" })).json();

@@ -5,6 +5,14 @@
   "compatibility_date": "2026-10-01",
   // Keep variables set in the Cloudflare dashboard (EMAIL_ADDRESS, EMAIL_DOMAIN, EMAIL_ALIASES, AI limits) on every deploy.
   "keep_vars": true,
+  // The live mail settings, here too so no deploy can lose them. The first mail domain is the one new
+  // addresses show; tangomike.app stays listed so addresses made there keep working. EMAIL_ADDRESS is the
+  // original shared address. AI_OWNER_DEVICES and the AI limits stay in the dashboard only.
+  "vars": {
+    "EMAIL_ADDRESS": "shoebox@teamd503.com",
+    "EMAIL_DOMAIN": "inmyshoebox.com,tangomike.app",
+    "EMAIL_ALIASES": "1"
+  },
   // Reminders and the notification key pair. Created for you on deploy.
   "kv_namespaces": [{ "binding": "SHOEBOX" }],
   // Sends reminders that are due. Free plans allow five Cron Triggers; this uses one.
