@@ -189,3 +189,17 @@ test("delete my data clears this phone's address, mail and AI sign-up, and nobod
   const wrong = await (await post("/me/delete", { "x-shoebox-device": reg.device, "x-shoebox-token": "nope" })).json();
   assert.equal(wrong.ai, false);
 });
+
+import { fileAt } from "../relay/perplexity-relay.js";
+
+test("a linked PDF is fetched for the app; web pages and private addresses aren't", async () => {
+  const real = globalThis.fetch;
+  try {
+    globalThis.fetch = async (u) => new Response(u.includes("cal") ? "%PDF-1.7 calendar" : "<html>hi</html>", { status: 200 });
+    const ok = await (await fileAt("https://resources.finalsite.net/images/x/TraditionalCalendar11-5-25.pdf", {})).json();
+    assert.equal(ok.name, "TraditionalCalendar11-5-25.pdf");
+    assert.equal(Buffer.from(ok.data, "base64").toString(), "%PDF-1.7 calendar");
+    assert.equal((await fileAt("https://example.com/page", {})).status, 415);
+    assert.equal((await fileAt("http://192.168.1.5/cal.pdf", {})).status, 400);
+  } finally { globalThis.fetch = real; }
+});

@@ -749,11 +749,13 @@ export async function schoolPosts({ text, about, school = "", today = new Date()
     "",
     "Go through it piece by piece. Keep each piece that matters for that child: their grade, their activities and teams, and whole-school dates, deadlines, closings and requests that affect them.",
     "Leave out other grades, other sports and clubs, staff news, fundraising pitches and general filler.",
+    "Leave out anything whose date has already passed.",
+    "If it's a calendar covering many weeks or the whole year: keep each date in the next 8 weeks that affects this child (no school, early release, holidays and breaks, report cards, conferences, testing, events for their grade). After that, keep only the big ones: breaks, holidays and the last day of school.",
     "Do not summarise or merge: each kept piece becomes its own post, with its specifics (what, when, where, what to bring or do, who to contact, links) kept.",
     "",
     "Return JSON: {",
     '"school": string (the school\'s short name, e.g. "Myrtle Grove Middle"),',
-    '"posts": array of up to 12 {',
+    '"posts": array of up to 16 {',
     '  "type": "action" | "decision" | "info" (action: the family has to do something, like sign, pay, bring, register or show up; decision: they have a choice to make, like whether to sign up, attend or buy; info: good to know, nothing to do),',
     '  "headline": string (a catchy line a parent would stop scrolling for, max 70 chars; specific, no clickbait, no emoji),',
     '  "body": string (1 to 3 short sentences, max 300 chars, written like a lively school social post: the details of this one piece; at most one exclamation mark; no emoji, no hashtags),',
@@ -774,7 +776,7 @@ export async function schoolPosts({ text, about, school = "", today = new Date()
         : { type: "image", source: { type: "base64", media_type: f.type, data: f.data } })), { type: "text", text: prompt }]
     : prompt;
   const out = parseJson(textOf(await call({ content, system: ENRICH_SYSTEM, maxTokens: 3500 })));
-  const posts = (Array.isArray(out.posts) ? out.posts : []).slice(0, 12).map((p) => ({
+  const posts = (Array.isArray(out.posts) ? out.posts : []).slice(0, 16).map((p) => ({
     headline: clip(p?.headline, 90),
     body: clip(p?.body, 340),
     date: /^\d{4}-\d{2}-\d{2}$/.test(p?.date || "") ? p.date : null,
