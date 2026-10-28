@@ -1,7 +1,7 @@
 {
   "name": "Shoebox",
   "short_name": "Shoebox",
-  "description": "Keep it. Come back to it. The things you saved for yourself, back as a short daily timeline.",
+  "description": "Your own feed. Everything you meant to come back to, handed back a few at a time until you're done.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

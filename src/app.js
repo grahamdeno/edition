@@ -41,7 +41,7 @@ import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 import * as songs from "./songs.js";
 import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone, mixStories, followOrder } from "./onboard.js";
 
-export const VERSION = "4.55.0";
+export const VERSION = "4.55.1";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -1835,7 +1835,7 @@ function welcomeHtml() {
     return `<section class="ask welcome hero" aria-labelledby="wel-h">
       <div class="ask-top"><span class="av av-sb" aria-hidden="true">${LOGO}</span>
         <div><h2 id="wel-h">Welcome to Shoebox</h2>
-        <p>A calm morning: your day, your weather, and a few things worth reading. Nothing to scroll.</p></div></div>
+        <p>Your own feed: the things you saved come back a few at a time, with your day and weather on top. It ends when you're done.</p></div></div>
       <div class="ask-acts"><button class="btn primary" type="button" data-welcome="start">Build my morning</button></div>
       <button class="btn ghost sm wel-skip" type="button" data-welcome="skip">Skip</button>
     </section>`;

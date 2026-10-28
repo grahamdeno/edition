@@ -94,6 +94,23 @@ h2 { margin: 0; font: 400 clamp(44px, 6vw, 80px)/.95 var(--serif); letter-spacin
 .notes.left li::after { right: -40px; }
 .notes.right li::before { left: -40px; }
 
+/* Saved everywhere: slips of paper from the places things get lost, falling toward one feed. */
+.scatter { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 56px; align-items: center; }
+.scatter .big + .big { color: var(--ink); }
+.slips-wrap { position: relative; display: flex; justify-content: center; padding-top: 8px; }
+.slips-wrap .phone { width: 300px; position: relative; z-index: 1; transform: rotate(-2deg); }
+.slips { list-style: none; margin: 0; padding: 0; position: absolute; inset: 0; z-index: 2; pointer-events: none; }
+.slips li { position: absolute; padding: 10px 14px; background: var(--card); color: #22123B; border-radius: 4px; font: 600 15px/1 var(--sans);
+  box-shadow: 0 1px 0 #E9DDB3, 0 10px 22px rgba(34, 18, 59, .16); white-space: nowrap; }
+.slips li:nth-child(1) { left: 0; top: 6%; transform: rotate(-8deg); }
+.slips li:nth-child(2) { right: 0; top: 2%; transform: rotate(6deg); background: #FFFFFF; }
+.slips li:nth-child(3) { left: 4%; top: 30%; transform: rotate(4deg); background: var(--gold); }
+.slips li:nth-child(4) { right: -2%; top: 26%; transform: rotate(-5deg); }
+.slips li:nth-child(5) { left: -2%; top: 54%; transform: rotate(-3deg); background: #FFFFFF; }
+.slips li:nth-child(6) { right: 2%; top: 50%; transform: rotate(7deg); background: var(--gold); }
+.slips li:nth-child(7) { left: 6%; top: 76%; transform: rotate(6deg); }
+.slips li:nth-child(8) { right: 4%; top: 72%; transform: rotate(-6deg); background: #FFFFFF; }
+
 /* Email: an address card, then what Shoebox makes of a newsletter. */
 .mail { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, .9fr); gap: 56px; align-items: center; }
 .envelope { margin-top: 40px; background: var(--card); color: #22123B; border-radius: 6px 6px 22px 22px; padding: 30px 30px 34px; position: relative; box-shadow: 0 18px 40px rgba(34, 18, 59, .14); transform: rotate(-1.5deg); }
@@ -161,7 +178,8 @@ footer.foot .made { margin-left: auto; }
   .notes li { padding-left: 22px; }
   .notes.left li::after, .notes.right li::before { left: 0; right: auto; top: 14px; width: 10px; height: 10px; border-radius: 3px; }
   .notes.left li::after { content: ""; }
-  .mail { grid-template-columns: 1fr; }
+  .mail, .scatter { grid-template-columns: 1fr; }
+  .slips li { font-size: 14px; padding: 8px 12px; }
   .mail .phone { width: min(320px, 84vw); }
   .cards { grid-template-columns: 1fr 1fr; }
   .private .facts { grid-template-columns: 1fr; gap: 28px; }
@@ -169,7 +187,7 @@ footer.foot .made { margin-left: auto; }
 }
 @media (max-width: 600px) {
   .bar .open { display: none; }
-  .stand { height: 300px; margin-top: 8px; }
+  .stand { height: 300px; margin-top: 40px; }
   .stand .phone { width: 180px; bottom: -170px; }
   .stand .p2 { width: 224px; margin-left: -112px; bottom: -110px; }
   .stand .p1 { left: -10px; } .stand .p3 { right: -10px; }
