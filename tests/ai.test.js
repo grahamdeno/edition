@@ -393,7 +393,7 @@ test("the relay answers its own crashes with CORS, so the app can say what went 
   assert.match((await res.json()).error.message, /KV down/);
 });
 
-import { nameIn, maskNames, CHILD_TOKEN } from "../src/ai.js";
+import { nameIn } from "../src/ai.js";
 
 test("school posts carry the child's name, which never goes to the AI", () => {
   assert.equal(maskNames("Gunner has band Thursday", ["Gunner"], CHILD_TOKEN), "{child} has band Thursday");
