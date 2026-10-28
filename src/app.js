@@ -41,7 +41,7 @@ import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 import * as songs from "./songs.js";
 import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone, mixStories, followOrder } from "./onboard.js";
 
-export const VERSION = "4.46.2";
+export const VERSION = "4.47.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -1215,7 +1215,7 @@ function songAskHtml() {
     : `${name} didn't play all the way through. That's fine; some songs need a different day.`;
   const acts = e.heard
     ? `<button class="btn primary" type="button" data-song-ans="loved">Loved it</button><button class="btn" type="button" data-song-ans="fine">It was fine</button><button class="btn ghost" type="button" data-song-ans="never">Not for me</button>`
-    : `<button class="btn primary" type="button" data-song-ans="again">Play it again</button><button class="btn" type="button" data-song-ans="later">Skip it for now</button><button class="btn ghost" type="button" data-song-ans="never">Not for me</button>`;
+    : `<button class="btn primary" type="button" data-song-ans="again">Try it again</button><button class="btn" type="button" data-song-ans="later">Skip it for now</button><button class="btn ghost" type="button" data-song-ans="never">Not for me</button>`;
   return `<section class="ask song-ask" aria-labelledby="song-ask-h">
       <div class="ask-top"><span class="av av-day" aria-hidden="true">${I.music}</span><div><h2 id="song-ask-h">${head}</h2><p>${body}</p></div></div>
       <div class="ask-acts">${acts}</div></section>`;
@@ -1227,10 +1227,10 @@ async function songAnswer(v) {
   state.songAsk = null;
   track(`song_${v}`);
   if (v === "again") {
-    saveSongLog(songs.markAsked(songs.logPlay(songLog(), { id: e.id, title: e.title, artist: e.artist, plays: e.prevPlays, lastPlayed: e.prevLast }), "__"));
-    const r = await nativeAsk("music", { op: "play", song: e.id }).catch(() => ({ ok: false }));
+    saveSongLog(songs.logPlay(songLog(), { id: e.id, title: e.title, artist: e.artist, plays: e.prevPlays, lastPlayed: e.prevLast }));
     render({ top: false });
-    toast(r.ok ? "Playing in Music. Give it the whole song." : "Couldn't play it. It may not be on this iPhone any more.");
+    const sg = morningCache().song;
+    if (sg?.url && sg.id === e.id) window.open(sg.url, "_blank", "noopener"); else toast("Find it in Music and give it the whole song.");
     return;
   }
   saveSongLog(songs.answer(songLog(), e.id, v === "again" ? "fine" : v));
@@ -1242,6 +1242,22 @@ async function songAnswer(v) {
   } else if (v === "never") toast("Got it. That one won't come back.");
   else if (v === "later") toast("Skipped for a few months.");
   else toast("Noted.");
+}
+
+/** Today's song from the phone, looked up in Apple Music once: the link to open it there, a preview, artwork. */
+async function findInAppleMusic() {
+  const relay = ai.relayBase(), c = morningCache(), sg = c.song;
+  if (!relay || !sg?.native || sg.looked) return;
+  try {
+    const r = await withTimeout(fetch(`${relay}/apple/find?title=${encodeURIComponent(sg.title)}&artist=${encodeURIComponent(sg.artist || "")}`), 15000);
+    const d = r.ok ? await r.json() : {};
+    const m = d.match || {};
+    const now = morningCache();
+    if (now.song?.id !== sg.id) return;
+    now.song = { ...now.song, looked: true, url: m.url || "", preview: m.preview || "", artwork: m.artwork || "" };
+    saveMorningCache(now);
+    if (state.tab === "today" && !$(".sheet-wrap") && !state.reader) render({ top: false });
+  } catch (e) { noteError(e, { quiet: true, where: "song: Apple Music lookup" }); }
 }
 
 /** A song from the iPhone's library, as the morning card keeps it. */
@@ -1371,11 +1387,13 @@ function morningHtml() {
   }
   if (m.song && c.song?.native) {
     const sg = c.song;
+    if (!sg.looked && !findInAppleMusic.busy) { findInAppleMusic.busy = true; setTimeout(() => findInAppleMusic().finally(() => { findInAppleMusic.busy = false; }), 0); }
     const last = sg.lastPlayed ? `You last played it ${friendlyWhen(sg.lastPlayed)}` : "";
     cards.push(card("song", `<span class="av av-day" aria-hidden="true">${I.music}</span>`, `<span class="who">Song of the day</span>${cardMore("cards", "Daily cards")}`,
-      `<div class="song">${sg.art ? `<img class="art" alt="" src="${esc(sg.art)}">` : ""}
+      `<div class="song">${sg.art || sg.artwork ? `<img class="art" alt="" src="${esc(sg.art || sg.artwork)}" referrerpolicy="no-referrer" onerror="this.remove()">` : ""}
         <div class="song-t"><p class="ttl">${esc(sg.title)}</p><p class="wx-line">${esc(sg.artist || "")}${sg.year ? ` · ${esc(sg.year)}` : ""}</p>${last ? `<p class="wx-line">${esc(last)}</p>` : ""}</div></div>
-       <div class="song-acts"><button class="btn sm primary" type="button" data-song-play="${esc(sg.id)}">${I.play}<span>Play</span></button>
+       <div class="song-acts">${sg.preview ? `<button class="btn sm" type="button" data-preview="${esc(sg.preview)}">${I.play}<span>Preview</span></button>` : ""}
+         ${sg.url ? `<a class="btn sm primary" href="${esc(sg.url)}" target="_blank" rel="noopener" data-song-open="${esc(sg.id)}">Open in Apple Music</a>` : ""}
          <button class="btn sm" type="button" data-song-next="1">Another one</button></div>
        ${(() => { const st = songs.songStats(songLog()); return st.month || st.loved ? `<p class="song-tally">${st.month ? `${st.month} song${st.month === 1 ? "" : "s"} brought back this month` : ""}${st.month && st.loved ? " · " : ""}${st.loved ? `${st.loved} in your Rediscovered playlist` : ""}</p>` : ""; })()}`));
   } else if (m.song && nativeCan("music") && c.songStatus === "empty") {
@@ -1388,7 +1406,7 @@ function morningHtml() {
       `<div class="song">${mt.artwork ? `<img class="art" alt="" src="${esc(mt.artwork)}" referrerpolicy="no-referrer" onerror="this.remove()">` : ""}
         <div class="song-t"><p class="ttl">${esc(mt.name || sg.title)}</p><p class="wx-line">${esc(mt.artist || sg.artist || "")}${mt.year ? ` · ${esc(mt.year)}` : ""}</p>${last ? `<p class="wx-line">You ${esc(last)}</p>` : ""}</div></div>
        <div class="song-acts">${mt.preview ? `<button class="btn sm" type="button" data-preview="${esc(mt.preview)}">${I.play}<span>Preview</span></button>` : ""}
-         ${mt.id && nativeCan("music") ? `<button class="btn sm primary" type="button" data-song-store="${esc(mt.id)}">${I.play}<span>Play</span></button>` : mt.url ? `<a class="btn sm primary" href="${esc(mt.url)}" target="_blank" rel="noopener">Open in Apple Music</a>` : ""}</div>`));
+         ${mt.url ? `<a class="btn sm primary" href="${esc(mt.url)}" target="_blank" rel="noopener">Open in Apple Music</a>` : ""}</div>`));
   }
   if (m.hockey) for (const g of c.games || []) {
     if (!g.done) continue;
@@ -2811,21 +2829,15 @@ async function onTimelineClick(e) {
   let b;
   if ((b = hit("[data-tab]"))) { selectTab(b.dataset.tab); return; }
   if ((b = hit("[data-preview]"))) { playPreview(b); return; }
-  if ((b = hit("[data-song-play]"))) {
-    const r = await nativeAsk("music", { op: "play", song: b.dataset.songPlay }).catch(() => ({ ok: false }));
-    if (r.ok) {
-      const sg = morningCache().song;
-      if (sg?.native && sg.id === b.dataset.songPlay) saveSongLog(songs.logPlay(songLog(), sg));
-      buzz(8); toast("Playing in Music.");
-    } else toast("Couldn't play it. It may not be on this iPhone any more.");
+  if ((b = hit("[data-song-open]"))) {
+    // The link opens the song in Apple Music by itself; note it so Shoebox can ask later how it landed.
+    const sg = morningCache().song;
+    if (sg?.native && sg.id === b.dataset.songOpen) saveSongLog(songs.logPlay(songLog(), sg));
+    track("song_open");
     return;
   }
   if ((b = hit("[data-song-ans]"))) { await songAnswer(b.dataset.songAns); return; }
-  if ((b = hit("[data-song-store]"))) {
-    const r = await nativeAsk("music", { op: "play", store: b.dataset.songStore, ask: true }, 30000).catch(() => ({ ok: false }));
-    if (r.ok) { buzz(8); toast("Playing in Music."); } else toast("Couldn't play it here. Apple Music may need a subscription for this one.");
-    return;
-  }
+
   if ((b = hit("[data-song-next]"))) {
     b.disabled = true;
     const r = await nativeAsk("music", { op: "pick", seed: Math.floor(Math.random() * 1000), skip: songs.skipIds(songLog()) }, 20000).catch(() => ({ ok: false }));
