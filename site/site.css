@@ -216,3 +216,29 @@ footer.foot .made { margin-left: auto; }
 .doc .qa p { margin: 6px 0 0; color: var(--muted); }
 .doc .contact { margin-top: 28px; background: var(--card); color: #22123B; border-radius: 18px; padding: 24px; }
 .doc .contact a { color: #6A2FE0; font-weight: 600; }
+
+/* ---- Beta request form ---- */
+.beta form { margin-top: 36px; }
+.beta fieldset { border: 0; border-top: 1px solid var(--line); margin: 0; padding: 26px 0; min-width: 0; }
+.beta legend { float: left; width: 100%; padding: 0; font: 400 clamp(24px, 3.4vw, 30px)/1.15 var(--serif); }
+.beta legend .opt { font: 400 14px/1 var(--sans); color: var(--muted); margin-left: 6px; }
+.beta .hint { display: block; margin: 6px 0 0; color: var(--muted); font-size: 15px; font-weight: 400; }
+.beta .hint.small { font-size: 14px; margin-top: 16px; }
+.beta .field { display: block; margin-top: 18px; font-weight: 600; }
+.beta input:not([type=radio]):not([type=checkbox]), .beta textarea { display: block; width: 100%; margin-top: 8px; padding: 14px 16px; border: 2px solid var(--line); border-radius: 14px; background: transparent; color: var(--ink); font: 400 17px/1.4 var(--sans); }
+.beta input:focus, .beta textarea:focus { outline: none; border-color: var(--box); }
+.beta textarea { resize: vertical; min-height: 110px; }
+.beta .chips { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; font-weight: 400; }
+.beta .chips label { position: relative; }
+.beta .chips input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+.beta .chips span { display: inline-flex; align-items: center; min-height: 44px; padding: 8px 16px; border: 2px solid var(--line); border-radius: 999px; font-size: 16px; line-height: 1.3; }
+.beta .chips input:checked + span { background: var(--box); border-color: var(--box); color: #FFF7DA; }
+.beta .chips input:focus-visible + span { outline: 3px solid var(--gold); outline-offset: 2px; }
+.beta .trap { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
+.beta .err { min-height: 1.6em; margin: 8px 0 12px; color: #C2185B; font-weight: 600; }
+.beta button.btn { border: 0; cursor: pointer; }
+.beta button.btn:disabled { opacity: .6; cursor: default; }
+.beta .done h2 { margin: 0 0 8px; }
+.beta .done .btn { margin-top: 18px; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .beta .err { color: #FF8AB3; } }
+.beta legend + * { clear: both; }
