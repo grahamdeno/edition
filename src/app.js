@@ -41,7 +41,7 @@ import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 import * as songs from "./songs.js";
 import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone, mixStories, followOrder } from "./onboard.js";
 
-export const VERSION = "4.59.1";
+export const VERSION = "4.59.2";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -1182,7 +1182,8 @@ async function keepAddress() {
 /** Modules that only Shoebox Me shows: unofficial scores, a quote set, a one-library song. */
 const PERSONAL_MODULES = ["hockey", "jung", "song"];
 const MORNING_PUBLIC = { weather: true, zip: "", place: null, cam: "", otd: true, study: false, studyTopic: "", hockey: false, teams: [], jung: false, song: false };
-const MORNING_ME = { ...MORNING_PUBLIC, zip: "28409", hockey: true, teams: ["CAR", "WSH"], jung: true, song: true, study: true, studyTopic: "PMI-CPMAI" };
+// Shoebox Me's own choices live on its phone (written there once by sealMeSettings); only the modules are switched on here.
+const MORNING_ME = { ...MORNING_PUBLIC, hockey: true, jung: true, song: true };
 function morningSettings() {
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem(MORNING_KEY) || "{}") || {}; } catch { /* storage blocked */ }
@@ -1784,9 +1785,8 @@ async function checkInbox({ statusEl = null } = {}) {
  * a link also needs the relay to read the page.
  */
 const SCHOOL_KEY = "edition.school", SCHOOL_ASKED = "edition.schoolAsked";
-const SCHOOL_PUBLIC = { on: false, days: [1, 5], child: "", school: "", about: "", words: [] };
-const SCHOOL_ME = { on: true, days: [1, 5], child: "Gunner", school: "Myrtle Grove Middle", words: ["nhcs.net", "Ducks", "Duck Weekly"],
-  about: "Gunner is in 8th grade at Myrtle Grove Middle School. He plays in the band, and plays soccer and lacrosse." };
+const SCHOOL_PUBLIC = { on: false, days: [1, 5const SCHOOL_ME = SCHOOL_PUBLIC;
+s in the band, and plays soccer and lacrosse." };
 /** What a school post asks of you. */
 const SCHOOL_TYPES = { action: "Action", decision: "Decision", info: "Info" };
 
@@ -2480,7 +2480,7 @@ async function pullNewsletter(raw, statusEl, { files = [] } = {}) {
 /*
  * A picture for each school post: the newsletter page's own photos first,
  * then openly licensed photos (Openverse, through the relay) for the post's
- * subject. Claude picks one and writes a line about Gunner that fits it,
+ * subject. Claude picks one and writes a line about the child that fits it,
  * shown large over the photo. One post at a time, in the background.
  */
 let schoolPicRunning = false;
@@ -2539,7 +2539,7 @@ async function schoolPictures() {
   focusPending();
 }
 
-/** A school post's photo, with the line about Gunner over it. */
+/** A school post's photo, with the line about the child over it. */
 function schoolMediaHtml(item) {
   const pic = pictureOf(item);
   if (!pic) return "";
@@ -4693,7 +4693,7 @@ function openSettings(panel = "", { fromCard = false } = {}) {
       ${onOff("weather", "Show weather", m.weather)}
       ${canLocate() ? `<div class="row"><span class="rk">Where</span><button class="btn sm" type="button" id="set-mo-loc">${m.useLocation ? `Following you: ${esc(placeOf(m)?.name || "…")}` : "Use my location"}</button></div>` : ""}
       <div class="field"><label for="set-mo-zip">${canLocate() ? "Or a ZIP code or town" : "ZIP code or town"}</label>
-        <input id="set-mo-zip" type="text" autocomplete="postal-code" value="${esc(m.useLocation ? "" : m.zip || placeOf(m)?.name || "")}" placeholder="e.g. 28409"></div>
+        <input id="set-mo-zip" type="text" autocomplete="postal-code" value="${esc(m.useLocation ? "" : m.zip || placeOf(m)?.name || "")}" placeholder="e.g. 10001"></div>
       <div class="field"><label for="set-mo-cam">Camera <span class="hint">(optional)</span></label>
         <input id="set-mo-cam" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="A webcam picture or a YouTube live link" value="${esc(m.cam)}"></div>
       ${placeOf(m) && ai.settings.enabled() ? `<button class="btn" type="button" id="set-cam-find">Find live cameras near ${esc(placeOf(m).name)}</button><div class="cam-picks" id="set-cam-picks"></div><span class="st" id="set-cam-st" role="status"></span>` : ""}
