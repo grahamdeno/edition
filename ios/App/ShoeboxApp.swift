@@ -34,6 +34,15 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         return true
     }
 
+    /// Home Screen quick actions (press and hold the icon) arrive through the scene delegate.
+    func application(_ application: UIApplication, configurationForConnecting connectingSceneSession: UISceneSession,
+                     options: UIScene.ConnectionOptions) -> UISceneConfiguration {
+        if let item = options.shortcutItem { Task { @MainActor in Bridge.shared.quick(item.type) } }
+        let config = UISceneConfiguration(name: nil, sessionRole: connectingSceneSession.role)
+        config.delegateClass = SceneDelegate.self
+        return config
+    }
+
     /// Show reminders even while Shoebox is open.
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
         [.banner, .sound, .list]
@@ -44,6 +53,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         if let id = response.notification.request.content.userInfo["id"] as? String {
             await MainActor.run { Bridge.shared.openItem(id) }
         }
+    }
+}
+
+final class SceneDelegate: NSObject, UIWindowSceneDelegate {
+    func windowScene(_ windowScene: UIWindowScene, performActionFor shortcutItem: UIApplicationShortcutItem) async -> Bool {
+        await MainActor.run { Bridge.shared.quick(shortcutItem.type) }
+        return true
     }
 }
 
@@ -60,6 +76,13 @@ final class Bridge {
         guard url.scheme == "shoebox" else { return }
         let id = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "id" }?.value
         if let id { openItem(id) }
+    }
+
+    /// A quick action: the last part of its type (…add, …search, …email) says what to open.
+    func quick(_ type: String) {
+        let what = type.split(separator: ".").last.map(String.init) ?? ""
+        guard ["add", "search", "email"].contains(what) else { return }
+        controller.run("window.shoeboxQuick && window.shoeboxQuick('\(what)')")
     }
 
     func openItem(_ id: String) {

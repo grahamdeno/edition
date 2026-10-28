@@ -31,6 +31,22 @@ extension TodaySnapshot {
 private let violet = Color(red: 0x7B / 255, green: 0x3F / 255, blue: 0xF2 / 255)
 private let gold = Color(red: 1, green: 0xD2 / 255, blue: 0x3F / 255)
 
+/// The SF Symbol for a kind of post.
+private func symbol(_ kind: String?) -> String {
+    switch kind {
+    case "link": return "link"
+    case "note", "text": return "note.text"
+    case "quote": return "quote.opening"
+    case "photo": return "photo"
+    case "video": return "play.rectangle"
+    case "audio": return "waveform"
+    case "pdf", "file": return "doc"
+    case "school": return "graduationcap"
+    case "email": return "envelope"
+    default: return "circle.fill"
+    }
+}
+
 struct ShoeboxWidgetView: View {
     @Environment(\.widgetFamily) private var family
     let entry: Entry
@@ -43,7 +59,8 @@ struct ShoeboxWidgetView: View {
             HStack {
                 Text("Shoebox").font(.system(.headline, design: .serif)).foregroundStyle(violet)
                 Spacer()
-                Text(open.isEmpty ? "Cleared" : "\(snap?.left ?? open.count) left")
+                Label(open.isEmpty ? "Cleared" : "\(snap?.left ?? open.count) left", systemImage: open.isEmpty ? "checkmark.seal.fill" : "tray.full")
+                    .labelStyle(.titleAndIcon)
                     .font(.caption.weight(.semibold))
                     .padding(.horizontal, 8).padding(.vertical, 3)
                     .background(open.isEmpty ? gold : violet.opacity(0.15), in: Capsule())
@@ -51,12 +68,20 @@ struct ShoeboxWidgetView: View {
             if snap == nil {
                 Text("Open Shoebox once to fill this in.").font(.footnote).foregroundStyle(.secondary)
             } else if shown.isEmpty {
-                Text("Today is cleared.").font(.system(.title3, design: .serif))
+                Label("Today is cleared.", systemImage: "checkmark.seal.fill")
+                    .font(.system(.title3, design: .serif))
+                    .foregroundStyle(violet)
+                    .widgetAccentable()
             } else {
                 ForEach(shown, id: \.self) { post in
                     Link(destination: URL(string: "shoebox://open?id=\(post.id)")!) {
                         HStack(alignment: .top, spacing: 6) {
-                            Circle().fill(violet).frame(width: 6, height: 6).padding(.top, 6)
+                            Image(systemName: symbol(post.kind))
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(violet)
+                                .frame(width: 16)
+                                .padding(.top, 3)
+                                .widgetAccentable()
                             Text(post.why?.isEmpty == false ? post.why! : post.title)
                                 .font(family == .systemSmall ? .system(.subheadline, design: .serif) : .system(.body, design: .serif))
                                 .lineLimit(family == .systemSmall ? 4 : 2)

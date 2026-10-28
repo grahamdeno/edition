@@ -10,4 +10,4 @@ Three layers on a 1024 × 1024 canvas, transparent background, solid fills (Liqu
 
 Background fill: violet #7B3FF2 (dark appearance: #1B1033).
 
-`preview.svg` / `preview.png` show the flat composite. The finished `AppIcon.icon` goes in `ios/App/`; the old `Assets.xcassets/AppIcon` stays as the fallback for iOS before 26.
+`preview.svg` / `preview.png` show the flat composite. `ios/App/AppIcon.icon` is built from these (icon.json by hand, the three SVGs in Assets). Xcode makes the icons for iOS before 26 from it. Open it in Icon Composer on a Mac to fine-tune the glass.

@@ -41,7 +41,7 @@ import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 import * as songs from "./songs.js";
 import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone, mixStories, followOrder } from "./onboard.js";
 
-export const VERSION = "4.62.0";
+export const VERSION = "4.63.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -4265,7 +4265,7 @@ function updateWidget() {
         type: "today",
         greeting: h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening",
         left: [...s.fresh, ...s.six].filter(isOpen).length,
-        posts: list.slice(0, 12).map((i) => ({ id: i.id, title: String(i.title || headline(i) || "").slice(0, 140), why: i.why || "", kind: i.kind, done: !isOpen(i) })),
+        posts: list.slice(0, 12).map((i) => ({ id: i.id, title: String(i.title || headline(i) || "").slice(0, 140), why: i.why || "", kind: i.school ? "school" : i.source === "email" ? "email" : i.kind, done: !isOpen(i) })),
       });
     } catch (e) { noteError(e, { quiet: true, where: "widget" }); }
   }, 600);
@@ -4274,6 +4274,14 @@ function updateWidget() {
 if (NATIVE) {
   window.shoeboxReceive = (list) => receiveShared(list);
   window.shoeboxOpen = (id) => jumpTo(id);
+  // Home Screen quick actions (press and hold the app icon).
+  window.shoeboxQuick = (what) => {
+    closeSheet();
+    if (what === "add") { if (state.tab !== "today") selectTab("today"); openAdd(); }
+    else if (what === "search") { selectTab("all"); setTimeout(() => $("#panel input[type=search], #panel .search input")?.focus(), 250); }
+    else if (what === "email") openSettings("email");
+    track(`quick_${what}`);
+  };
   window.shoeboxActive = () => { refreshCalendar(); loadMorning(); checkInbox(); };
   document.documentElement.classList.add("native");
 }
