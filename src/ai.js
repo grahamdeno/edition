@@ -953,3 +953,26 @@ export function ownerHeaders() {
   const d = safeGet(DEVICE_STORE), t = safeGet(TOKEN_STORE);
   return d && t ? { "x-shoebox-device": d, "x-shoebox-token": t } : {};
 }
+
+/** Live cameras near a place, found by AI on the relay once a week per town and checked before they're offered. */
+export async function findCams(place, retried = false) {
+  if (!settings.consented()) throw new AiError("This uses AI. Turn it on in Settings › AI.");
+  const base = relayBase();
+  if (!safeGet(DEVICE_STORE) || !safeGet(TOKEN_STORE)) await register(base);
+  for (let tries = 0; tries < 5; tries++) {
+    let res;
+    try {
+      res = await fetch(`${base}/ai/cams`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-shoebox-device": safeGet(DEVICE_STORE), "x-shoebox-token": safeGet(TOKEN_STORE) },
+        body: JSON.stringify({ place }),
+      });
+    } catch { throw new AiError("Couldn't reach Shoebox's AI. Check your connection.", 0); }
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 401 && data?.error?.code === "register" && !retried) { safeSet(DEVICE_STORE, ""); safeSet(TOKEN_STORE, ""); return findCams(place, true); }
+    if (res.status === 202) { await new Promise((r) => setTimeout(r, Math.min(30, data.retry || 20) * 1000)); continue; }
+    if (!res.ok || data.error) throw new AiError(data?.error?.message || `Camera search failed (${res.status}).`, data.status || res.status);
+    return data.cams || [];
+  }
+  return [];
+}

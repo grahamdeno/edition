@@ -41,7 +41,7 @@ import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 import * as songs from "./songs.js";
 import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone, mixStories, followOrder } from "./onboard.js";
 
-export const VERSION = "4.49.0";
+export const VERSION = "4.50.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -4398,7 +4398,8 @@ function openSettings(panel = "", { fromCard = false } = {}) {
         <input id="set-mo-zip" type="text" autocomplete="postal-code" value="${esc(m.useLocation ? "" : m.zip || placeOf(m)?.name || "")}" placeholder="e.g. 28409"></div>
       <div class="field"><label for="set-mo-cam">Camera <span class="hint">(optional)</span></label>
         <input id="set-mo-cam" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="A webcam picture or a YouTube live link" value="${esc(m.cam)}"></div>
-      <p class="note">Blank shows the weather radar. To find a camera, search your town and "webcam": local TV stations and <a href="https://www.windy.com/webcams" target="_blank" rel="noopener">windy.com/webcams</a> list live ones. Use the address of the picture itself (often ending in .jpg) or a YouTube live link.</p>
+      ${placeOf(m) && ai.settings.enabled() ? `<button class="btn" type="button" id="set-cam-find">Find live cameras near ${esc(placeOf(m).name)}</button><div class="cam-picks" id="set-cam-picks"></div>` : ""}
+      <p class="note">Blank shows the weather radar. ${placeOf(m) && ai.settings.enabled() ? "Or paste" : "Paste"} a webcam's picture address (often ending in .jpg) or a YouTube live link.</p>
       <button class="btn primary" type="button" id="set-mo-save">Save</button>
       <span class="st" id="set-mo-st" role="status"></span>
       </div>` },
@@ -4611,6 +4612,29 @@ function openSettings(panel = "", { fromCard = false } = {}) {
     render({ top: false });
     loadMorning();
   }));
+  $("#set-cam-find", wrap)?.addEventListener("click", async (e) => {
+    const st2 = $("#set-mo-st", wrap), box = $("#set-cam-picks", wrap), place = placeOf(morningSettings());
+    e.target.disabled = true;
+    say(st2, `The first look for a town can take a minute. Looking for live cameras near ${place.name}…`);
+    try {
+      const cams = await ai.findCams(place.name);
+      track("cams_found");
+      if (!cams.length) { say(st2, `Couldn't find a live camera near ${place.name} that works. The radar it is, or paste one you know.`, true); e.target.disabled = false; return; }
+      say(st2, "");
+      box.innerHTML = cams.map((c, k) => `<button type="button" class="cam-pick" data-cam="${k}"><img alt="" src="${esc(c.thumb)}" referrerpolicy="no-referrer" onerror="this.closest('.cam-pick').remove()">
+        <span><b>${esc(c.title)}</b>${c.where ? `<i>${esc(c.where)}</i>` : ""}<em>${c.kind === "youtube" ? "Live video" : "Webcam picture"}</em></span></button>`).join("")
+        + `<button type="button" class="cam-pick radar" data-cam="radar"><span><b>Weather radar</b><em>No camera</em></span></button>`;
+      box.querySelectorAll("[data-cam]").forEach((b) => b.addEventListener("click", () => {
+        const c = b.dataset.cam === "radar" ? null : cams[+b.dataset.cam];
+        setMorningSettings({ ...morningSettings(), cam: c ? c.url : "" });
+        $("#set-mo-cam", wrap).value = c ? c.url : "";
+        box.querySelectorAll("[data-cam]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+        affirm(st2, c ? `Your weather card now shows ${c.title}.` : "Your weather card shows the radar.");
+        render({ top: false });
+      }));
+    } catch (err) { say(st2, err.message || "Couldn't look right now.", true); }
+    e.target.disabled = false;
+  });
   $("#set-mo-save", wrap)?.addEventListener("click", async () => {
     const st2 = $("#set-mo-st", wrap);
     const q = $("#set-mo-zip", wrap).value.trim();
@@ -5192,13 +5216,13 @@ function affirm(el, msg, err = false) {
   el.textContent = msg;
   el.classList.toggle("err", !!err);
   el.classList.remove("ok");
-  if (err || /…$/.test(msg)) return;
+  if (err || !msg || /…$/.test(msg)) return;
   void el.offsetWidth;
   el.classList.add("ok");
   buzz(8);
   toNative({ type: "haptic" });
   const b = lastSheetButton;
-  if (b && b.isConnected && b.closest(".sheet") === el.closest(".sheet") && !b.closest(".seg") && !b._flash) {
+  if (b && b.isConnected && b.classList.contains("btn") && b.closest(".sheet") === el.closest(".sheet") && !b.closest(".seg") && !b._flash) {
     const html = b.innerHTML;
     b._flash = true;
     b.classList.add("flash");
