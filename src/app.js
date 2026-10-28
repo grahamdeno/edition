@@ -23,7 +23,7 @@ import {
   screenSuggestions, suggestMaxMinutes,
   canonTags, tagVocab, tagStats, renameTag, addAlias, releaseTags, renameInSuggestProfile, localTags, normTag, MAX_TAGS,
   friendlyWhen, usablePicture, discoveryItems, schoolToday,
-  setAside, wakeAside, bringBackNow, asideChoices, fromDateInput, toDateInput, shortDate, reminderIcs,
+  setAside, startOfDay, wakeAside, bringBackNow, asideChoices, fromDateInput, toDateInput, shortDate, reminderIcs,
   senderName, plainEntities,
 } from "./model.js";
 import * as db from "./db.js";
@@ -41,7 +41,7 @@ import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 import * as songs from "./songs.js";
 import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone, mixStories, followOrder } from "./onboard.js";
 
-export const VERSION = "4.54.0";
+export const VERSION = "4.55.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -2878,6 +2878,48 @@ function postHtml(item, { compact = false } = {}) {
   </article>${replies}`;
 }
 
+/**
+ * Later, right on the card: the buttons turn into one-tap days. Tomorrow on a post from the six is the
+ * usual Later (it fades after eight); every other day sets it aside, and it tops Today that morning.
+ */
+function laterPickHtml(item) {
+  const choices = asideChoices();
+  const min = toDateInput(choices[0].until);
+  return `<div class="later-pick" role="group" aria-label="Show it again">
+    <div class="later-head"><span class="later-q">${I.later}<span>Show it again</span></span>
+      <button class="act icon" type="button" data-later-close="${esc(item.id)}" aria-label="Keep it here">${I.close}</button></div>
+    <div class="later-chips">
+      ${choices.map((c, k) => `<button class="chip" type="button" data-later-to="${k === 0 ? "tomorrow" : c.until}" data-id="${esc(item.id)}">${esc(c.label === "Tomorrow" ? "Tomorrow" : c.label)}</button>`).join("")}
+      <span class="chip date-chip"><span class="dl">Pick a date</span><input type="date" min="${min}" data-later-date="${esc(item.id)}" aria-label="Pick a date"></span>
+    </div>
+  </div>`;
+}
+
+/** "tomorrow morning", "Saturday morning", "Mon, Nov 9". */
+function laterWhen(until) {
+  const days = Math.round((startOfDay(until) - startOfDay(Date.now())) / 864e5);
+  if (days === 1) return "tomorrow morning";
+  if (days > 1 && days < 7) return `${new Date(until).toLocaleDateString("en-US", { weekday: "long" })} morning`;
+  return shortDate(until);
+}
+
+/** Set a post aside until a day, from its card. It stays on Today, stamped, with Undo. */
+async function laterTo(id, until) {
+  const before = byId(id);
+  if (!before) return;
+  state.laterOpen = null;
+  dropReminder(before);
+  const after = setAside({ ...before, reminder: undefined }, until);
+  await saveItem(after);
+  if (remindOn() && notifyOn()) scheduleReminder(after);
+  state.recent.set(id, { verdict: "aside", stage: before.status === STATUS.INBOX ? "inbox" : "six", undo: async () => { dropReminder(after); await saveItem(before); } });
+  tick(true);
+  render();
+  buzz(8);
+  track("later_pick");
+  toast(`Back ${laterWhen(after.until)}.`, { action: "Undo", onAction: () => undoRecent(id) });
+}
+
 /*
  * A settled post says what you decided, as plain status text so it never
  * looks like a button, with one real action beside it: Undo for a verdict
@@ -2888,6 +2930,7 @@ function stampHtml(item, v) {
   const st = item.school?.type;
   const label = isDone ? (st === "info" ? "Got it" : st === "decision" ? "Decided" : doneLabel(item) === "Done" ? "You marked this done" : "You've read it")
     : v === VERDICT.LET_GO ? (item.suggested ? "You said not for me" : st === "decision" ? "Not for us" : st ? "Not needed" : "You let this go")
+    : item.status === STATUS.ASIDE && item.until ? `Back ${laterWhen(item.until)}`
     : item.status === STATUS.QUEUED && state.recent.get(item.id)?.stage === "inbox" ? "Kept for a later day" : "Back tomorrow";
   const cls = isDone ? "done" : v === VERDICT.LET_GO ? "go" : "later";
   const action = state.recent.has(item.id)
@@ -2909,18 +2952,21 @@ function actionsHtml(item, open) {
       ? `<button class="act" type="button" data-requeue="${esc(item.id)}">${I.requeue}<span>Bring back</span></button>` : "";
     return `<div class="acts">${love}${reply}<span class="grow"></span>${requeue}</div>`;
   }
+  if (state.laterOpen === item.id) return laterPickHtml(item);
   if (item.school) {
     // The buttons say what finishing means for this kind of post.
     const t = item.school.type;
     const [no, yes] = t === "info" ? [null, "Got it"] : t === "decision" ? ["Not for us", "Decided"] : ["Not needed", "Done"];
     return `<div class="acts">${love}<span class="grow"></span>
     ${no ? `<button class="act" type="button" data-v="${VERDICT.LET_GO}" data-id="${esc(item.id)}">${I.letGo}<span>${no}</span></button>` : ""}
+    <button class="act" type="button" data-later-open="${esc(item.id)}">${I.later}<span>Later</span></button>
     <button class="act done" type="button" data-v="${VERDICT.DONE}" data-id="${esc(item.id)}">${I.done}<span>${yes}</span></button>
   </div>`;
   }
   const keep = item.status === STATUS.INBOX || isFaded(item);
   return `<div class="acts">${love}${reply}<span class="grow"></span>
-    <button class="act" type="button" data-v="${VERDICT.LATER}" data-id="${esc(item.id)}">${keep ? I.keep : I.later}<span>${keep ? "Keep" : "Later"}</span></button>
+    ${keep ? `<button class="act" type="button" data-v="${VERDICT.LATER}" data-id="${esc(item.id)}">${I.keep}<span>Keep</span></button>`
+      : `<button class="act" type="button" data-later-open="${esc(item.id)}">${I.later}<span>Later</span></button>`}
     <button class="act" type="button" data-v="${VERDICT.LET_GO}" data-id="${esc(item.id)}">${I.letGo}<span>${item.suggested ? "Not for me" : "Let go"}</span></button>
     <button class="act done" type="button" data-v="${VERDICT.DONE}" data-id="${esc(item.id)}">${I.done}<span>${esc(doneLabel(item))}</span></button>
   </div>`;
@@ -2987,6 +3033,11 @@ function tintVisible(root) {
 /* Taps anywhere on the screen go through one listener, set once at start. */
 function bindScreen() {
   app.addEventListener("click", onTimelineClick);
+  app.addEventListener("change", (e) => {
+    const inp = e.target.closest?.("[data-later-date]");
+    const u = inp && fromDateInput(inp.value);
+    if (u) laterTo(inp.dataset.laterDate, u);
+  });
   // Double-tap a photo to love it.
   let lastTap = { id: "", at: 0 };
   app.addEventListener("pointerup", (e) => {
@@ -3064,6 +3115,14 @@ async function onTimelineClick(e) {
   }
   if ((b = hit("[data-filter]"))) { state.allFilter = +b.dataset.filter; state.allShown = PAGE; render({ top: false }); return; }
   if ((b = hit("[data-kind]"))) { state.allKind = state.allKind === b.dataset.kind ? "" : b.dataset.kind; state.allShown = PAGE; render({ top: false }); return; }
+  if ((b = hit("[data-later-open]"))) { state.laterOpen = b.dataset.laterOpen; refreshPost(b.dataset.laterOpen); document.querySelector(`#p-${CSS.escape(b.dataset.laterOpen)} .later-chips .chip`)?.focus(); return; }
+  if ((b = hit("[data-later-close]"))) { const id = b.dataset.laterClose; state.laterOpen = null; refreshPost(id); document.querySelector(`#p-${CSS.escape(id)} [data-later-open]`)?.focus(); return; }
+  if ((b = hit("[data-later-to]"))) {
+    const id = b.dataset.id, item = byId(id);
+    if (b.dataset.laterTo === "tomorrow" && item?.status === STATUS.QUEUED) { state.laterOpen = null; timelineVerdict(id, VERDICT.LATER); }
+    else laterTo(id, b.dataset.laterTo === "tomorrow" ? asideChoices()[0].until : +b.dataset.laterTo);
+    return;
+  }
   if ((b = hit("[data-v]"))) { timelineVerdict(b.dataset.id, b.dataset.v); return; }
   if ((b = hit("[data-undo]"))) { undoRecent(b.dataset.undo); return; }
   if ((b = hit("[data-love]"))) { const it = byId(b.dataset.love); if (it) setLove(it.id, !it.loved); return; }

@@ -676,6 +676,15 @@ details.group[open] { padding-bottom: 14px; }
 .aside-pick { display: flex; flex-direction: column; gap: 8px; }
 .aside-pick .lbl { margin: 0; }
 .chips.wrap { flex-wrap: wrap; overflow: visible; }
+/* Later, right on the card */
+.later-pick { width: 100%; padding: 10px 0 2px; animation: later-in .18s ease-out; }
+.later-q { display: inline-flex; align-items: center; gap: 6px; font-size: .8125rem; font-weight: 600; color: var(--later); }
+.later-q .i { width: 16px; height: 16px; }
+.later-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; align-items: center; }
+.later-chips .chip { min-height: 40px; }
+.later-head { display: flex; align-items: center; justify-content: space-between; }
+@keyframes later-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .later-pick { animation: none; } }
 .date-chip { position: relative; display: inline-flex; align-items: center; }
 .date-chip input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; border: 0; padding: 0; font-size: 16px; cursor: pointer; }
 .date-chip[aria-pressed="true"] { background: var(--fg); border-color: var(--fg); color: var(--bg); font-weight: 600; }
