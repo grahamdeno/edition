@@ -37,7 +37,7 @@
  */
 
 /** What this copy of the relay can do; the app checks it to say when an update is needed. */
-export const RELAY_VERSION = 14;
+export const RELAY_VERSION = 15;
 export const RELAY_FEATURES = ["preview", "image", "photo", "agent", "push", "remind", "ical", "nhl", "inbox", "apple", "ai", "stats", "stories"];
 
 const ALLOWED_ORIGINS = ["https://shoebox.tangomike.app", "https://grahamdeno.github.io"];
@@ -107,6 +107,7 @@ const RELAY = {
     if (pathname === "/inbox" || pathname === "/inbox/ack" || pathname === "/inbox/file" || pathname === "/inbox/address") return inboxRoute(request, env, pathname, cors);
     if (request.method === "GET" && pathname === "/ical") return ical(searchParams.get("url"), cors);
     if (request.method === "GET" && pathname === "/image") return image(searchParams.get("url"), cors);
+    if (request.method === "GET" && pathname === "/file") return fileAt(searchParams.get("url"), cors);
     if (pathname === "/push/key" || pathname === "/push/test" || pathname.startsWith("/remind")) return pushRoute(request, env, pathname, searchParams, cors);
     if (request.method === "GET" && pathname === "/photo") return photo(searchParams.get("q"), cors);
     if (request.method !== "POST" || !PATHS.has(pathname)) return json(404, "Not found.", cors);
@@ -318,6 +319,28 @@ export async function ical(target, cors) {
 }
 
 /** Pass a picture through with CORS headers. Pictures only, up to 8 MB. */
+/**
+ * A PDF behind a link (a school calendar, a flyer), handed to the app as
+ * base64 so it can be read like an attachment. Public addresses only, 10 MB.
+ */
+export async function fileAt(target, cors) {
+  let u;
+  try { u = new URL(String(target || "")); } catch { return json(400, "No file address.", cors); }
+  if (!/^https?:$/.test(u.protocol) || PRIVATE_HOST.test(u.hostname)) return json(400, "No file address.", cors);
+  let res;
+  try { res = await fetch(u.href, { headers: { "user-agent": "Mozilla/5.0 (ShoeboxRelay)", accept: "application/pdf,*/*" }, redirect: "follow" }); }
+  catch { return json(502, "Couldn't fetch the file.", cors); }
+  if (!res.ok) return json(502, `The site said ${res.status}.`, cors);
+  const buf = new Uint8Array(await res.arrayBuffer());
+  if (buf.length > 10e6) return json(413, "That file is too large (10 MB).", cors);
+  const isPdf = String.fromCharCode(...buf.slice(0, 5)) === "%PDF-";
+  if (!isPdf) return json(415, "Not a PDF.", cors);
+  let bin = "";
+  for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
+  const name = decodeURIComponent(u.pathname.split("/").pop() || "file.pdf").slice(0, 120) || "file.pdf";
+  return new Response(JSON.stringify({ name: /\.pdf$/i.test(name) ? name : `${name}.pdf`, type: "application/pdf", data: btoa(bin) }), { headers: { ...cors, "content-type": "application/json", "cache-control": "no-store" } });
+}
+
 export async function image(target, cors) {
   let u;
   try { u = new URL(String(target || "")); } catch { return json(400, "No picture address.", cors); }

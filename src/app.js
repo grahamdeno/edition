@@ -41,7 +41,7 @@ import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 import * as songs from "./songs.js";
 import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone, mixStories, followOrder } from "./onboard.js";
 
-export const VERSION = "4.44.0";
+export const VERSION = "4.45.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -1530,9 +1530,17 @@ function isSchoolMail(m, c = schoolSettings()) {
   return re.test(`${m.from} ${m.fromName} ${m.subject}`) || re.test(String(m.text || "").slice(0, 4000));
 }
 
-/** The PDFs and pictures that came with a mail, fetched from the relay (base64). */
+/** The PDFs and pictures that came with a mail, fetched from the relay (base64), plus PDFs it links to (up to 3). */
 async function mailFiles(base, m) {
   const out = [];
+  for (const link of (m.links || []).filter((l) => /\.pdf($|[?#])/i.test(l)).slice(0, 3)) {
+    try {
+      const res = await withTimeout(fetch(`${base}/file?url=${encodeURIComponent(link)}`), 30000);
+      if (!res.ok) continue;
+      const f = await res.json();
+      if (f.data) out.push({ name: f.name, type: f.type, data: f.data, link });
+    } catch (e) { noteError(e, { quiet: true, where: "inbox: linked PDF" }); }
+  }
   for (const a of (m.attachments || []).slice(0, 6)) {
     try {
       const res = await withTimeout(fetch(`${base}/inbox/file?id=${encodeURIComponent(m.id)}&n=${a.n}`, { headers: { "x-inbox-key": inboxKey() } }), 30000);
@@ -1589,14 +1597,20 @@ async function checkInbox({ statusEl = null } = {}) {
       const c = schoolSettings();
       const school = isSchoolMail(m, c);
       const files = await mailFiles(base, m);
-      if (school && ai.settings.enabled()) {
+      // A PDF you send yourself (a district calendar, a flyer) may be school too, even from your own address:
+      // when school posts are on, let the AI read it for your child first; if nothing in it is for them, it's saved as a file.
+      const maybeSchool = !school && c.on && files.some((f) => f.type === "application/pdf") && Boolean(c.about || c.child);
+      let schoolMade = 0;
+      if ((school || maybeSchool) && ai.settings.enabled()) {
         const before = state.items.length;
         // A short email that only points at the newsletter's web page: read the page.
         const body = String(m.text || "").trim(), link = (m.links || [])[0];
         const raw = !files.length && body.length < 400 && link ? link : `${m.subject}\n\n${m.text}`;
         await pullNewsletter(raw, null, { files });
-        made += state.items.length - before;
-      } else {
+        schoolMade = state.items.length - before;
+        made += schoolMade;
+      }
+      if (school && ai.settings.enabled()) { /* done above */ } else if (schoolMade) { /* the PDF was school after all */ } else {
         // Anything attached becomes its own saved file, read like any PDF or photo you save.
         for (const f of files) {
           try {
