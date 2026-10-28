@@ -151,6 +151,8 @@ export function detectText(raw) {
   const url = findUrl(text);
   const rest = url ? text.replace(url, "").trim() : text;
   if (url && rest.length < 40) return [draftFromUrl(url, rest)];
+  // A link with its page title on one line, the way Safari and other apps share it.
+  if (url && rest.length <= 200 && !/\n/.test(rest) && text.split("\n").length <= 2 && (text.startsWith(url) || text.endsWith(url))) return [draftFromUrl(url, rest)];
   const quote = parseQuote(text);
   if (quote) {
     return [{ kind: KIND.QUOTE, text: quote.text, author: quote.author || undefined, title: firstLine(quote.text) }];

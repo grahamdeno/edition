@@ -289,3 +289,10 @@ test("HTML codes left in mail text are turned back into characters", () => {
   assert.equal(plainEntities("Dear&#160; Graham &amp; family&#x2019;s"), "Dear  Graham & family’s");
   assert.equal(htmlToText("<p>Dear&#160;Graham &amp;#160;</p>"), "Dear Graham");
 });
+
+test("a shared link with its page title on the next line is a link, titled", () => {
+  const [d] = detectText("https://coolhunting.com/buy/star-child-special-edition-by-claire-a-nivola/\nStar Child: Special Edition by Claire A Nivola - COOL HUNTING®");
+  assert.equal(d.kind, KIND.LINK);
+  assert.equal(d.title, "Star Child: Special Edition by Claire A Nivola - COOL HUNTING®");
+  assert.equal(detectText("Two paragraphs of my own thinking about this.\n\nhttps://a.com/x\nand more")[0].kind, KIND.NOTE);
+});

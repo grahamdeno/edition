@@ -40,7 +40,7 @@ import { problems, noteError as logError, onFirstProblem, clearProblems, formatP
 import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone, mixStories, followOrder } from "./onboard.js";
 
-export const VERSION = "4.43.0";
+export const VERSION = "4.43.1";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -164,6 +164,11 @@ async function boot() {
   state.wonDay = await db.meta.get("wonDay", null);
   await loadAvatar();
   await migratePictures();
+  // Links shared with their title used to land as notes; make them links so they get a picture.
+  for (const i of state.items.filter((x) => x.kind === KIND.NOTE && x.source === "share" && /^https?:\/\/\S+\n[^\n]{1,200}$/.test(x.text || ""))) {
+    const d = detectText(i.text)[0];
+    if (d && d.kind !== KIND.NOTE && d.url) { const { text, hook, summary, enrichedAt, ...rest } = i; await saveItem({ ...rest, ...d, enrichTries: 0, pictureTries: 0 }); }
+  }
   for (const i of state.items.filter((x) => x.email && /&#\d+;|&#x[0-9a-f]+;|&amp;|&nbsp;/i.test(`${x.text || ""} ${x.title || ""}`))) {
     await saveItem({ ...i, text: plainEntities(i.text), title: plainEntities(i.title) });
   }
@@ -3595,9 +3600,13 @@ async function receiveShared(list) {
       if (t.kind === "file" && t.data) {
         const bytes = Uint8Array.from(atob(t.data), (c) => c.charCodeAt(0));
         out.push(await captureFile(new File([bytes], t.name || "shared", { type: t.mime || "application/octet-stream" }), "share"));
+      } else if (t.kind === "url" && t.value) {
+        // A link from the share sheet: a link post, with the page's title when the app sent one.
+        const list = await captureText(t.value, "share");
+        for (const it of list) if (t.title && t.title !== t.value && (!it.title || it.title === it.url)) { it.title = t.title; await saveItem(it); }
+        out.push(...list);
       } else if (t.value) {
-        const text = [t.value, t.title && t.kind === "url" && t.title !== t.value ? t.title : ""].filter(Boolean).join("\n");
-        out.push(...await captureText(text, "share"));
+        out.push(...await captureText(t.value, "share"));
       }
     } catch (e) { noteError(e, { quiet: true, where: "share sheet" }); }
   }
