@@ -4,7 +4,7 @@ Paste into App Store Connect › Shoebox › App Information and the 1.0 version
 
 **Name** (30): Shoebox: Your Own Feed
 
-**Subtitle** (30): Saved things, back a few a day
+**Subtitle** (30): Keep it. Come back to it.
 
 **Promotional text** (170):
 Everything you meant to come back to, from texts, email, notes and links, in one feed made only of what you chose. A few at a time, until you're done.

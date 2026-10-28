@@ -41,7 +41,7 @@ import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 import * as songs from "./songs.js";
 import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone, mixStories, followOrder } from "./onboard.js";
 
-export const VERSION = "4.59.2";
+export const VERSION = "4.59.3";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -1785,8 +1785,8 @@ async function checkInbox({ statusEl = null } = {}) {
  * a link also needs the relay to read the page.
  */
 const SCHOOL_KEY = "edition.school", SCHOOL_ASKED = "edition.schoolAsked";
-const SCHOOL_PUBLIC = { on: false, days: [1, 5const SCHOOL_ME = SCHOOL_PUBLIC;
-s in the band, and plays soccer and lacrosse." };
+const SCHOOL_PUBLIC = { on: false, days: [1, 5], child: "", school: "", about: "", words: [] };
+const SCHOOL_ME = SCHOOL_PUBLIC;
 /** What a school post asks of you. */
 const SCHOOL_TYPES = { action: "Action", decision: "Decision", info: "Info" };
 
