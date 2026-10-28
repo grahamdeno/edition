@@ -927,6 +927,9 @@ const HEADER_LINE = /^(from|sent|date|to|cc|bcc|subject|reply-to):\s/i;
 const REPLY_START = /^(on .{4,200}wrote:|-{2,}\s*original message\s*-{2,}|_{8,})$/i;
 const SIGNATURE = /^(--|—|sent from my (iphone|ipad|android|phone)|get outlook for (ios|android)|sent from (mail|outlook|yahoo mail)\b.*)$/i;
 const FOOTER = /unsubscribe|manage (your )?(email )?preferences|view (this email )?in (your )?browser|you('re| are) receiving this|update your preferences|privacy policy|all rights reserved|^©|^\(c\) \d{4}|no longer wish to receive|this (e-?mail|message) (and any attachments )?(is|are|may be) (confidential|intended)|add us to your address book/i;
+const GREETING = /^(hi|hello|hey|dear|greetings|good (morning|afternoon|evening))\b[^.!?]{0,40}[,!:]?$/i;
+/** A subject without the Fwd: and Re: in front of it. */
+export const plainSubject = (s) => String(s || "").replace(/^\s*((fwd?|fw|re|aw|wg)\s*:\s*)+/i, "").trim();
 export function cleanEmail(text) {
   let lines = String(text || "").replace(/\r/g, "").split("\n").map((l) => l.trim());
   // A forward: the message is what comes after its header block.
@@ -940,6 +943,8 @@ export function cleanEmail(text) {
   }
   const out = [];
   for (const l of lines) {
+    // "Hello Graham," and the like say nothing; skip a greeting before anything is written.
+    if (!out.some(Boolean) && GREETING.test(l)) continue;
     if (REPLY_START.test(l) || SIGNATURE.test(l)) break;
     if (l.startsWith(">")) continue;
     if (FOOTER.test(l)) { if (out.join(" ").length > 120) break; continue; }
