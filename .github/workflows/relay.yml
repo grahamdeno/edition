@@ -59,4 +59,4 @@ jobs:
         if: env.HAS_TOKEN == 'true' && vars.RELAY_DOMAIN != ''
         run: |
           sleep 5
-          curl -sS -H "origin: https://shoebox.tangomike.app" "https://${{ vars.RELAY_DOMAIN }}/version" | tee /dev/stderr | grep -q '"version"'
+          curl -sS -H "origin: https://inmyshoebox.com" "https://${{ vars.RELAY_DOMAIN }}/version" | tee /dev/stderr | grep -q '"version"'

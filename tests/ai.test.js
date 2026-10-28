@@ -245,7 +245,7 @@ test("the proxy only takes the app's own kind of request", () => {
 test("proxy: register, call with the relay's key, charge the budget, stop at the limit", async () => {
   const kv = memKv();
   const env = { SHOEBOX: kv, ANTHROPIC_API_KEY: "sk-relay", AI_DEVICE_DAILY_CENTS: "0.1" };
-  const origin = "https://shoebox.tangomike.app";
+  const origin = "https://inmyshoebox.com";
   const reg = await relay.fetch(new Request("https://w.test/ai/register", { method: "POST", headers: { origin } }), env);
   const { device, token } = await reg.json();
   assert.ok(device && token);
@@ -358,7 +358,7 @@ test("school posts come back labeled Action, Decision or Info", async () => {
 test("proxy: a web-search call keeps the line open, then sends Claude's answer (or the error) in the body", async () => {
   const kv = memKv();
   const env = { SHOEBOX: kv, ANTHROPIC_API_KEY: "sk-relay" };
-  const origin = "https://shoebox.tangomike.app";
+  const origin = "https://inmyshoebox.com";
   const { device, token } = await (await relay.fetch(new Request("https://w.test/ai/register", { method: "POST", headers: { origin } }), env)).json();
   const realFetch = globalThis.fetch;
   const body = JSON.stringify({ model: "claude-haiku-5-5", max_tokens: 10, messages: [{ role: "user", content: "news" }], tools: [{ type: "web_search_20250305", name: "web_search" }] });
