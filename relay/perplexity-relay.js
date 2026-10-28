@@ -37,7 +37,7 @@
  */
 
 /** What this copy of the relay can do; the app checks it to say when an update is needed. */
-export const RELAY_VERSION = 19;
+export const RELAY_VERSION = 20;
 export const RELAY_FEATURES = ["preview", "image", "photo", "agent", "push", "remind", "ical", "nhl", "inbox", "apple", "ai", "stats", "stories"];
 
 const ALLOWED_ORIGINS = ["https://shoebox.tangomike.app", "https://grahamdeno.github.io"];
@@ -584,24 +584,35 @@ export async function mailBox(env, to) {
 }
 
 /** This phone's personal address, or null before one is made. `name` makes (or replaces) it. */
-async function personalAddress(env, box, { name = null, word = "", keepOld = false } = {}) {
+async function personalAddress(env, box, { name = null, keep = false } = {}) {
   const kv = env.SHOEBOX;
   const cur = await kv.get(`box:${box}`, "json");
   if (name === null) return cur ? `${cur.slug}@${mailDomain(env)}` : null;
   let slug;
-  if (word) {
-    // The owner's own pick (e.g. graham-keep): four letters they chose instead of random ones.
-    slug = `${addressName(name)}-${word}`;
-    const taken = await kv.get(`alias:${slug}`);
-    if (taken && taken !== box) return { taken: true };
+  if (keep) {
+    // Shoebox Me (staff phones): firstname-keep, the house address. A second Graham gets graham2-keep.
+    const base = addressName(name);
+    for (let n = 1; n < 100; n++) {
+      const s = `${base}${n > 1 ? n : ""}-keep`, owner = await kv.get(`alias:${s}`);
+      if (!owner || owner === box) { slug = s; break; }
+    }
+    if (!slug) return null;
   } else {
     slug = newSlug(name);
     for (let i = 0; i < 5 && await kv.get(`alias:${slug}`); i++) slug = newSlug(name);
   }
-  if (cur && !keepOld && cur.slug !== slug) await kv.delete(`alias:${cur.slug}`);
+  // Staff addresses are given out, so an earlier one keeps delivering; a private random one is retired.
+  if (cur && !keep && cur.slug !== slug) await kv.delete(`alias:${cur.slug}`);
   await kv.put(`alias:${slug}`, box);
   await kv.put(`box:${box}`, JSON.stringify({ slug, at: Date.now() }));
   return `${slug}@${mailDomain(env)}`;
+}
+
+/** Is this a Shoebox Me phone (listed in AI_OWNER_DEVICES, with its sign-up token)? */
+async function staffPhone(request, env) {
+  const device = request.headers.get("x-shoebox-device") || "", token = request.headers.get("x-shoebox-token") || "";
+  if (!device || !String(env.AI_OWNER_DEVICES || "").split(",").map((x) => x.trim()).includes(device)) return false;
+  return (await env.SHOEBOX.get(`aid:${device}`, "json"))?.hash === await sha256(token);
 }
 
 /**
@@ -657,19 +668,13 @@ async function inboxRoute(request, env, pathname, cors) {
   }
   if (request.method === "POST" && pathname === "/inbox/address") {
     if (!aliasesOn(env)) return json(409, "Personal addresses aren't on yet.", cors);
-    const { name, word } = await request.json().catch(() => ({}));
-    if (word !== undefined && word !== "") {
-      // Chosen letters are for the owner's own phones (AI_OWNER_DEVICES): guessable on purpose, so not for everyone.
-      const device = request.headers.get("x-shoebox-device") || "", token = request.headers.get("x-shoebox-token") || "";
-      const own = device && String(env.AI_OWNER_DEVICES || "").split(",").map((x) => x.trim()).includes(device)
-        && (await kv.get(`aid:${device}`, "json"))?.hash === await sha256(token);
-      if (!own) return json(403, "Choosing the letters is only for the owner's phones.", cors);
-      if (!/^[a-z]{4}$/.test(String(word))) return json(400, "Pick four letters, a to z.", cors);
-      const out = await personalAddress(env, box, { name: name || "", word: String(word), keepOld: true });
-      if (out?.taken) return json(409, "That one's taken. Try other letters.", cors);
-      return send({ address: out });
-    }
-    return send({ address: await personalAddress(env, box, { name: name || "" }) });
+    const { name, keep } = await request.json().catch(() => ({}));
+    const staff = await staffPhone(request, env);
+    // keep: true asks to move an existing address to firstname-keep; refused rather than rotated for anyone else.
+    if (keep && !staff) return json(403, "The -keep address is for Shoebox Me.", cors);
+    const address = await personalAddress(env, box, { name: name || "", keep: staff });
+    if (!address) return json(409, "Couldn't find a free address. Try another first part.", cors);
+    return send({ address });
   }
   if (request.method === "GET" && pathname === "/inbox/file") {
     const q = new URL(request.url).searchParams, id = q.get("id") || "", n = q.get("n") || "";

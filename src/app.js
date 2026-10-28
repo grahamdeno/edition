@@ -41,7 +41,7 @@ import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 import * as songs from "./songs.js";
 import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone, mixStories, followOrder } from "./onboard.js";
 
-export const VERSION = "4.51.0";
+export const VERSION = "4.52.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -207,7 +207,7 @@ async function boot() {
   sendReport(ai.relayBase(), { version: VERSION, platform: personal() ? "me" : NATIVE ? "ios" : "web" });
   refreshCalendar();
   loadMorning();
-  checkInbox();
+  checkInbox().then(keepAddress);
   dailyStories();
   dailyBackup();
   maybeAskSong();
@@ -1119,6 +1119,20 @@ const MORNING_KEY = "edition.morning", MORNING_CACHE = "edition.morningCache";
 
 /** Shoebox Me, Graham's private build, opens with ?me=1: personal modules stay available there. */
 const personal = () => { try { return localStorage.getItem("edition.me") === "1"; } catch { return false; } };
+/** Shoebox Me sends its AI sign-up so the relay gives it a firstname-keep address. */
+const staffHeaders = () => (personal() ? ai.ownerHeaders() : {});
+/** Shoebox Me: move an address made before -keep (graham-uppx) to graham-keep, once. The old one still delivers. */
+async function keepAddress() {
+  let a = "", shared = "";
+  try { a = localStorage.getItem("edition.inboxAddress") || ""; shared = localStorage.getItem("edition.inboxShared") || ""; } catch { return; }
+  const h = staffHeaders();
+  if (!personal() || !h["x-shoebox-device"] || !a || a === shared || /-keep@/.test(a)) return;
+  try {
+    const res = await withTimeout(fetch(`${ai.relayBase()}/inbox/address`, { method: "POST", headers: { "x-inbox-key": inboxKey(), "content-type": "application/json", ...h }, body: JSON.stringify({ name: a.split("-")[0], keep: true }) }), 15000);
+    const d = await res.json().catch(() => ({}));
+    if (res.ok && d.address) localStorage.setItem("edition.inboxAddress", d.address);
+  } catch { /* next launch */ }
+}
 /** Modules that only Shoebox Me shows: unofficial scores, a quote set, a one-library song. */
 const PERSONAL_MODULES = ["hockey", "jung", "song"];
 const MORNING_PUBLIC = { weather: true, zip: "", place: null, cam: "", otd: true, study: false, studyTopic: "", hockey: false, teams: [], jung: false, song: false };
@@ -1903,7 +1917,7 @@ async function buildClick(e, step, wrap) {
     if (!name) { say("Type a first part, like your first name.", true); $("#bm-mail", wrap).focus(); return; }
     btn.disabled = true; say("Making your address…");
     try {
-      const res = await withTimeout(fetch(`${ai.relayBase()}/inbox/address`, { method: "POST", headers: { "x-inbox-key": inboxKey(), "content-type": "application/json" }, body: JSON.stringify({ name }) }), 15000);
+      const res = await withTimeout(fetch(`${ai.relayBase()}/inbox/address`, { method: "POST", headers: { "x-inbox-key": inboxKey(), "content-type": "application/json", ...staffHeaders() }, body: JSON.stringify({ name }) }), 15000);
       const d = await res.json();
       if (!res.ok || !d.address) throw new Error(d?.error?.message || "No address came back.");
       localStorage.setItem("edition.inboxAddress", d.address);
@@ -4467,22 +4481,19 @@ function openSettings(panel = "", { fromCard = false } = {}) {
         if (!a && shared) a = shared;
         const personal = Boolean(mailPick) && Boolean(a) && a !== shared;
         const picker = (label) => `<div class="field"><label for="set-mail-name">${label}</label>
-            <div class="mail-pick"><input id="set-mail-name" type="text" autocomplete="given-name" autocapitalize="none" placeholder="graham" maxlength="16"><span>-····@${esc(mailPick)}</span></div></div>
+            <div class="mail-pick"><input id="set-mail-name" type="text" autocomplete="given-name" autocapitalize="none" placeholder="graham" maxlength="16"><span>-${me ? "keep" : "····"}@${esc(mailPick)}</span></div></div>
           <button class="btn ${personal ? "ghost" : "primary"} sm" type="button" id="set-mail-make">${personal ? "Change my address" : "Make my address"}</button>`;
         const uses = `<ul class="mail-uses">
             <li><b>Newsletters:</b> sign up with this address, and they come straight here.</li>
             <li><b>School email:</b> add it as a second email in your school's parent app, such as ParentSquare or SchoolMessenger.</li>
             <li><b>Anything else:</b> forward it. Newsletters become short posts, with their flyers and PDFs read too.</li></ul>`;
-        if (!a && mailPick) return `<p class="note">Make your own Shoebox address. Only this phone gets its mail. Pick the first part; four random characters keep it private.</p>${picker("First part of your address")}`;
+        if (!a && mailPick) return `<p class="note">Make your own Shoebox address. Only this phone gets its mail. ${me ? "Shoebox Me addresses end in -keep, like graham-keep." : "Pick the first part; four random characters keep it private."}</p>${picker("First part of your address")}`;
         if (!a) return `<p class="note">Forward email to your own Shoebox address. It appears here after Shoebox checks for mail.</p>`;
         return `<p class="note">Your Shoebox address${personal ? ", only for this phone" : ""}:</p>
           <div class="mail-addr"><b id="set-mail-addr">${esc(personal ? a : shared || a)}</b><button class="btn sm" type="button" id="set-mail-copy">Copy</button></div>
           ${uses}
           ${shared && personal ? `<p class="note">Your old address, <b>${esc(shared)}</b>, still works. To move a Gmail forward: Gmail › Settings › Forwarding › Add a forwarding address, paste the address above, and Gmail's confirmation code arrives here as a post.</p>` : ""}
-          ${me && personal ? `<div class="group-in"><p class="note"><b>Pick your four letters</b> (Shoebox Me only). Your current address keeps working.</p>
-            <div class="chips wrap vanity">${["keep", "save", "gems", "joys", "mine", "loot", "nook", "glow"].map((w) => `<button class="chip" type="button" data-word="${w}">${esc(a.split("-")[0])}-${w}</button>`).join("")}</div>
-            <div class="mail-pick"><input id="set-mail-word" type="text" autocomplete="off" autocapitalize="none" maxlength="4" placeholder="four letters"><button class="btn sm" type="button" id="set-mail-word-go">Use these</button></div></div>` : ""}
-          ${mailPick ? (personal ? `<details class="adv"><summary>Change my address</summary><p class="note">The old address stops working right away.</p>${picker("New first part")}</details>` : picker("Make a personal address for this phone")) : ""}`;
+          ${mailPick ? (personal ? `<details class="adv"><summary>Change my address</summary><p class="note">${me ? "Your old address keeps working." : "The old address stops working right away."}</p>${picker("New first part")}</details>` : picker("Make a personal address for this phone")) : ""}`;
       })()}
       <p class="note">Shoebox checks by itself when you open it and every few minutes while it's open.${(() => { try { const t = +localStorage.getItem("edition.inboxChecked"); return t ? ` Last checked ${esc(clock(t))}.` : ""; } catch { return ""; } })()}</p>
       <button class="btn ghost sm" type="button" id="set-mail-check">Check now</button>
@@ -4714,27 +4725,12 @@ function openSettings(panel = "", { fromCard = false } = {}) {
     const a = $("#set-mail-addr", wrap)?.textContent || "";
     try { await navigator.clipboard.writeText(a); toast("Address copied."); } catch { say($("#set-mail-st", wrap), a); }
   });
-  const useWord = async (word) => {
-    const st = $("#set-mail-st", wrap), cur = $("#set-mail-addr", wrap)?.textContent || "";
-    if (!/^[a-z]{4}$/.test(word)) { say(st, "Pick four letters, a to z.", true); return; }
-    say(st, "Making it…");
-    try {
-      const res = await withTimeout(fetch(`${ai.relayBase()}/inbox/address`, { method: "POST", headers: { "x-inbox-key": inboxKey(), "content-type": "application/json", ...ai.ownerHeaders() }, body: JSON.stringify({ name: cur.split("-")[0], word }) }), 15000);
-      const d = await res.json().catch(() => ({}));
-      if (!res.ok || !d.address) throw new Error(d?.error?.message || "No address came back.");
-      localStorage.setItem("edition.inboxAddress", d.address);
-      $("#set-mail-addr", wrap).textContent = d.address;
-      affirm(st, `You're ${d.address}. ${cur ? `${cur} still works too.` : ""}`);
-    } catch (err) { say(st, err.message || "Couldn't reach the relay.", true); }
-  };
-  wrap.querySelectorAll("[data-word]").forEach((b) => b.addEventListener("click", () => useWord(b.dataset.word)));
-  $("#set-mail-word-go", wrap)?.addEventListener("click", () => useWord(($("#set-mail-word", wrap).value || "").trim().toLowerCase()));
   $("#set-mail-make", wrap)?.addEventListener("click", async (e) => {
     const st = $("#set-mail-st", wrap), name = $("#set-mail-name", wrap)?.value.trim() || "";
     if (!name) { say(st, "Type a first part, like your first name.", true); $("#set-mail-name", wrap)?.focus(); return; }
     e.target.disabled = true; say(st, "Making your address…");
     try {
-      const res = await withTimeout(fetch(`${ai.relayBase()}/inbox/address`, { method: "POST", headers: { "x-inbox-key": inboxKey(), "content-type": "application/json" }, body: JSON.stringify({ name }) }), 15000);
+      const res = await withTimeout(fetch(`${ai.relayBase()}/inbox/address`, { method: "POST", headers: { "x-inbox-key": inboxKey(), "content-type": "application/json", ...staffHeaders() }, body: JSON.stringify({ name }) }), 15000);
       const d = await res.json();
       if (!res.ok || !d.address) throw new Error(d?.error?.message || "No address came back.");
       localStorage.setItem("edition.inboxAddress", d.address);
