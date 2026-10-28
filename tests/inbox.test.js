@@ -203,3 +203,14 @@ test("a linked PDF is fetched for the app; web pages and private addresses aren'
     assert.equal((await fileAt("http://192.168.1.5/cal.pdf", {})).status, 400);
   } finally { globalThis.fetch = real; }
 });
+
+test("a second mail domain: new addresses show the first, every listed domain still delivers", async () => {
+  const env = { SHOEBOX: fakeKv(), EMAIL_ALIASES: "1", EMAIL_DOMAIN: "inmyshoebox.com, tangomike.app", EMAIL_ADDRESS: "shoebox@teamd503.com" };
+  const origin = "https://shoebox.tangomike.app";
+  const a = await (await relay.fetch(new Request("https://relay.test/inbox/address", { method: "POST", headers: { origin, "x-inbox-key": "k".repeat(30), "content-type": "application/json" }, body: JSON.stringify({ name: "graham" }) }), env)).json();
+  assert.match(a.address, /^graham-[a-z2-9]{4}@inmyshoebox\.com$/);
+  const local = a.address.split("@")[0];
+  assert.ok(await mailBox(env, `${local}@inmyshoebox.com`));
+  assert.ok(await mailBox(env, `${local}@tangomike.app`), "old addresses keep working");
+  assert.equal(await mailBox(env, `${local}@example.com`), null);
+});

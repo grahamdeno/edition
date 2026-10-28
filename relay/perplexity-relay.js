@@ -37,7 +37,7 @@
  */
 
 /** What this copy of the relay can do; the app checks it to say when an update is needed. */
-export const RELAY_VERSION = 17;
+export const RELAY_VERSION = 18;
 export const RELAY_FEATURES = ["preview", "image", "photo", "agent", "push", "remind", "ical", "nhl", "inbox", "apple", "ai", "stats", "stories"];
 
 const ALLOWED_ORIGINS = ["https://shoebox.tangomike.app", "https://grahamdeno.github.io"];
@@ -559,7 +559,9 @@ export async function nhl(date, cors) {
  */
 const ALIAS_RE = /^([a-z][a-z0-9]{0,15}-[a-z2-9]{4})@/;
 const aliasesOn = (env) => env.EMAIL_ALIASES === "1" || env.EMAIL_ALIASES === 1 || env.EMAIL_ALIASES === true;
-const mailDomain = (env) => String(env.EMAIL_DOMAIN || "tangomike.app").toLowerCase();
+/** Mail domains: EMAIL_DOMAIN may list several, comma-separated. The first is the one people see; all of them deliver. */
+export const mailDomains = (env) => String(env.EMAIL_DOMAIN || "tangomike.app").toLowerCase().split(",").map((d) => d.trim()).filter(Boolean);
+const mailDomain = (env) => mailDomains(env)[0] || "tangomike.app";
 /** The name part of an address: letters and digits, starting with a letter, up to 16. */
 export function addressName(name) {
   const n = String(name || "").toLowerCase().normalize("NFKD").replace(/[^a-z0-9]/g, "").replace(/^[0-9]+/, "").slice(0, 16);
@@ -577,7 +579,7 @@ export async function mailBox(env, to) {
   if (!addr) return ""; // no envelope recipient: treat as the shared address
   if (env.EMAIL_ADDRESS && addr === String(env.EMAIL_ADDRESS).toLowerCase()) return "";
   const m = addr.match(ALIAS_RE);
-  if (!m || !aliasesOn(env) || addr.split("@")[1] !== mailDomain(env)) return env.EMAIL_ADDRESS ? null : "";
+  if (!m || !aliasesOn(env) || !mailDomains(env).includes(addr.split("@")[1])) return env.EMAIL_ADDRESS ? null : "";
   return (await env.SHOEBOX.get(`alias:${m[1]}`)) || null;
 }
 
