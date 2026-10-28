@@ -786,7 +786,7 @@ details.group[open] { padding-bottom: 14px; }
 
 /* Song of the day, Apple Weather */
 .song { display: flex; gap: 12px; align-items: center; margin-top: 6px; }
-.song .art { width: 84px; height: 84px; border-radius: 12px; object-fit: cover; flex: none; background: var(--soft); }
+.song .art { width: 84px; height: 84px; border-radius: 12px; object-fit: cover; flex: none; background: var(--soft); outline: 1px solid var(--line-2); outline-offset: -1px; box-shadow: 0 2px 8px rgba(20, 16, 40, .12); }
 .song-t { min-width: 0; }
 .song-t .ttl { margin: 0; font: 400 1.4rem/1.2 var(--serif); }
 .song-acts { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
