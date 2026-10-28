@@ -41,7 +41,7 @@ import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 import * as songs from "./songs.js";
 import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone, mixStories, followOrder } from "./onboard.js";
 
-export const VERSION = "4.61.0";
+export const VERSION = "4.62.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -1565,6 +1565,39 @@ function morningHtml() {
 }
 
 /* The morning cards' own buttons: shrink the weather, finish CPMAI, keep or retire a Jung quote. */
+/*
+ * On/off settings are switches. They're still drawn as two buttons (On, Off or Show, Hide) so every
+ * panel's own handler keeps working; this turns each such pair into one switch you tap or press Space on.
+ */
+function switchify(root) {
+  const segs = root.matches?.(".seg") ? [root] : [...(root.querySelectorAll?.(".seg") || [])];
+  for (const seg of segs) {
+    if (seg.dataset.sw) continue;
+    seg.dataset.sw = "1";
+    const bs = [...seg.querySelectorAll(":scope > button")];
+    if (bs.length !== 2) continue;
+    const t = bs.map((b) => b.textContent.trim());
+    const onIdx = (t[0] === "On" && t[1] === "Off") || (t[0] === "Show" && t[1] === "Hide") ? 0 : t[0] === "Off" && t[1] === "On" ? 1 : -1;
+    if (onIdx < 0) continue;
+    const on = bs[onIdx], off = bs[1 - onIdx];
+    seg.classList.add("switch");
+    seg.setAttribute("role", "switch");
+    seg.tabIndex = 0;
+    if (!seg.getAttribute("aria-label")) seg.setAttribute("aria-label", seg.closest(".row")?.querySelector(".rk")?.textContent.trim() || "Setting");
+    bs.forEach((b) => { b.tabIndex = -1; b.setAttribute("aria-hidden", "true"); });
+    const sync = () => seg.setAttribute("aria-checked", String(on.getAttribute("aria-pressed") === "true"));
+    sync();
+    new MutationObserver(sync).observe(on, { attributes: true, attributeFilter: ["aria-pressed"] });
+    const flip = () => { (on.getAttribute("aria-pressed") === "true" ? off : on).click(); sync(); tick(); };
+    seg.addEventListener("click", (e) => { if (e.target === seg) flip(); });
+    seg.addEventListener("keydown", (e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); flip(); } });
+  }
+}
+if (typeof document !== "undefined") {
+  new MutationObserver((ms) => { for (const m of ms) for (const n of m.addedNodes) if (n.nodeType === 1) switchify(n); })
+    .observe(document.documentElement, { childList: true, subtree: true });
+}
+
 /** Finish a morning card for today; it folds to a line (or hides) until tomorrow. */
 function foldCard(c, key) {
   c.folded = { ...(c.folded || {}), [key]: Date.now() };
@@ -2857,7 +2890,7 @@ function stripHtml(s) {
     <div class="hello">${avatarHtml("sm")}<p class="hi">${hello}.</p>
       ${open.length ? `<span class="mins">About ${mins < 60 ? `${Math.max(5, Math.round(mins / 5) * 5)} min` : `${Math.round(mins / 30) / 2} hr`}</span>` : `<span class="cleared">${I.done}<span>Cleared</span></span>`}</div>
     ${line ? `<p class="brief" id="day-line">${esc(line)}</p>` : `<p class="brief" id="day-line" hidden></p>`}
-    <div class="seg" role="img" aria-label="${esc(status)}">${segs}</div>
+    <div class="prog" role="img" aria-label="${esc(status)}">${segs}</div>
     <p class="left" id="count" aria-live="polite">${esc(status)}</p>
   </section>`;
 }
