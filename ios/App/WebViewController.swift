@@ -199,17 +199,28 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
                 }
                 return
             }
+            // "play": start it in Music right away. A song in the library by its id, or an Apple Music
+            // catalog song by its store id. Music loads it first (prepareToPlay), then plays.
             if op == "play" {
+                let player = MPMusicPlayerController.systemMusicPlayer
+                let start: (@escaping () -> Void) -> Void = { queue in
+                    DispatchQueue.main.async {
+                        queue()
+                        player.prepareToPlay { error in
+                            if error == nil { player.play() }
+                            self.reply(id, error == nil ? ["ok": true] : ["ok": false, "status": error!.localizedDescription])
+                        }
+                    }
+                }
+                if let store = body["store"] as? String, store.range(of: "^[0-9]{1,20}$", options: .regularExpression) != nil {
+                    start { player.setQueue(with: [store]) }
+                    return
+                }
                 guard let pid = (body["song"] as? String).flatMap({ UInt64($0) }) else { self.reply(id, ["ok": false, "status": "missing"]); return }
                 let q = MPMediaQuery.songs()
                 q.addFilterPredicate(MPMediaPropertyPredicate(value: NSNumber(value: pid), forProperty: MPMediaItemPropertyPersistentID))
                 guard let items = q.items, !items.isEmpty else { self.reply(id, ["ok": false, "status": "missing"]); return }
-                DispatchQueue.main.async {
-                    let player = MPMusicPlayerController.systemMusicPlayer
-                    player.setQueue(with: MPMediaItemCollection(items: items))
-                    player.play()
-                    self.reply(id, ["ok": true])
-                }
+                start { player.setQueue(with: MPMediaItemCollection(items: items)) }
                 return
             }
             DispatchQueue.global(qos: .userInitiated).async {

@@ -41,7 +41,7 @@ import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 import * as songs from "./songs.js";
 import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone, mixStories, followOrder } from "./onboard.js";
 
-export const VERSION = "4.46.0";
+export const VERSION = "4.46.1";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -1388,7 +1388,7 @@ function morningHtml() {
       `<div class="song">${mt.artwork ? `<img class="art" alt="" src="${esc(mt.artwork)}" referrerpolicy="no-referrer" onerror="this.remove()">` : ""}
         <div class="song-t"><p class="ttl">${esc(mt.name || sg.title)}</p><p class="wx-line">${esc(mt.artist || sg.artist || "")}${mt.year ? ` · ${esc(mt.year)}` : ""}</p>${last ? `<p class="wx-line">You ${esc(last)}</p>` : ""}</div></div>
        <div class="song-acts">${mt.preview ? `<button class="btn sm" type="button" data-preview="${esc(mt.preview)}">${I.play}<span>Preview</span></button>` : ""}
-         ${mt.url ? `<a class="btn sm primary" href="${esc(mt.url)}" target="_blank" rel="noopener">Open in Apple Music</a>` : ""}</div>`));
+         ${mt.id && nativeCan("music") ? `<button class="btn sm primary" type="button" data-song-store="${esc(mt.id)}">${I.play}<span>Play</span></button>` : mt.url ? `<a class="btn sm primary" href="${esc(mt.url)}" target="_blank" rel="noopener">Open in Apple Music</a>` : ""}</div>`));
   }
   if (m.hockey) for (const g of c.games || []) {
     if (!g.done) continue;
@@ -2821,6 +2821,11 @@ async function onTimelineClick(e) {
     return;
   }
   if ((b = hit("[data-song-ans]"))) { await songAnswer(b.dataset.songAns); return; }
+  if ((b = hit("[data-song-store]"))) {
+    const r = await nativeAsk("music", { op: "play", store: b.dataset.songStore, ask: true }, 30000).catch(() => ({ ok: false }));
+    if (r.ok) { buzz(8); toast("Playing in Music."); } else toast("Couldn't play it here. Apple Music may need a subscription for this one.");
+    return;
+  }
   if ((b = hit("[data-song-next]"))) {
     b.disabled = true;
     const r = await nativeAsk("music", { op: "pick", seed: Math.floor(Math.random() * 1000), skip: songs.skipIds(songLog()) }, 20000).catch(() => ({ ok: false }));
