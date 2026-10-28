@@ -41,7 +41,7 @@ import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 import * as songs from "./songs.js";
 import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone, mixStories, followOrder } from "./onboard.js";
 
-export const VERSION = "4.48.0";
+export const VERSION = "4.49.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -1803,15 +1803,19 @@ async function welcomeAction(what) {
 }
 
 /*
- * Build my morning: four short steps in one sheet (topics, your day, school, AI),
+ * Build my morning: five short steps in one sheet (topics, your day, school, email address, AI),
  * then Today assembles in front of them with their own weather, calendar
  * and top stories.
  */
 function openBuild(step = 1) {
   state.build = state.build || { topics: new Set(followedTopics(state.suggest)), study: "" };
   const b = state.build, m = morningSettings();
+  // The email step shows when the relay can make personal addresses.
+  const mailOk = (() => { try { return Boolean(localStorage.getItem("edition.inboxPick")); } catch { return false; } })();
+  if (step === 4 && !mailOk) step = 5;
+  const total = mailOk ? 5 : 4, pos = step === 5 && !mailOk ? 4 : step;
   const head = (h) => `<div class="sheet-head"><h2>${h}</h2><button class="x" type="button" data-close aria-label="Close">${I.close}</button></div>
-    <p class="bm-n">Step ${step} of 4</p>`;
+    <p class="bm-n">Step ${pos} of ${total}</p>`;
   let html;
   if (step === 1) {
     html = `${head("What do you like to read about?")}
@@ -1844,6 +1848,18 @@ function openBuild(step = 1) {
       <input id="bm-kid-about" type="text" autocomplete="off" placeholder="8th grade at Myrtle Grove Middle; band, soccer" value="">
       <span class="st" id="bm-st" role="status"></span>
       <div class="sheet-foot two"><button class="btn" type="button" data-bm="4">No kids in school</button><button class="btn primary" type="button" data-bm="kid">Next</button></div>`;
+  } else if (step === 4) {
+    let addr = "", pick = "";
+    try { addr = localStorage.getItem("edition.inboxAddress") || ""; pick = localStorage.getItem("edition.inboxPick") || ""; } catch { /* blocked */ }
+    const mine = /-[a-z2-9]{4}@/.test(addr);
+    html = `${head("Your Shoebox email address")}
+      <p class="note">Your own address, only for this phone. Sign up for newsletters with it, add it in your school's parent app, or forward anything to it, and it shows up here.</p>
+      ${mine ? `<div class="mail-addr"><b id="bm-addr">${esc(addr)}</b><button class="btn sm" type="button" data-bm="copy">Copy</button></div>
+        <ul class="mail-uses"><li><b>Newsletters:</b> sign up with it, and they come straight here.</li><li><b>School email:</b> add it as a second email in the school's parent app.</li><li><b>Anything else:</b> forward it.</li></ul>`
+      : `<label class="bm-l" for="bm-mail">First part of your address <span>Four random letters keep it private.</span></label>
+        <div class="mail-pick"><input id="bm-mail" type="text" autocomplete="given-name" autocapitalize="none" placeholder="Your first name" maxlength="16"><span>-····@${esc(pick)}</span></div>`}
+      <span class="st" id="bm-st" role="status"></span>
+      <div class="sheet-foot two">${mine ? `<button class="btn primary" type="button" data-bm="5" style="grid-column: 1 / -1">Next</button>` : `<button class="btn" type="button" data-bm="5">Not now</button><button class="btn primary" type="button" data-bm="mail">Make my address</button>`}</div>`;
   } else {
     html = `${head("Let AI pick your top stories?")}
       <p class="note">With AI on, Shoebox finds the day's top stories on your topics, writes a line about each thing you save, and finds pictures. With it off, everything else still works.</p>
@@ -1879,7 +1895,22 @@ async function buildClick(e, step, wrap) {
     openBuild(2);
   } else if (what === "3") openBuild(3);
   else if (what === "4") openBuild(4);
-  else if (what === "kid") {
+  else if (what === "5") openBuild(5);
+  else if (what === "copy") {
+    try { await navigator.clipboard.writeText($("#bm-addr", wrap).textContent); affirm(st, "Address copied."); } catch { say("Couldn't copy; press and hold the address to copy it.", true); }
+  } else if (what === "mail") {
+    const name = $("#bm-mail", wrap).value.trim();
+    if (!name) { say("Type a first part, like your first name.", true); $("#bm-mail", wrap).focus(); return; }
+    btn.disabled = true; say("Making your address…");
+    try {
+      const res = await withTimeout(fetch(`${ai.relayBase()}/inbox/address`, { method: "POST", headers: { "x-inbox-key": inboxKey(), "content-type": "application/json" }, body: JSON.stringify({ name }) }), 15000);
+      const d = await res.json();
+      if (!res.ok || !d.address) throw new Error(d?.error?.message || "No address came back.");
+      localStorage.setItem("edition.inboxAddress", d.address);
+      track("onboard_email");
+      openBuild(4);
+    } catch (err) { btn.disabled = false; say(err.message || "Couldn't reach Shoebox's server. You can do this later in Settings › Email.", true); }
+  } else if (what === "kid") {
     const name = $("#bm-kid", wrap).value.trim().slice(0, 40), about = $("#bm-kid-about", wrap).value.trim().slice(0, 200);
     if (name || about) {
       const school = (about.match(/\bat ([^;,.]+)/i) || [])[1]?.trim() || "";
