@@ -1058,3 +1058,6 @@ details.adv > summary, .group details.adv > summary, .ag-more summary { min-heig
 .cam-wait { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; padding: 14px; border-radius: 14px; background: var(--sig-soft); color: var(--sig-ink); font-size: 0.9375rem; font-weight: 600; }
 .cam-wait .spin { width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--line-2); border-top-color: var(--sig); animation: spin 0.9s linear infinite; flex: none; }
 .cam-wait.err { background: transparent; color: var(--warn); padding: 4px 0; font-weight: 500; }
+.group-in { margin: 8px 0 10px; padding: 12px; border-radius: 14px; background: var(--panel); border: 1px solid var(--line); }
+.chips.vanity { padding: 4px 0 10px !important; gap: 8px; }
+#set-mail-word { flex: 1; min-width: 0; min-height: 40px; padding: 0 12px; border-radius: 12px; border: 1px solid var(--line-2); background: var(--bg); color: var(--fg); font: 400 max(16px, 1rem) var(--sans); }
