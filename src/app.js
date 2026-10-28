@@ -41,7 +41,7 @@ import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 import * as songs from "./songs.js";
 import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone, mixStories, followOrder } from "./onboard.js";
 
-export const VERSION = "4.63.0";
+export const VERSION = "4.63.1";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -1272,13 +1272,13 @@ function songAskHtml() {
   if (!e) return "";
   const gap = e.prevLast ? friendlyWhen(e.prevLast).replace(/^in /, "") : "";
   const name = `<b>${esc(e.title)}</b>${e.artist ? ` by ${esc(e.artist)}` : ""}`;
-  const head = e.heard ? "Welcome back. How was it?" : "Not the right moment?";
+  // One set of answers whether or not Music confirms the play: Music only counts songs in
+  // the library, so "didn't finish" can't be trusted, and the person knows what happened.
+  const head = e.heard ? "Welcome back. How was it?" : `How was it?`;
   const body = e.heard
     ? `You listened to ${name} all the way through${e.prevLast ? `, for the first time since ${esc(gap)}` : ""}.`
-    : `${name} didn't play all the way through. That's fine; some songs need a different day.`;
-  const acts = e.heard
-    ? `<button class="btn primary" type="button" data-song-ans="loved">Loved it</button><button class="btn" type="button" data-song-ans="fine">It was fine</button><button class="btn ghost" type="button" data-song-ans="never">Not for me</button>`
-    : `<button class="btn primary" type="button" data-song-ans="again">Try it again</button><button class="btn" type="button" data-song-ans="later">Skip it for now</button><button class="btn ghost" type="button" data-song-ans="never">Not for me</button>`;
+    : `You started ${name} earlier.`;
+  const acts = `<button class="btn primary" type="button" data-song-ans="loved">Loved it</button><button class="btn" type="button" data-song-ans="fine">It was fine</button><button class="btn" type="button" data-song-ans="missed">Didn't get to it</button><button class="btn ghost" type="button" data-song-ans="never">Not for me</button>`;
   return `<section class="ask song-ask" aria-labelledby="song-ask-h">
       <div class="ask-top"><span class="av av-day" aria-hidden="true">${I.music}</span><div><h2 id="song-ask-h">${head}</h2><p>${body}</p></div></div>
       <div class="ask-acts">${acts}</div></section>`;
@@ -1289,21 +1289,14 @@ async function songAnswer(v) {
   if (!e) return;
   state.songAsk = null;
   track(`song_${v}`);
-  if (v === "again") {
-    saveSongLog(songs.logPlay(songLog(), { id: e.id, title: e.title, artist: e.artist, plays: e.prevPlays, lastPlayed: e.prevLast }));
-    render({ top: false });
-    const sg = morningCache().song;
-    if (sg?.url && sg.id === e.id) window.open(sg.url, "_blank", "noopener"); else toast("Find it in Music and give it the whole song.");
-    return;
-  }
-  saveSongLog(songs.answer(songLog(), e.id, v === "again" ? "fine" : v));
+  saveSongLog(songs.answer(songLog(), e.id, v));
   render({ top: false });
   if (v === "loved") {
     const r = await nativeAsk("music", { op: "keep", song: e.id }, 20000).catch(() => ({ ok: false }));
     const n = songs.songStats(songLog()).loved;
     toast(r.ok ? `Added to your Rediscovered playlist in Music. ${n === 1 ? "Your first one." : `${n} songs there now.`}` : "Loved. (Couldn't add it to a playlist in Music.)");
   } else if (v === "never") toast("Got it. That one won't come back.");
-  else if (v === "later") toast("Skipped for a few months.");
+  else if (v === "missed") toast("No problem. It can come back another day.");
   else toast("Noted.");
 }
 
