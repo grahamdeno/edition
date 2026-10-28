@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 /// shared Inbox; the app takes them in the next time it opens.
 final class ShareViewController: UIViewController {
     private let label = UILabel()
+    private let icon = UIImageView(image: UIImage(systemName: "tray.and.arrow.down.fill"))
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -18,13 +19,21 @@ final class ShareViewController: UIViewController {
         label.textAlignment = .center
         label.numberOfLines = 0
         label.translatesAutoresizingMaskIntoConstraints = false
+        icon.tintColor = UIColor(red: 0x7B / 255, green: 0x3F / 255, blue: 0xF2 / 255, alpha: 1)
+        icon.preferredSymbolConfiguration = UIImage.SymbolConfiguration(textStyle: .largeTitle)
+        icon.contentMode = .scaleAspectFit
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        label.adjustsFontForContentSizeCategory = true
+        card.addSubview(icon)
         card.addSubview(label)
         view.addSubview(card)
         NSLayoutConstraint.activate([
             card.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             card.centerYAnchor.constraint(equalTo: view.centerYAnchor),
             card.widthAnchor.constraint(equalToConstant: 260),
-            label.topAnchor.constraint(equalTo: card.topAnchor, constant: 24),
+            icon.topAnchor.constraint(equalTo: card.topAnchor, constant: 22),
+            icon.centerXAnchor.constraint(equalTo: card.centerXAnchor),
+            label.topAnchor.constraint(equalTo: icon.bottomAnchor, constant: 10),
             label.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -24),
             label.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 16),
             label.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -16),
@@ -43,6 +52,8 @@ final class ShareViewController: UIViewController {
         }
         await MainActor.run {
             label.text = count > 0 ? "Saved to Shoebox.\nIt's in New when you open the app." : "Nothing Shoebox can keep here."
+            icon.image = UIImage(systemName: count > 0 ? "checkmark.circle.fill" : "exclamationmark.circle")
+            if count > 0 { icon.addSymbolEffect(.bounce) }
         }
         try? await Task.sleep(nanoseconds: 900_000_000)
         await MainActor.run { extensionContext?.completeRequest(returningItems: nil) }

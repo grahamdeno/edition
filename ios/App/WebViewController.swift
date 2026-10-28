@@ -29,6 +29,7 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
         content.add(WeakHandler(self), name: "shoebox")
         content.addUserScript(WKUserScript(source: "window.shoeboxNative = { version: 2, platform: 'ios', features: ['calendar', 'location', 'backup', 'restore', 'music', 'attest'] };",
                                            injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        content.addUserScript(WKUserScript(source: Self.textScript(), injectionTime: .atDocumentStart, forMainFrameOnly: true))
         config.userContentController = content
 
         web = WKWebView(frame: .zero, configuration: config)
@@ -46,6 +47,37 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
         if #available(iOS 16.4, *) { web.isInspectable = true }
         view = web
         web.load(URLRequest(url: home))
+        // Text Size and Bold Text changed in the iPhone's Settings: follow along without a restart.
+        for name in [UIContentSizeCategory.didChangeNotification, UIAccessibility.boldTextStatusDidChangeNotification] {
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.web.evaluateJavaScript(Self.textScript(), completionHandler: nil) }
+            }
+        }
+    }
+
+    /// The iPhone's Text Size as a scale for Shoebox's text (and the icons sized with it), and Bold Text as a flag.
+    static func textScript() -> String {
+        let scale: Double
+        switch UIApplication.shared.preferredContentSizeCategory {
+        case .extraSmall: scale = 0.85
+        case .small: scale = 0.9
+        case .medium: scale = 0.95
+        case .extraLarge: scale = 1.1
+        case .extraExtraLarge: scale = 1.2
+        case .extraExtraExtraLarge: scale = 1.3
+        case .accessibilityMedium: scale = 1.4
+        case .accessibilityLarge, .accessibilityExtraLarge, .accessibilityExtraExtraLarge, .accessibilityExtraExtraExtraLarge: scale = 1.5
+        default: scale = 1
+        }
+        let bold = UIAccessibility.isBoldTextEnabled ? "true" : "false"
+        return """
+        (function () {
+          function go() { var d = document.documentElement;
+            d.style.fontSize = '\(Int((16 * scale).rounded()))px'; d.style.setProperty('--text-scale', '\(scale)');
+            d.toggleAttribute('data-bold', \(bold)); }
+          if (document.documentElement) go(); else document.addEventListener('readystatechange', go, { once: true });
+        })();
+        """
     }
 
     /// Run a script in Shoebox now, or once it has started.

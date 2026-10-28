@@ -62,6 +62,16 @@ targets:
         NSCalendarsFullAccessUsageDescription: Shoebox shows today's events at the top of your morning. They stay on your iPhone.
         NSLocationWhenInUseUsageDescription: Shoebox uses your rough location for the morning weather.
         NSAppleMusicUsageDescription: Shoebox picks a song from your library each morning, one you haven't played in a while. It stays on your iPhone.
+        UIApplicationShortcutItems:
+          - UIApplicationShortcutItemType: com.grahamdeno.shoebox.add
+            UIApplicationShortcutItemTitle: Save something
+            UIApplicationShortcutItemIconSymbolName: plus
+          - UIApplicationShortcutItemType: com.grahamdeno.shoebox.search
+            UIApplicationShortcutItemTitle: Search my saves
+            UIApplicationShortcutItemIconSymbolName: magnifyingglass
+          - UIApplicationShortcutItemType: com.grahamdeno.shoebox.email
+            UIApplicationShortcutItemTitle: My Shoebox email address
+            UIApplicationShortcutItemIconSymbolName: envelope
         CFBundleURLTypes:
           - CFBundleURLName: com.grahamdeno.shoebox
             CFBundleURLSchemes: [shoebox]
