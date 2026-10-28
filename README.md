@@ -50,7 +50,7 @@ School posts have their own section, **From school**, on Today: every one you ha
 
 **Apple.** With your Apple key in the relay: *Song of the day* (an iPhone Shortcut sends the library song you've gone longest without playing; Shoebox shows its artwork, a 30-second preview and Open in Apple Music) and Apple Weather for the weather card, with the next hour's rain. Setup in `relay/README.md`.
 
-**Email in.** Forward any email to your Shoebox address and it becomes a post; school mail becomes school posts. Needs a domain on Cloudflare (setup in `relay/README.md`).
+**Email in.** Forward any email to your Shoebox address and it becomes a post; school mail becomes school posts. The AI writes the post from the email (a headline, a few plain lines, any dates or to-dos, and the one link worth opening) rather than pasting it in; without AI, the post is the start of the email with forwarding headers, footers and tracking links taken out. The whole email, cleaned the same way, is under More. Needs a domain on Cloudflare (setup in `relay/README.md`).
 
 **Your calendar.** Settings › Calendar takes your calendar's private iCal address (Google: Secret address in iCal format; iPhone: Public Calendar share link; Outlook: published ICS link), one per line. Today's events show at the top of Today under *On your calendar*: all-day first, then by time, with *Now* and *Ended*. They're read through the relay, never saved as items, can't be kept or removed, and are gone at midnight. Repeating events, time zones, skipped and moved dates are handled on the phone (`src/calendar.js`).
 

@@ -857,6 +857,53 @@ export async function schoolPosts({ text, about, school = "", today = new Date()
 }
 
 /**
+ * One email, turned into one post for the feed: what it is and what matters,
+ * in a few plain lines, with any dates or to-dos underneath and the one link
+ * worth opening. Never the whole email. Returns null when the AI gave nothing usable.
+ */
+export async function emailPost({ subject = "", fromName = "", text = "", links = [], today = new Date() }) {
+  const list = (links || []).slice(0, 20);
+  const prompt = [
+    `Today is ${today.toDateString()}. This email came into the person's Shoebox, their own feed of things they meant to come back to.`,
+    "Usually they forwarded it to themselves. When it is a forward, the forwarded message is the content; their own note above it, if any, says why they kept it.",
+    "Turn it into one post for their feed: what this is and what matters in it for them. Never paste or retell the whole email.",
+    "Ignore greetings, sign-offs, forwarding headers, quoted replies, signatures, legal and unsubscribe footers, tracking links and marketing filler.",
+    "Use only what the email says. Never invent a date, amount, name or link.",
+    "",
+    "Return JSON: {",
+    '"headline": string (max 70 chars: plain and specific about what this is, e.g. "Flight to Denver confirmed for Nov 14"; no emoji, no clickbait, not just the subject line when it says nothing),',
+    '"body": string (1 to 3 short sentences, max 280 chars: what it is and the one or two things worth knowing or doing; plain words, no greeting, no "this email"),',
+    '"items": array of 0 to 4 {"date": "YYYY-MM-DD" or null, "text": string max 100 chars} (only real dates, deadlines, times, amounts, codes or to-dos that are in the email),',
+    '"link": string or null (the single link from the list below most worth opening later, copied exactly; null if none matters),',
+    '"why": string (only when the person wrote their own note above a forward: that note, cleaned up, max 160 chars; otherwise ""),',
+    '"intent": one of "read", "reference", "task", "idea",',
+    '"tags": array of 1-2 lowercase topic words,',
+    '"photo_query": string (2 to 4 concrete words naming a photograph that would suit this post, something a camera could take; no names, no text)',
+    "}",
+    "",
+    `From: ${fromName || "unknown"}`,
+    `Subject: ${subject || "(none)"}`,
+    list.length ? `Links in it:\n${list.map((u) => `- ${u}`).join("\n")}` : "Links in it: none",
+    "",
+    "Email:",
+    String(text || "").slice(0, 20000) || "(empty)",
+  ].join("\n");
+  const out = parseJson(textOf(await call({ content: prompt, system: ENRICH_SYSTEM, maxTokens: 900 })));
+  const headline = clip(out.headline, 90), body = clip(out.body, 320);
+  if (!headline && !body) return null;
+  return {
+    headline, body,
+    items: (Array.isArray(out.items) ? out.items : []).slice(0, 4).map((i) => ({
+      date: /^\d{4}-\d{2}-\d{2}$/.test(i?.date || "") ? i.date : null, text: clip(i?.text, 110) })).filter((i) => i.text),
+    link: typeof out.link === "string" && list.includes(out.link) ? out.link : null,
+    why: clip(out.why, 180),
+    intent: INTENTS.has(out.intent) ? out.intent : undefined,
+    tags: cleanTags(out.tags, 2),
+    photoQuery: clip(String(out.photo_query || "").replace(/["']/g, ""), 60),
+  };
+}
+
+/**
  * Children's names stay on the phone: before anything goes to AI, each name
  * the parent gave is swapped for a stand-in, and put back on the device.
  */
