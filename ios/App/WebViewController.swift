@@ -8,7 +8,7 @@ import MediaPlayer
 
 /// Shows Shoebox and answers what it asks of the phone.
 final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler, WKDownloadDelegate {
-    private let home = URL(string: "https://shoebox.tangomike.app/?native=1")!
+    private let home = URL(string: "https://inmyshoebox.com/?native=1")!
     private var web: WKWebView!
     private var ready = false          // Shoebox has started and can take things in
     private var queued: [String] = []  // scripts waiting for that
@@ -25,7 +25,7 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
         config.limitsNavigationsToAppBoundDomains = true
         let content = WKUserContentController()
         content.add(WeakHandler(self), name: "shoebox")
-        content.addUserScript(WKUserScript(source: "window.shoeboxNative = { version: 2, platform: 'ios', features: ['calendar', 'location', 'backup', 'music'] };",
+        content.addUserScript(WKUserScript(source: "window.shoeboxNative = { version: 2, platform: 'ios', features: ['calendar', 'location', 'backup', 'restore', 'music'] };",
                                            injectionTime: .atDocumentStart, forMainFrameOnly: true))
         config.userContentController = content
 
@@ -110,6 +110,8 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
             location(body)
         case "backup":
             backup(body)
+        case "restore":
+            restore(body)
         case "music":
             music(body)
         case "haptic":
@@ -270,6 +272,33 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
                 }
                 self?.reply(id, out)
             }
+        }
+    }
+
+    /// The newest daily backup, for Shoebox's first open at a new address (saves live per address).
+    /// On My iPhone › Shoebox › Backups first, then the iCloud Drive copy.
+    private func restore(_ body: [String: Any]) {
+        guard let id = body["id"] as? String else { return }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let fm = FileManager.default
+            var folders: [URL] = []
+            if let docs = try? fm.url(for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: false) {
+                folders.append(docs.appendingPathComponent("Backups", isDirectory: true))
+            }
+            if let cloud = fm.url(forUbiquityContainerIdentifier: nil) {
+                folders.append(cloud.appendingPathComponent("Documents/Backups", isDirectory: true))
+            }
+            for folder in folders {
+                let files = ((try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? [])
+                    .filter { $0.pathExtension == "json" }.sorted { $0.lastPathComponent > $1.lastPathComponent }
+                for file in files {
+                    if let data = try? Data(contentsOf: file), let text = String(data: data, encoding: .utf8) {
+                        self?.reply(id, ["ok": true, "name": file.lastPathComponent, "data": text])
+                        return
+                    }
+                }
+            }
+            self?.reply(id, ["ok": false, "error": "no backup"])
         }
     }
 
