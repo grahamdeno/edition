@@ -893,6 +893,26 @@ function cleanQuestions(out, count) {
 }
 
 /** Exam questions need to be right more than they need to be cheap. */
+/**
+ * One sentence for the top of Today: what matters most, soonest first. It sees only the facts given:
+ * calendar counts and times (never event titles, which stay on the phone), the weather, and school
+ * headlines with the child's name written {child}.
+ */
+export async function dayLine(facts) {
+  const prompt = [
+    "Write one sentence, at most 130 characters, telling someone what matters most today, the most time-sensitive thing first.",
+    "Use only the facts below. Use weekday names, not dates. Plain and warm. No greeting, no exclamation marks, no emoji, no advice, no questions.",
+    `Keep ${CHILD_TOKEN} exactly as written wherever it appears.`,
+    "",
+    ...facts,
+    "",
+    "Reply with the sentence only.",
+  ].join("\n");
+  const out = textOf(await call({ content: prompt, maxTokens: 120 })).trim().split("\n")[0].replace(/^["'\u201c]+|["'\u201d]+$/g, "");
+  if (!out) throw new AiError("No line came back.");
+  return out.slice(0, 180);
+}
+
 export const QUIZ_MODEL = "claude-sonnet-5-5";
 
 export const CPMAI_TOPICS = [

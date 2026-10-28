@@ -41,7 +41,7 @@ import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 import * as songs from "./songs.js";
 import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone, mixStories, followOrder } from "./onboard.js";
 
-export const VERSION = "4.55.1";
+export const VERSION = "4.56.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -1102,7 +1102,7 @@ function render({ top = false } = {}) {
   bindTimeline(tl);
   tintVisible(tl);
   if (state.reveal) $("#panel", tl)?.classList.add("reveal");
-  requestAnimationFrame(() => { placeSpot(); coachPass(tl); tintSongCard(); });
+  requestAnimationFrame(() => { placeSpot(); coachPass(tl); tintSongCard(); refreshDayLine(); });
   updateWidget();
 }
 
@@ -2170,7 +2170,7 @@ const COACH = [
   { key: "dbl", sel: "[data-dbl]", text: "Double-tap a photo to love it." },
   { key: "stories", sel: ".post .av-sb", host: ".post", text: "Top stories come from the topics you follow. Tap Not for me and say why, and tomorrow's picks change." },
   { key: "daybar", sel: ".daybar details.db", text: "This is a view of your schedule today. Tap the bar to see each event, and online meetings get a Join button." },
-  { key: "song", sel: ".post.song .song", host: ".post", text: "A song from your music you haven't played in a while. Open it in Apple Music, and Shoebox asks later how it landed." },
+  { key: "song", sel: ".post.song .disc", host: ".post", text: "A song from your music you haven't played in a while. Open it in Apple Music, and Shoebox asks later how it landed." },
   { key: "more", sel: ".daily .more[data-panel], .daybar .more[data-panel]", text: "Tap ••• on any card to change it right where you see it." },
 ];
 const inView = (el) => { const r = el.getBoundingClientRect(); return r.height > 0 && r.top >= 70 && r.bottom <= innerHeight - 90; };
@@ -2704,30 +2704,77 @@ async function refreshCalendar(opts) {
 }
 
 /*
- * The Today strip, at the top of Today: a greeting, what's left, and a
- * circle for each of today's six. A circle fills with a check once that
- * post has its verdict; tap one to jump to its post. Cleared, it becomes
- * a gold badge.
+ * The Today strip, at the top of Today: a greeting, a sentence on what matters today, a bar with a
+ * segment per post (purple once settled, gold while new), what's done and about how long the rest takes.
  */
 function stripHtml(s) {
-  const all = [...s.fresh, ...s.six];
+  const all = [...s.school, ...s.fresh, ...s.six];
   if (!all.length) return "";
-  const left = all.filter(isOpen).length;
+  const open = all.filter(isOpen), done = all.length - open.length, fresh = s.fresh.filter(isOpen).length;
   const h = new Date().getHours();
   const hello = h < 5 ? "Good evening" : h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening";
-  const status = !left ? "Today is cleared" : `${left} left today${s.fresh.filter(isOpen).length ? `, ${s.fresh.filter(isOpen).length} new` : ""}`;
-  const dots = s.six.map((i) => {
-    const done = !isOpen(i);
-    const pic = pictureOf(i);
-    const face = pic && pic.blobId ? `<img alt=""${focusAttr(i, pic)} data-blob="${esc(pic.blobId)}">`
-      : pic && pic.src ? `<img alt=""${focusAttr(i, pic)} src="${esc(pic.src)}" referrerpolicy="no-referrer" onerror="this.remove()">`
-      : `<span class="dot-l" style="--c:${topicColor(i)}">${esc(firstWords(headline(i), 1).charAt(0).toUpperCase() || "•")}</span>`;
-    return `<button class="dot${done ? " done" : ""}" type="button" data-jump="${esc(i.id)}" aria-label="${esc(firstWords(headline(i), 8))}${done ? ", done" : ""}">${face}${done ? `<span class="tick" aria-hidden="true">${I.done}</span>` : ""}</button>`;
-  }).join("");
+  const mins = open.reduce((n, i) => n + Math.min(Math.max(+i.minutes || 3, 1), 30), 0);
+  const status = !open.length ? "Today is cleared" : `${done} of ${all.length} done${fresh ? ` · ${fresh} new` : ""}`;
+  const order = [...all.filter((i) => !isOpen(i)), ...open.filter((i) => !s.fresh.includes(i)), ...open.filter((i) => s.fresh.includes(i))];
+  const segs = order.slice(0, 14).map((i) => `<i class="${!isOpen(i) ? "on" : s.fresh.includes(i) ? "new" : ""}"></i>`).join("");
+  const line = dayLineText();
   return `<section class="strip" aria-label="Today">
-    <div class="hello">${avatarHtml("sm")}<div><p class="hi">${hello}.</p><p class="left" id="count" aria-live="polite">${esc(status)}</p></div></div>
-    ${left || !s.six.length ? `<div class="dots" role="group" aria-label="Today's six">${dots}</div>` : `<span class="cleared">${I.done}<span>Cleared</span></span>`}
+    <div class="hello">${avatarHtml("sm")}<p class="hi">${hello}.</p>
+      ${open.length ? `<span class="mins">About ${mins < 60 ? `${Math.max(5, Math.round(mins / 5) * 5)} min` : `${Math.round(mins / 30) / 2} hr`}</span>` : `<span class="cleared">${I.done}<span>Cleared</span></span>`}</div>
+    ${line ? `<p class="brief" id="day-line">${esc(line)}</p>` : `<p class="brief" id="day-line" hidden></p>`}
+    <div class="seg" role="img" aria-label="${esc(status)}">${segs}</div>
+    <p class="left" id="count" aria-live="polite">${esc(status)}</p>
   </section>`;
+}
+
+/*
+ * The day line. With AI on, one sentence written once a day (again when school posts or the
+ * calendar change); otherwise, or until it arrives, one put together here from the same facts.
+ */
+const DAY_LINE = "edition.dayLine";
+function dayFacts() {
+  const c = morningCache(), w = c.weather, sc = schoolSettings(), kids = childNames(sc);
+  const now = Date.now(), facts = [`Today is ${new Date().toLocaleDateString("en-US", { weekday: "long" })}.`];
+  const weekday = (d) => { const t = fromDateInput(d); return t ? new Date(t).toLocaleDateString("en-US", { weekday: "long" }) : ""; };
+  const school = state.items.filter((i) => i.school && isOpen(i) && schoolToday([i]).length)
+    .sort((a, b) => (a.school.date || "9999").localeCompare(b.school.date || "9999")).slice(0, 4);
+  for (const i of school) facts.push(`School: ${ai.maskNames(i.title, kids, ai.CHILD_TOKEN)}${i.school.date ? ` (${weekday(i.school.date)})` : ""}`);
+  const cal = calCache(), hidden = new Set(calHidden());
+  const evs = (cal?.events || []).filter((e) => !e.allDay && !hidden.has(calName(e.calendar, "Calendar")) && (e.end || e.start) > now).sort((a, b) => a.start - b.start);
+  if (evs.length) facts.push(`Calendar: ${evs.length} more event${evs.length === 1 ? "" : "s"} today, the next at ${shortClock(evs[0].start)}.`);
+  if (w) facts.push(`Weather${c.weatherFor ? ` in ${c.weatherFor}` : ""}: ${w.now}° now, ${String(w.word || "").toLowerCase()}, high ${w.hi}°${w.rain != null ? `, ${w.rain}% chance of rain` : ""}.${w.nextHour ? ` ${w.nextHour}.` : ""}`);
+  const key = `${dayKey()}|${school.map((i) => i.id).join(",")}|${evs.length}|${w ? 1 : 0}`;
+  return { facts, key, school, kids, w, evs };
+}
+function dayLineLocal({ school, kids, w }) {
+  const parts = school.slice(0, 2).map((i, k) => { const t = ai.nameIn(ai.maskNames(i.title, kids, ai.CHILD_TOKEN), kids[0] || ""); return k && /^[A-Z][a-z]/.test(t) && !kids.some((n) => t.startsWith(n)) ? t.charAt(0).toLowerCase() + t.slice(1) : t; });
+  if (w) parts.push(`it's ${w.now}° and ${String(w.word || "").toLowerCase()}${w.hi != null ? `, up to ${w.hi}°` : ""}`);
+  if (!parts.length) return "";
+  const line = parts.length > 1 ? `${parts.slice(0, -1).join(", ")}, and ${parts[parts.length - 1]}.` : `${parts[0]}.`;
+  return line.charAt(0).toUpperCase() + line.slice(1);
+}
+function dayLineText() {
+  const f = dayFacts();
+  try { const saved = JSON.parse(localStorage.getItem(DAY_LINE) || "null"); if (saved?.key === f.key && saved.text) return saved.text; } catch { /* none yet */ }
+  return dayLineLocal(f);
+}
+let dayLineBusy = false;
+async function refreshDayLine() {
+  if (dayLineBusy || state.tab !== "today" || !ai.settings.enabled() || !navigator.onLine) return;
+  const f = dayFacts();
+  if (f.facts.length < 2) return;
+  try { const saved = JSON.parse(localStorage.getItem(DAY_LINE) || "null"); if (saved?.key === f.key) return; } catch { /* write a new one */ }
+  dayLineBusy = true;
+  try {
+    const text = ai.nameIn(await ai.dayLine(f.facts), f.kids[0] || "");
+    localStorage.setItem(DAY_LINE, JSON.stringify({ key: f.key, text, at: Date.now() }));
+    const el = $("#day-line");
+    if (el) { el.textContent = text; el.hidden = false; }
+  } catch (e) {
+    // Try again with the next change rather than every render.
+    try { localStorage.setItem(DAY_LINE, JSON.stringify({ key: f.key, text: "", at: Date.now() })); } catch { /* full */ }
+    noteError(e, { quiet: true, where: "day line" });
+  } finally { dayLineBusy = false; }
 }
 
 /** The end of Today: what's left, or the finish moment once it's all cleared. */

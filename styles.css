@@ -260,21 +260,18 @@ a { color: inherit; text-decoration: none; }
 .tab { flex: 1; min-height: 44px; font-weight: 500; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; }
 .tab[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--sig); font-weight: 600; }
 
-/* The Today strip: greeting, what's left, and a circle per item in today's six. */
-.strip { display: flex; align-items: center; gap: 12px; padding: 14px var(--gutter-r) 12px var(--gutter-l); border-bottom: 1px solid var(--line); }
-.hello { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
+/* The Today strip: greeting, the day line, a segment per post, what's done. */
+.strip { padding: 14px var(--gutter-r) 14px var(--gutter-l); border-bottom: 1px solid var(--line); }
+.hello { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .hi { margin: 0; font: 400 1.3rem/1.1 var(--serif); }
-.strip .left { margin: 2px 0 0; font-size: 0.8125rem; color: var(--muted); font-variant-numeric: tabular-nums; }
-.dots { display: flex; gap: 0; flex: none; }
-.dot { position: relative; width: 34px; height: 34px; margin-left: -6px; border-radius: 50%; overflow: hidden; background: var(--soft); box-shadow: 0 0 0 2px var(--bg), 0 0 0 3.5px var(--sig); }
-.dot:first-child { margin-left: 0; }
-.dot::before { content: ""; position: absolute; inset: -5px; } /* a 44px target around the 34px circle */
-.dot img, .dot-l { width: 100%; height: 100%; object-fit: cover; display: grid; place-items: center; }
-.dot-l { background: var(--c, var(--sig)); color: #fff; font: 600 0.8125rem var(--sans); }
-.dot.done { box-shadow: 0 0 0 2px var(--bg), 0 0 0 3.5px var(--gold); }
-.dot.done img, .dot.done .dot-l { opacity: 0.35; }
-.dot .tick { position: absolute; inset: 0; display: grid; place-items: center; color: var(--fg); }
-.dot .tick .i { width: 18px; height: 18px; stroke-width: 2.6; }
+.strip .mins { margin-left: auto; font-size: 0.8125rem; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.strip .cleared { margin-left: auto; }
+.strip .brief { margin: 10px 0 0; font: 400 1.2rem/1.3 var(--serif); color: var(--fg); text-wrap: pretty; }
+.strip .seg { display: flex; gap: 4px; margin-top: 12px; }
+.strip .seg i { flex: 1; height: 8px; border-radius: 4px; background: var(--line-2); transition: background .3s ease; }
+.strip .seg i.on { background: var(--sig); }
+.strip .seg i.new { background: var(--gold); }
+.strip .left { margin: 6px 0 0; font-size: 0.8125rem; color: var(--muted); font-variant-numeric: tabular-nums; }
 .cleared { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 999px; background: var(--gold); color: var(--on-gold); font-weight: 600; font-size: 0.875rem; }
 .cleared .i { width: 16px; height: 16px; stroke-width: 2.4; }
 
