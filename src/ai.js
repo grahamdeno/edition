@@ -740,12 +740,13 @@ async function imageForModel(blob) {
  * Not a summary: every piece of the newsletter that matters for one child
  * becomes its own short, catchy post from the school, with its details kept.
  */
-export async function schoolPosts({ text, about, school = "", today = new Date(), files = [] }) {
+export async function schoolPosts({ text, about, school = "", today = new Date(), files = [], named = false }) {
   const docs = (files || []).slice(0, 6);
   const prompt = [
     `Today is ${today.toDateString()}. This is a school newsletter${school ? ` from ${school}` : ""}.`,
     docs.length ? `It came by email with ${docs.length} attachment${docs.length === 1 ? "" : "s"} (${docs.map((f) => f.name).join(", ")}), shown above: read every page and picture of them as part of the newsletter. Flyers, calendars and forms often hold the dates and to-dos.` : null,
     `The parent cares about one child: ${about}`,
+    named ? `That child is written ${CHILD_TOKEN}. Whenever a post is about them, refer to them as ${CHILD_TOKEN}, exactly like that with the braces (e.g. "${CHILD_TOKEN}'s band concert is Thursday at 7"), never "your child" and never a made-up name.` : null,
     "",
     "Go through it piece by piece. Keep each piece that matters for that child: their grade, their activities and teams, and whole-school dates, deadlines, closings and requests that affect them.",
     "Leave out other grades, other sports and clubs, staff news, fundraising pitches and general filler.",
@@ -799,6 +800,11 @@ export function maskNames(text, names = [], stand = "your child") {
     out = out.replace(new RegExp(`\\b${n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "gi"), stand);
   }
   return out;
+}
+/** Put the child's name back where the AI wrote {child} (and "{child}'s"); "your child" when no name is set. */
+export function nameIn(text, name) {
+  const s = String(text || "").replace(/\{child\}/gi, name || "your child");
+  return s.replace(/^your child/, "Your child");
 }
 export function unmaskName(text, name) {
   const s = String(text || "");

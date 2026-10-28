@@ -41,7 +41,7 @@ import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 import * as songs from "./songs.js";
 import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone, mixStories, followOrder } from "./onboard.js";
 
-export const VERSION = "4.45.1";
+export const VERSION = "4.46.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -165,6 +165,13 @@ async function boot() {
   state.wonDay = await db.meta.get("wonDay", null);
   await loadAvatar();
   await migratePictures();
+  {
+    const kid = childNames(schoolSettings())[0] || "";
+    if (kid) for (const i of state.items.filter((x) => x.school && !x.school.named && /\b(your child|your student|\{child\})/i.test(`${x.title} ${x.school.body || ""}`))) {
+      const fix = (t) => ai.nameIn(String(t || "").replace(/\byour (child|student)\b/gi, ai.CHILD_TOKEN), kid);
+      await saveItem({ ...i, title: fix(i.title), text: fix(i.text), hook: fix(i.hook), school: { ...i.school, body: fix(i.school.body), named: true } });
+    }
+  }
   // Links shared with their title used to land as notes; make them links so they get a picture.
   for (const i of state.items.filter((x) => x.kind === KIND.NOTE && x.source === "share" && /^https?:\/\/\S+\n[^\n]{1,200}$/.test(x.text || ""))) {
     const d = detectText(i.text)[0];
@@ -2192,7 +2199,9 @@ async function pullNewsletter(raw, statusEl, { files = [] } = {}) {
   let out;
   // Names stay on the phone: AI reads "your child" wherever a name was.
   // Attachments (flyers, PDFs) go as they are: Claude reads them with the text.
-  try { out = await ai.schoolPosts({ text: ai.maskNames(text, childNames(c)), about: ai.maskNames(c.about, childNames(c)) || "No details given: keep what any family at the school needs.", school: c.school, files }); } catch (e) {
+  // The child's name never leaves the phone: the AI sees and writes {child}, and the name goes back in here.
+  const kid = childNames(c)[0] || "";
+  try { out = await ai.schoolPosts({ text: ai.maskNames(text, childNames(c), kid ? ai.CHILD_TOKEN : "your child"), about: ai.maskNames(c.about, childNames(c), kid ? ai.CHILD_TOKEN : "your child") || "No details given: keep what any family at the school needs.", school: c.school, files, named: Boolean(kid) }); } catch (e) {
     noteError(e, { quiet: true, where: "school newsletter" });
     set(e.message || "Couldn't read it.", true);
     return false;
@@ -2201,7 +2210,8 @@ async function pullNewsletter(raw, statusEl, { files = [] } = {}) {
   const now = Date.now(), name = out.school || c.school;
   // Newest first in New, so the newsletter's first piece is created last and shows on top.
   for (let k = out.posts.length - 1; k >= 0; k--) {
-    const p = out.posts[k];
+    const p0 = out.posts[k];
+    const p = { ...p0, headline: ai.nameIn(p0.headline, kid), body: ai.nameIn(p0.body, kid) };
     const item = createItem({ kind: KIND.NOTE, text: p.body, title: p.headline || p.body.slice(0, 80), tags: p.tags.length ? p.tags : ["school"] },
       { id: db.newId(), source: "school", now: now - k });
     Object.assign(item, { title: p.headline || item.title, school: { name, body: p.body, date: p.date, type: p.type, from: url || undefined, query: p.query, pageImgs, fromFile: p.source || undefined }, url: url || undefined,
