@@ -41,7 +41,7 @@ import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 import * as songs from "./songs.js";
 import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone, mixStories, followOrder } from "./onboard.js";
 
-export const VERSION = "4.52.1";
+export const VERSION = "4.52.2";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -2074,11 +2074,22 @@ function pulseNext(sel) {
   if (!t) return;
   t.classList.remove("pulse-next");
   void t.offsetWidth;
-  t.classList.add("pulse-next");
+  t.classList.remove("away"); t.classList.add("pulse-next");
   setTimeout(() => t.classList.remove("pulse-next"), 4200);
 }
 addEventListener("resize", () => placeSpot());
 document.addEventListener("scroll", () => placeSpot(), { capture: true, passive: true });
+// The + button steps aside while you scroll down through posts, and comes back when you scroll up or reach the end.
+let fabY = new WeakMap();
+document.addEventListener("scroll", (ev) => {
+  const el = ev.target === document ? document.scrollingElement : ev.target;
+  if (!el || el.closest?.(".sheet-wrap, .reader")) return;
+  const fab = $(".fab"); if (!fab) return;
+  const y = el.scrollTop, last = fabY.get(el) ?? y; fabY.set(el, y);
+  const atEnd = y + el.clientHeight >= el.scrollHeight - 24;
+  if (y < 40 || atEnd || y < last - 6) fab.classList.remove("away");
+  else if (y > last + 6) fab.classList.add("away");
+}, { capture: true, passive: true });
 
 /*
  * Coach marks: one sentence the first time a feature is on screen, one per
