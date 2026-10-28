@@ -5,6 +5,8 @@ import WidgetKit
 import EventKit
 import CoreLocation
 import MediaPlayer
+import DeviceCheck
+import CryptoKit
 
 /// Shows Shoebox and answers what it asks of the phone.
 final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler, WKDownloadDelegate {
@@ -25,7 +27,7 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
         config.limitsNavigationsToAppBoundDomains = true
         let content = WKUserContentController()
         content.add(WeakHandler(self), name: "shoebox")
-        content.addUserScript(WKUserScript(source: "window.shoeboxNative = { version: 2, platform: 'ios', features: ['calendar', 'location', 'backup', 'restore', 'music'] };",
+        content.addUserScript(WKUserScript(source: "window.shoeboxNative = { version: 2, platform: 'ios', features: ['calendar', 'location', 'backup', 'restore', 'music', 'attest'] };",
                                            injectionTime: .atDocumentStart, forMainFrameOnly: true))
         config.userContentController = content
 
@@ -114,6 +116,8 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
             restore(body)
         case "music":
             music(body)
+        case "attest":
+            attest(body)
         case "haptic":
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
         default:
@@ -128,6 +132,26 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
               let text = String(data: data, encoding: .utf8) else { return }
         DispatchQueue.main.async { [weak self] in
             self?.web.evaluateJavaScript("window.shoeboxReply && window.shoeboxReply('\(id)', \(text))", completionHandler: nil)
+        }
+    }
+
+    /// App Attest: prove to Shoebox's relay that this is the real Shoebox app on a real iPhone, so it may use
+    /// the relay's AI (a web page can't). A new key each time; Apple checks it, the relay checks Apple.
+    private func attest(_ body: [String: Any]) {
+        guard let id = body["id"] as? String else { return }
+        let service = DCAppAttestService.shared
+        guard service.isSupported else { reply(id, ["ok": false, "status": "unsupported"]); return }
+        guard let challenge = (body["challenge"] as? String).flatMap({ Data(base64Encoded: $0) }) else {
+            reply(id, ["ok": false, "status": "missing"]); return
+        }
+        let hash = Data(SHA256.hash(data: challenge))
+        service.generateKey { [weak self] keyId, error in
+            guard let self else { return }
+            guard let keyId else { self.reply(id, ["ok": false, "status": error?.localizedDescription ?? "failed"]); return }
+            service.attestKey(keyId, clientDataHash: hash) { attestation, error in
+                guard let attestation else { self.reply(id, ["ok": false, "status": error?.localizedDescription ?? "failed"]); return }
+                self.reply(id, ["ok": true, "keyId": keyId, "attestation": attestation.base64EncodedString()])
+            }
         }
     }
 
