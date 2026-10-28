@@ -51,7 +51,7 @@ targets:
         NSCameraUsageDescription: Take a photo to save in Shoebox.
         NSPhotoLibraryUsageDescription: Choose photos to save in Shoebox.
         NSMicrophoneUsageDescription: Record a voice note for Shoebox.
-        WKAppBoundDomains: [shoebox.tangomike.app, www.youtube-nocookie.com, www.youtube.com, player.vimeo.com]
+        WKAppBoundDomains: [inmyshoebox.com, www.inmyshoebox.com, shoebox.tangomike.app, www.youtube-nocookie.com, www.youtube.com, player.vimeo.com]
         NSUbiquitousContainers:
           iCloud.com.grahamdeno.shoebox:
             NSUbiquitousContainerIsDocumentScopePublic: true
