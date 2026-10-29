@@ -1141,3 +1141,11 @@ details.adv > summary, .group details.adv > summary, .ag-more summary { min-heig
 html[data-bold] .i { stroke-width: 2.3; }
 html[data-bold] body { font-weight: 500; }
 html[data-bold] b, html[data-bold] strong, html[data-bold] .btn, html[data-bold] .act, html[data-bold] .tab, html[data-bold] .chip { font-weight: 600; }
+
+/* Inbox zero: a settled post folds shut and leaves; what's gone waits at the foot of Today. */
+.post.leaving { transition: height 0.32s ease, opacity 0.2s ease, padding 0.32s ease; opacity: 0; padding-top: 0 !important; padding-bottom: 0 !important; border-width: 0; }
+.done-today { display: flex; justify-content: center; padding: 6px var(--gutter-r) 18px var(--gutter-l); }
+.done-today .done-open { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 16px; border-radius: 22px; background: var(--soft); color: var(--fg-2, var(--fg)); font: 600 0.95rem/1 var(--sans, inherit); }
+.done-today .done-open .i { width: 18px; height: 18px; color: var(--sig-ink); }
+.done-today .hide-w { font-weight: 400; opacity: 0.7; margin-left: 4px; }
+.done-today.open { border-top: 1px solid var(--line); padding-top: 14px; }
