@@ -10,6 +10,12 @@ Formerly **Edition**. The web address and your saved items carry over unchanged.
 
 Built like [Scales](https://github.com/grahamdeno/scales) and [Tabs](https://github.com/grahamdeno/tabs): vanilla JavaScript modules, no build step, offline-first PWA, data on the device, hosted on GitHub Pages.
 
+## Two builds
+
+**Shoebox** (the public app) is the feed and nothing else. Today opens on your posts: a save joins your pool as it's saved and comes back a few a day, each asking once for why you kept it, with Done, Later and Let go. Add is one field, why; title, note and a day to show it wait behind More. Settings is five panels and Help.
+
+**Shoebox Me** (`?me=1` in the iPhone app) and **Settings › Help › Show everything** keep everything below: the morning cards, calendar, school posts, top stories, love and replies, samples, and the five-step Build my morning. Nothing is deleted; `full()` in `src/app.js` decides what is drawn and fetched.
+
 ## How it works
 
 ```

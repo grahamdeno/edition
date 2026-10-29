@@ -42,7 +42,7 @@ import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 import * as songs from "./songs.js";
 import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone, mixStories, followOrder } from "./onboard.js";
 
-export const VERSION = "4.68.0";
+export const VERSION = "4.69.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -95,6 +95,7 @@ const state = {
   capFiles: [],
   capWhy: "",
   capForm: {},       // the other Add fields: title, note, author, tags, minutes (and which you typed)
+  capMore: false,    // public app: the Add fields past "why" are open
   capPic: null,      // the picture picker in Add: { url, status, list, choice, ownFile, ownUrl }
   enriching: new Set(),
   expanded: new Set(), // posts opened in place by a tap on their words
@@ -376,6 +377,7 @@ function registerWorker() {
  * `force` (Settings › Load samples) always replaces them with a fresh set.
  */
 async function seedSamples({ force = false } = {}) {
+  if (!full() && !force) return 0; // the public app opens on your first save, not ours
   const loaded = await db.meta.get("samplesLoaded", false);
   const removed = await db.meta.get("samplesRemoved", false);
   const version = await db.meta.get("samplesVersion", null);
@@ -429,9 +431,10 @@ function topUpEdition() {
   if (room <= 0) return;
   const inEdition = new Set(ed.ids);
   const hasSuggestion = ed.ids.some((id) => byId(id)?.suggested);
-  // Saves kept today wait for a later day's six, as Keep promises.
+  // Saves kept today wait for a later day's six, as Keep promises. In the public app there is no Keep:
+  // a save fills an open slot today, so the first day isn't blank and a save is seen to land.
   const rest = state.items.filter((i) => !inEdition.has(i.id) && !(hasSuggestion && i.suggested)
-    && !(i.queuedAt && dayKey(i.queuedAt) === today && i.created && dayKey(i.created) === today));
+    && (full() ? !(i.queuedAt && dayKey(i.queuedAt) === today && i.created && dayKey(i.created) === today) : true));
   const extra = buildEdition(rest, null, { size: room }).ids;
   if (!extra.length) return;
   state.edition = { date: today, ids: [...ed.ids, ...extra] };
@@ -468,6 +471,11 @@ async function rankQueue() {
 
 async function saveItem(item) {
   const before = state.items.find((i) => i.id === item.id);
+  // One stage, not two: in the public app a new save joins the pool as it's saved. Saving is the Keep.
+  // It's judged once, when it comes back. (Set-aside returns and school posts still land in the inbox.)
+  if (!before && !full() && item.status === STATUS.INBOX && !item.suggested && !item.school && !item.backAt) {
+    item = { ...item, status: STATUS.QUEUED, queuedAt: item.created || Date.now(), history: [...(item.history || []), { v: VERDICT.LATER, at: Date.now(), stage: "inbox", auto: true }] };
+  }
   if (!before) track(item.suggested ? "story_added" : "save");
   else if (before.status !== item.status) track(`status_${item.status}`);
   state.items = state.items.some((i) => i.id === item.id)
@@ -895,7 +903,8 @@ async function picturePending() {
  */
 let findPhotoRunning = false;
 async function findPhotos() {
-  if (findPhotoRunning || !ai.relayBase()) return;
+  // Found photos (a licensed picture for a post that has none) are the full build's; a note of your own stays plain.
+  if (findPhotoRunning || !ai.relayBase() || !full()) return;
   findPhotoRunning = true;
   try {
     const open = (i) => i.status === STATUS.INBOX || i.status === STATUS.QUEUED || state.edition?.ids.includes(i.id);
@@ -1140,15 +1149,19 @@ function sectionHead(title, note = "") {
 
 function todayHtml() {
   const s = todaySections();
-  let h = stripHtml(s) + songAskHtml() + whatsNewHtml() + welcomeHtml() + aiAskHtml() + calendarHtml() + morningHtml() + dayTipHtml() + schoolAskHtml();
+  // The public app: the strip, then your posts. Everything that isn't something you saved is the full build's.
+  let h = full()
+    ? stripHtml(s) + songAskHtml() + whatsNewHtml() + welcomeHtml() + aiAskHtml() + calendarHtml() + morningHtml() + dayTipHtml() + schoolAskHtml()
+    : stripHtml(s) + whatsNewHtml() + welcomeHtml() + aiAskHtml();
   // Inbox zero: a settled post shows its stamp for a moment, then leaves. What's gone waits under "Done today".
   const gone = [];
   const shown = (list) => { const v = list.filter((i) => isOpen(i) || state.linger.has(i.id)); gone.push(...list.filter((i) => !v.includes(i))); return v; };
   const school = shown(s.school), fresh = shown(s.fresh), six = shown(s.six), sugg = shown(s.sugg);
   if (school.length) h += sectionHead("From school", `${s.school.filter(isOpen).length || "All"} to do`) + school.map((i) => postHtml(i)).join("");
-  if (fresh.length) h += sectionHead("New", `${s.fresh.filter(isOpen).length || "All"} to sort`) + fresh.map((i) => postHtml(i)).join("");
-  if (six.length) h += sectionHead("Today's six", `${s.six.filter(isOpen).length} of ${s.six.length} left`) + six.map((i) => postHtml(i)).join("");
+  if (fresh.length) h += sectionHead(full() ? "New" : "Back today", `${s.fresh.filter(isOpen).length || "All"} to sort`) + fresh.map((i) => postHtml(i)).join("");
+  if (six.length) h += sectionHead(full() ? "Today's six" : "Today", `${s.six.filter(isOpen).length} of ${s.six.length} left`) + six.map((i) => postHtml(i)).join("");
   if (sugg.length) h += sectionHead("Top stories") + sugg.map((i) => postHtml(i)).join("");
+  else if (!full()) { /* no stories in the public app */ }
   else if (state.storiesMiss && !state.storiesLoading && state.tab === "today") h += sectionHead("Top stories") + `<p class="finding miss" role="status">No stories came through just now. Shoebox looks again tomorrow morning.${ai.settings.canDiscover() ? ` <button class="linkish" type="button" data-act="discover">Try again</button>` : ""}</p>`;
   else if (state.storiesLoading) h += sectionHead("Top stories") + `<p class="finding" role="status"><span class="spin" aria-hidden="true"></span>Finding today's top stories${followedTopics(state.suggest).length ? ` on ${esc(followedTopics(state.suggest).slice(0, 3).join(", "))}` : ""}…</p>`;
   return h + endHtml(s) + doneTodayHtml(gone);
@@ -1208,6 +1221,15 @@ const MORNING_KEY = "edition.morning", MORNING_CACHE = "edition.morningCache";
 
 /** Shoebox Me, Graham's private build, opens with ?me=1: personal modules stay available there. */
 const personal = () => { try { return Boolean(window.shoeboxNative) && localStorage.getItem("edition.me") === "1"; } catch { return false; } };
+/*
+ * Two builds from one codebase. The public app is the feed and nothing else: save, come back, three
+ * verdicts, cleared. The full build (Shoebox Me, or Settings › Help › Show everything) keeps the
+ * morning cards, calendar, school posts, top stories, love and replies. Nothing is deleted: `full()`
+ * decides what's drawn and what's fetched.
+ */
+const FULL_KEY = "edition.full";
+const full = () => { if (personal()) return true; try { return localStorage.getItem(FULL_KEY) === "1"; } catch { return false; } };
+const setFull = (on) => { try { localStorage.setItem(FULL_KEY, on ? "1" : "0"); } catch { /* blocked */ } };
 /** Shoebox Me: write today's school and morning settings to the phone once, so they never depend on defaults in the code. */
 function sealMeSettings() {
   if (!personal()) return;
@@ -1379,7 +1401,7 @@ const yesterdayKey = () => dayKey(Date.now() - 864e5);
 
 let morningLoading = false;
 async function loadMorning() {
-  if (morningLoading) return;
+  if (morningLoading || !full()) return;
   morningLoading = true;
   let m = morningSettings();
   let c = morningCache(), changed = false;
@@ -1866,7 +1888,7 @@ async function mailFiles(base, m) {
 
 /** Top stories once a day, by themselves, when AI is on. */
 async function dailyStories() {
-  if (!storiesAuto() || !ai.settings.canDiscover()) return;
+  if (!full() || !storiesAuto() || !ai.settings.canDiscover()) return;
   try { if (localStorage.getItem("edition.storiesDay") === dayKey()) return; localStorage.setItem("edition.storiesDay", dayKey()); } catch { return; }
   const n = await findNew(null).catch(() => 0);
   if (n && state.tab === "today" && !$(".sheet-wrap")) render({ top: false });
@@ -2122,7 +2144,7 @@ function welcomeHtml() {
     return `<section class="ask welcome hero" aria-labelledby="wel-h">
       <div class="ask-top"><span class="av av-sb" aria-hidden="true">${LOGO}</span>
         <div><h2 id="wel-h">Welcome to Shoebox</h2>
-        <p>Your own feed: the things you saved come back a few at a time, with your day and weather on top. It ends when you're done.</p></div></div>
+        <p>${full() ? "Your own feed: the things you saved come back a few at a time, with your day and weather on top. It ends when you're done." : "Your own feed: the things you save come back a few at a time, with your reason on top. It ends when you're done."}</p></div></div>
       <div class="ask-acts"><button class="btn primary" type="button" data-welcome="start">Get started</button></div>
       <button class="btn ghost sm wel-skip" type="button" data-welcome="skip">Skip</button>
     </section>`;
@@ -2162,7 +2184,7 @@ function markStart() { coach.see(`new-${WHATS_NEW}`); try { localStorage.setItem
 
 async function welcomeAction(what) {
   track(`welcome_${what.replace(/-/g, "_")}`);
-  if (what === "start") { openBuild(); return; }
+  if (what === "start") { openBuild(full() ? 1 : 5); return; }
   if (what === "add") { openAdd(); return; }
   if (what === "safari") return; // the link opens Safari by itself
   if (what === "skip") { setFlag(ONBOARDED, true); coach.see("build"); markStart(); }
@@ -2182,7 +2204,7 @@ function openBuild(step = 1) {
   // Your own things first: how they get in. Then your day, school, optional topics, and AI.
   const mailOk = (() => { try { return Boolean(localStorage.getItem("edition.inboxPick")); } catch { return false; } })();
   const head = (h) => `<div class="sheet-head"><h2>${h}</h2><button class="x" type="button" data-close aria-label="Close">${I.close}</button></div>
-    <p class="bm-n">Step ${step} of 5</p>`;
+    ${full() ? `<p class="bm-n">Step ${step} of 5</p>` : ""}`;
   let html;
   if (step === 1) {
     let addr = "", pick = "";
@@ -2342,7 +2364,7 @@ async function finishBuild(aiOn) {
   closeSheet();
   state.reveal = true;
   state.tab = "today";
-  const stories = aiOn && storiesAuto();
+  const stories = aiOn && full() && storiesAuto();
   if (stories) { state.storiesLoading = true; try { localStorage.setItem("edition.storiesDay", dayKey()); } catch { /* full */ } }
   render({ top: true });
   setTimeout(() => { state.reveal = false; const tl = $("#tl"); if (tl) coachPass(tl); }, 2600);
@@ -2999,7 +3021,7 @@ function calendarHtml() {
 }
 
 async function refreshCalendar(opts) {
-  if (!calOn()) return;
+  if (!calOn() || !full()) return;
   const before = JSON.stringify(calCache()?.events || []);
   const c = await loadCalendar(opts);
   if (JSON.stringify(c?.events || []) !== before && state.tab === "today" && !state.reader && !$(".sheet-wrap")) render({ top: false });
@@ -3085,7 +3107,7 @@ function endHtml(s) {
   const open = all.filter(isOpen).length;
   const c = counts(state.items);
   const more = `${c.queued ? `<button class="btn" type="button" data-act="one-more">Read one more</button>` : ""}
-    ${ai.settings.canDiscover() ? `<button class="btn" type="button" data-act="discover">Get top stories</button>` : ""}`;
+    ${full() && ai.settings.canDiscover() ? `<button class="btn" type="button" data-act="discover">Get top stories</button>` : ""}`;
   if (!state.items.length) {
     if (!flag(ONBOARDED)) return ""; // the welcome steps say it already
     return `<section class="end"><h2>Your shoebox is empty.</h2>
@@ -3248,7 +3270,8 @@ function postHtml(item, { compact = false } = {}) {
     + (item.school.fromFile ? `<p class="ev-place">${I.attach}<span>From the attached ${esc(item.school.fromFile)}</span></p>` : "");
   else if (item.kind === KIND.NOTE) say = `<p class="say">${esc(item.text || item.title)}</p>`;
   else if (item.why) say = `<p class="say">${esc(item.why)}</p>`;
-  else if (item.hook && !words) say = `<p class="guess"><span class="sr-only">${APP}'s guess: </span>${esc(item.hook)}</p>`;
+  else if (!full() && !words && !compact && open) say = `<form class="why-ask" data-why-for="${esc(item.id)}"><label class="sr-only" for="why-${esc(item.id)}">Why did you keep this?</label><input id="why-${esc(item.id)}" type="text" maxlength="140" autocomplete="off" placeholder="Why did you keep this?"></form>`;
+  else if (full() && item.hook && !words) say = `<p class="guess"><span class="sr-only">${APP}'s guess: </span>${esc(item.hook)}</p>`;
   const why = item.why && item.kind === KIND.NOTE ? `<p class="why-line"><span>Why you kept it</span>${esc(item.why)}</p>` : "";
   const quote = item.kind === KIND.QUOTE ? `<figure class="quote ${String(item.text || "").length > 160 ? "long" : ""}"><blockquote>“${esc(item.text || item.title)}”</blockquote>${item.author ? `<figcaption>${esc(item.author)}</figcaption>` : ""}</figure>${item.why ? `<p class="why-line"><span>Why you kept it</span>${esc(item.why)}</p>` : ""}` : "";
   const points = (expanded || !compact) && item.points && item.points.length && [KIND.LINK, KIND.PDF, KIND.TEXT].includes(item.kind)
@@ -3279,7 +3302,7 @@ function postHtml(item, { compact = false } = {}) {
  * usual Later (it fades after eight); every other day sets it aside, and it tops Today that morning.
  */
 function laterPickHtml(item) {
-  const choices = asideChoices();
+  const choices = asideChoices().slice(0, full() ? undefined : 2);
   const min = toDateInput(choices[0].until);
   return `<div class="later-pick" role="group" aria-label="Show it again">
     <div class="later-head"><span class="later-q">${I.later}<span>Show it again</span></span>
@@ -3337,8 +3360,9 @@ function stampHtml(item, v) {
 }
 
 function actionsHtml(item, open) {
-  const love = `<button class="act icon" type="button" data-love="${esc(item.id)}" aria-pressed="${!!item.loved}" aria-label="Love">${item.loved ? I.heartFill : I.heart}</button>`;
-  const reply = item.suggested ? "" : `<button class="act icon" type="button" data-reply="${esc(item.id)}" aria-label="Reply to yourself${item.replies?.length ? `, ${item.replies.length} so far` : ""}">${I.reply}${item.replies?.length ? `<span class="n" aria-hidden="true">${item.replies.length}</span>` : ""}</button>`;
+  // The public app's row is three verdicts and a menu. Love and Reply are the full build's.
+  const love = !full() ? "" : `<button class="act icon" type="button" data-love="${esc(item.id)}" aria-pressed="${!!item.loved}" aria-label="Love">${item.loved ? I.heartFill : I.heart}</button>`;
+  const reply = item.suggested || !full() ? "" : `<button class="act icon" type="button" data-reply="${esc(item.id)}" aria-label="Reply to yourself${item.replies?.length ? `, ${item.replies.length} so far` : ""}">${I.reply}${item.replies?.length ? `<span class="n" aria-hidden="true">${item.replies.length}</span>` : ""}</button>`;
   if (!open && item.status === STATUS.ASIDE) {
     return `<div class="settled-row"><p class="stamp later">${I.later}<span>Comes back ${esc(shortDate(item.until))}</span></p>
       <button class="act" type="button" data-backnow="${esc(item.id)}">${I.requeue}<span>Bring back now</span></button></div>`;
@@ -3467,6 +3491,17 @@ function bindScreen() {
 /* What each render needs wired: the search box and arrow keys on the tabs. */
 function bindTimeline(tl) {
   const q = $("#all-q", tl);
+  // The why line, asked on the card itself: Enter or leaving the field saves it; empty leaves it alone.
+  const saveWhy = async (form) => {
+    const id = form.dataset.whyFor, input = form.querySelector("input"), why = input?.value.trim().slice(0, 140) || "";
+    const item = byId(id);
+    if (!item || !why || item.why === why) return;
+    await saveItem({ ...item, why });
+    track("why_on_card");
+    refreshPost(id);
+  };
+  tl.addEventListener("submit", (e) => { const f = e.target.closest(".why-ask"); if (f) { e.preventDefault(); saveWhy(f); } });
+  tl.addEventListener("focusout", (e) => { const f = e.target.closest?.(".why-ask"); if (f) saveWhy(f); });
   $("#ask-in", tl)?.addEventListener("input", (e) => { state.schoolDraft = e.target.value; });
   if (q) q.addEventListener("input", () => {
     state.allQuery = q.value; state.allShown = PAGE;
@@ -4477,7 +4512,7 @@ const remindTime = () => { try { const t = localStorage.getItem("edition.remindT
 const remindLabel = (t = remindTime()) => { const [h, m] = t.split(":").map(Number); return new Date(2000, 0, 1, h, m).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }); };
 
 function asideHtml(prefix, until) {
-  const choices = asideChoices();
+  const choices = asideChoices().slice(0, full() ? undefined : 2);
   const custom = until && !choices.some((c) => c.until === until);
   const tomorrow = toDateInput(choices[0].until);
   return `<div class="aside-pick">
@@ -4488,7 +4523,7 @@ function asideHtml(prefix, until) {
         <span class="chip date-chip" aria-pressed="${!!custom}"><span class="dl">${custom ? esc(shortDate(until)) : "Pick a date"}</span>
           <input type="date" id="${prefix}-aside-date" min="${tomorrow}" value="${custom ? toDateInput(until) : ""}" aria-label="Pick a date"></span>
       </div>
-      <label class="check remind" ${until ? "" : "hidden"}><input type="checkbox" id="${prefix}-remind" ${remindOn() ? "checked" : ""}>
+      <label class="check remind" ${until && full() ? "" : "hidden"}><input type="checkbox" id="${prefix}-remind" ${remindOn() ? "checked" : ""}>
         <span>Remind me that day<small>${notifyOn() ? `A notification at ${remindLabel()}` : `Adds a ${remindLabel()} alert to your Calendar`}</small></span></label>
     </div>`;
 }
@@ -4504,7 +4539,7 @@ function bindAside(root, prefix, onPick) {
     dc.setAttribute("aria-pressed", String(!!custom));
     $(".dl", dc).textContent = custom ? shortDate(until) : "Pick a date";
     $(`#${prefix}-aside-when`, box).textContent = until ? `From ${shortDate(until)}` : "Now";
-    $(".remind", box).hidden = !until;
+    $(".remind", box).hidden = !until || !full();
     onPick(until || null);
   };
   box.addEventListener("click", (e) => {
@@ -4560,9 +4595,10 @@ function openAdd() {
     <ul class="detect" id="cap-detect" aria-live="polite"></ul>
     <div class="cap-pics" id="cap-pics" hidden></div>
     <input type="file" id="cap-own" accept="image/*" hidden>
+    ${field("why", "Why you're saving it", { area: true, hint: "(top of the post)", ph: "Read this before the roadmap review", attrs: 'maxlength="140"' })}
+    ${full() ? "" : `<button class="btn ghost sm cap-more" type="button" id="cap-more" hidden aria-expanded="false">More: title, note, a day to show it</button>`}
     ${field("title", "Title", { ph: "Fills in from the page" })}
     ${field("author", "Who said it")}
-    ${field("why", "Why you're saving it", { area: true, hint: "(top of the post)", ph: "Read this before the roadmap review", attrs: 'maxlength="140"' })}
     ${field("note", "Your note", { area: true, ph: "Anything you want to remember about it" })}
     <div data-f="aside" hidden>${asideHtml("cap", F.until || null)}</div>
     <div class="cap-foot sheet-foot">
@@ -4571,6 +4607,8 @@ function openAdd() {
     </div>
     <input type="file" id="in-any" multiple hidden>`, { tall: true, label: "Add", guard: capHasDraft });
   wrap.classList.add("adding");
+  state.capMore = false;
+  $("#cap-more", wrap)?.addEventListener("click", (e) => { state.capMore = true; e.currentTarget.hidden = true; updateDetect(); $("#cap-title", wrap)?.focus(); });
   const ta = $("#cap-text", wrap);
   const grow = (el, max) => { el.style.height = "auto"; el.style.height = `${Math.min(el.scrollHeight + 2, max)}px`; };
   ta.addEventListener("input", () => { state.capText = ta.value; grow(ta, 240); updateDetect(); if (ta.value.trim()) $("#cap-try", wrap)?.remove(); });
@@ -4643,8 +4681,14 @@ function updateDetect() {
   }).join("");
   // Title, why and note once there's something to describe; the AI tags it from what you write. Several at once share why.
   const words = one && (one.kind === KIND.NOTE || one.kind === KIND.QUOTE);
-  const show = { why: drafts.length > 0, aside: drafts.length > 0, title: one && !words, author: one && one.kind === KIND.QUOTE, note: one && !words };
+  // The public app shows one field, why; title, note and the day wait behind More. The picture row waits there too.
+  const more = full() || state.capMore;
+  const show = { why: drafts.length > 0, aside: drafts.length > 0 && more, title: one && !words && more, author: one && one.kind === KIND.QUOTE, note: one && !words && more };
   for (const [k, on] of Object.entries(show)) { const el = $(`[data-f=${k}]`); if (el) el.hidden = !on; }
+  const moreBtn = $("#cap-more");
+  if (moreBtn) moreBtn.hidden = !drafts.length || more;
+  const pics = $("#cap-pics");
+  if (pics && !more) pics.hidden = true;
   const save = $("#cap-save");
   save.disabled = !drafts.length;
   const until = state.capForm.until;
@@ -4829,7 +4873,7 @@ function renderCapPics() {
   if (!box) return;
   const p = state.capPic;
   if (!p) { box.hidden = true; box.innerHTML = ""; return; }
-  box.hidden = false;
+  box.hidden = !(full() || state.capMore);
   const found = p.status === "loading" ? "Looking…" : p.list.length ? `${p.list.length} found on the page` : "None found on the page";
   box.innerHTML = `<div class="lbl"><span id="cap-pics-l">Picture</span><span>${found}</span></div>
     <div class="picks" role="group" aria-labelledby="cap-pics-l">${pickTilesHtml(p.list, p.choice, { ownUrl: p.ownUrl, busy: p.status === "loading" })}</div>`;
@@ -4965,6 +5009,13 @@ const SETTINGS_ORDER = [
   ["Your data", ["backup", "learned", "privacy"]],
   ["", ["features", "help", "usage"]],
 ];
+/** The public app's settings: five panels and Help. */
+const SETTINGS_ORDER_PUBLIC = [
+  ["", ["you"]],
+  ["Saving", ["email", "reminders", "ai"]],
+  ["Your data", ["backup", "privacy"]],
+  ["", ["help"]],
+];
 
 function openSettings(panel = "", { fromCard = false } = {}) {
   const c = counts(state.items);
@@ -4984,11 +5035,11 @@ function openSettings(panel = "", { fromCard = false } = {}) {
           <input type="file" id="set-me-file" accept="image/*" hidden></div>
         <div class="row"><span class="rk">Look</span>
           <div class="seg" role="group" aria-label="Look">${["system", "light", "dark"].map((t) => `<button type="button" data-look="${t}" aria-pressed="${themeChoice() === t}">${{ system: "Phone", light: "Light", dark: "Dark" }[t]}</button>`).join("")}</div></div>
-        <div class="row"><span class="rk">Colors</span>
+        ${full() ? `<div class="row"><span class="rk">Colors</span>
           <div class="seg" role="group" aria-label="Colors">${["grape", "plain"].map((t) => `<button type="button" data-palette="${t}" aria-pressed="${paletteChoice() === t}">${{ grape: "Grape soda", plain: "Plain" }[t]}</button>`).join("")}</div></div>
         <div class="row"><span class="rk">Sounds</span>
           <div class="seg" role="group" aria-label="Sounds">
-            <button type="button" data-sound="1" aria-pressed="${soundOn()}">On</button><button type="button" data-sound="0" aria-pressed="${!soundOn()}">Off</button></div></div>
+            <button type="button" data-sound="1" aria-pressed="${soundOn()}">On</button><button type="button" data-sound="0" aria-pressed="${!soundOn()}">Off</button></div></div>` : ""}
       </div>` },
     calendar: { title: "Calendar", value: calOn() ? (calShown.length ? calShown.slice(0, 2).join(", ") + (calShown.length > 2 ? "…" : "") : "On") : "Off", body: `
       <div class="group">
@@ -5191,7 +5242,12 @@ function openSettings(panel = "", { fromCard = false } = {}) {
       </div>
       <button class="btn" type="button" id="set-rebuild">Rebuild today</button>
       <span class="st" id="set-ed-st" role="status"></span>
-      </div>` },
+      </div>
+      ${me ? "" : `<div class="group">
+      <div class="row"><span class="rk">Show everything</span>
+        <div class="seg" role="group" aria-label="Show everything"><button type="button" data-full="1" aria-pressed="${full()}">On</button><button type="button" data-full="0" aria-pressed="${!full()}">Off</button></div></div>
+      <p class="note">Off is Shoebox: your saves, a few a day. On adds the morning cards, calendar, school posts, top stories, love and replies, for trying them side by side.</p>
+      </div>`}` },
     usage: me && { title: "Usage (owner)", value: "", body: `<div class="group"><div id="set-usage-box"><p class="note">Loading…</p></div></div>` },
   };
   const close = `<button class="x" type="button" data-close aria-label="Close">${I.close}</button>`;
@@ -5202,7 +5258,7 @@ function openSettings(panel = "", { fromCard = false } = {}) {
       ${P[panel].body}
       ${fromCard ? `<button class="btn ghost sm set-all" type="button" data-set-back>All settings</button>` : ""}`;
   } else {
-    html = `<div class="sheet-head"><h2>Settings</h2>${close}</div>` + SETTINGS_ORDER.map(([label, keys]) => {
+    html = `<div class="sheet-head"><h2>Settings</h2>${close}</div>` + (full() ? SETTINGS_ORDER : SETTINGS_ORDER_PUBLIC).map(([label, keys]) => {
       const rows = keys.filter((k) => P[k]).map((k) => `<button class="row set-row" type="button" data-set="${k}"><span class="rk">${esc(P[k].title)}</span><span class="sv">${esc(P[k].value || "")}</span>${I.next}</button>`).join("");
       return rows ? `${label ? `<h3 class="set-h">${esc(label)}</h3>` : ""}<div class="group set-list">${rows}</div>` : "";
     }).join("") + `<p class="version">${APP}${me ? " Me" : ""} ${VERSION}</p>`;
@@ -5211,6 +5267,13 @@ function openSettings(panel = "", { fromCard = false } = {}) {
   wrap.querySelectorAll("[data-set]").forEach((b) => b.addEventListener("click", () => openSettings(b.dataset.set)));
   wrap.querySelectorAll("[data-set-back]").forEach((b) => b.addEventListener("click", () => openSettings()));
   $("#set-wx-hide", wrap)?.addEventListener("click", () => { closeSheet(); dayAction(m.wxSmall ? "wx-big" : "wx-small"); });
+  wrap.querySelectorAll("[data-full]").forEach((b) => b.addEventListener("click", () => {
+    setFull(b.dataset.full === "1");
+    track(full() ? "full_on" : "full_off");
+    closeSheet();
+    if (full()) { loadMorning(); refreshCalendar(); dailyStories(); }
+    render({ top: true });
+  }));
   if (panel === "usage") showUsage($("#set-usage-box", wrap));
 
   const st = $("#set-st", wrap);

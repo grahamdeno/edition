@@ -51,7 +51,7 @@ final class ShareViewController: UIViewController {
             }
         }
         await MainActor.run {
-            label.text = count > 0 ? "Saved to Shoebox.\nIt's in New when you open the app." : "Nothing Shoebox can keep here."
+            label.text = count > 0 ? "Saved to Shoebox.\nIt's on Today when you open the app." : "Nothing Shoebox can keep here."
             icon.image = UIImage(systemName: count > 0 ? "checkmark.circle.fill" : "exclamationmark.circle")
             if count > 0 { icon.addSymbolEffect(.bounce) }
         }
