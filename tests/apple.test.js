@@ -52,15 +52,3 @@ test("song of the day: the app gets a key, the Shortcut posts with it, the app r
     assert.equal(got.match.artwork, "https://art.test/600x600.jpg");
   } finally { globalThis.fetch = realFetch; }
 });
-
-test("maps tokens follow the page's address while Shoebox moves to inmyshoebox.com", async () => {
-  const { pem } = await p8();
-  const env = { SHOEBOX: fakeKv(), APPLE_P8: pem };
-  const token = async (origin) => {
-    const res = await relay.fetch(new Request("https://relay.test/apple/maps-token", { headers: { origin } }), env);
-    assert.equal(res.headers.get("access-control-allow-origin"), origin);
-    return part((await res.json()).token, 1).origin;
-  };
-  assert.equal(await token("https://inmyshoebox.com"), "https://inmyshoebox.com");
-  assert.equal(await token("https://shoebox.tangomike.app"), "https://shoebox.tangomike.app", "old address still works");
-});

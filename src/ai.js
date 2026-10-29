@@ -1006,7 +1006,7 @@ function cleanQuestions(out, count) {
 /** Exam questions need to be right more than they need to be cheap. */
 /**
  * One sentence for the top of Today: what matters most, soonest first. It sees only the facts given:
- * calendar counts and times (never event titles, which stay on the phone), the weather, and school
+ * calendar counts and times (never event titles, which stay on the phone), and school
  * headlines with the child's name written {child}.
  */
 export async function dayLine(facts) {
@@ -1113,29 +1113,4 @@ export async function dailyQuotes(from, retried = false) {
 export function ownerHeaders() {
   const d = safeGet(DEVICE_STORE), t = safeGet(TOKEN_STORE);
   return d && t ? { "x-shoebox-device": d, "x-shoebox-token": t } : {};
-}
-
-/** Live cameras near a place, found by AI on the relay once a week per town and checked before they're offered. */
-export async function findCams(place, retried = false) {
-  if (!settings.consented()) throw new AiError("This uses AI. Turn it on in Settings › AI.");
-  const base = relayBase();
-  await ensureSignedUp(base);
-  for (let tries = 0; tries < 5; tries++) {
-    let res;
-    try {
-      res = await fetch(`${base}/ai/cams`, {
-        method: "POST",
-        headers: { "content-type": "application/json", "x-shoebox-device": safeGet(DEVICE_STORE), "x-shoebox-token": safeGet(TOKEN_STORE) },
-        body: JSON.stringify({ place }),
-      });
-    } catch { throw new AiError("Couldn't reach Shoebox's AI. Check your connection.", 0); }
-    const data = await res.json().catch(() => ({}));
-    const trouble = signUpTrouble(res, data, retried);
-    if (trouble === "retry") return findCams(place, true);
-    if (trouble === "closed") throw new AiError(WEB_AI_NOTE, 403);
-    if (res.status === 202) { await new Promise((r) => setTimeout(r, Math.min(30, data.retry || 20) * 1000)); continue; }
-    if (!res.ok || data.error) throw new AiError(data?.error?.message || `Camera search failed (${res.status}).`, data.status || res.status);
-    return data.cams || [];
-  }
-  return [];
 }

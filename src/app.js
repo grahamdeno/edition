@@ -42,7 +42,7 @@ import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 import * as songs from "./songs.js";
 import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone, mixStories, followOrder } from "./onboard.js";
 
-export const VERSION = "4.69.0";
+export const VERSION = "4.70.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -184,8 +184,32 @@ async function restoreAfterMove() {
   return note;
 }
 
+/**
+ * Weather and sports were taken out of Shoebox. Once per phone, drop what they left behind: the place,
+ * the camera, the teams, last night's scores and the weather, the location flag, and any folded score card.
+ * (Settings keep their other keys; the day line writes itself fresh without the weather.)
+ */
+const WX_SETTINGS = ["weather", "zip", "place", "cam", "useLocation", "wxSmall", "hockey", "teams"];
+const WX_CACHE = ["weather", "weatherFor", "wxHidden", "locAt", "games", "gamesAt"];
+function dropWeatherAndSports() {
+  try {
+    if (localStorage.getItem("edition.wxGone") === "1") return;
+    const m = JSON.parse(localStorage.getItem(MORNING_KEY) || "null");
+    if (m && typeof m === "object") { for (const k of WX_SETTINGS) delete m[k]; localStorage.setItem(MORNING_KEY, JSON.stringify(m)); }
+    const c = JSON.parse(localStorage.getItem(MORNING_CACHE) || "null");
+    if (c && typeof c === "object") {
+      for (const k of WX_CACHE) delete c[k];
+      if (c.folded) c.folded = Object.fromEntries(Object.entries(c.folded).filter(([k]) => !k.startsWith("nhl-")));
+      localStorage.setItem(MORNING_CACHE, JSON.stringify(c));
+    }
+    localStorage.removeItem(DAY_LINE);
+    localStorage.setItem("edition.wxGone", "1");
+  } catch { /* storage blocked: nothing to clean */ }
+}
+
 async function boot() {
   const movedNote = await restoreAfterMove();
+  dropWeatherAndSports();
   sealMeSettings();
   const migrated = await db.migrateFromLocalStorage(migrateLegacy).catch(() => 0);
   ai.migrateAiSettings();
@@ -469,13 +493,23 @@ async function rankQueue() {
 }
 /* ================= Data helpers ================= */
 
+/** Public app: does a brand-new save skip the inbox? (Set-aside returns, school posts and top stories don't.) */
+const joinsPool = (item) => !full() && item && item.status === STATUS.INBOX && !item.suggested && !item.school && !item.backAt && !(item.history || []).length;
+const queueNew = (item) => ({ ...item, status: STATUS.QUEUED, queuedAt: item.created || Date.now(), history: [...(item.history || []), { v: VERDICT.LATER, at: Date.now(), stage: "inbox", auto: true }] });
+/** Captures (Add, paste, drop, the share sheet, ?url=) write straight to storage, so they pass through here too. */
+async function landNew(list) {
+  const out = [];
+  for (const it of list) {
+    if (joinsPool(it) && !state.items.some((i) => i.id === it.id)) { const q = queueNew(it); await db.items.put(q); out.push(q); } else out.push(it);
+  }
+  return out;
+}
+
 async function saveItem(item) {
   const before = state.items.find((i) => i.id === item.id);
   // One stage, not two: in the public app a new save joins the pool as it's saved. Saving is the Keep.
   // It's judged once, when it comes back. (Set-aside returns and school posts still land in the inbox.)
-  if (!before && !full() && item.status === STATUS.INBOX && !item.suggested && !item.school && !item.backAt) {
-    item = { ...item, status: STATUS.QUEUED, queuedAt: item.created || Date.now(), history: [...(item.history || []), { v: VERDICT.LATER, at: Date.now(), stage: "inbox", auto: true }] };
-  }
+  if (!before && joinsPool(item)) item = queueNew(item);
   if (!before) track(item.suggested ? "story_added" : "save");
   else if (before.status !== item.status) track(`status_${item.status}`);
   state.items = state.items.some((i) => i.id === item.id)
@@ -525,6 +559,7 @@ async function hydrate(root) {
 async function afterCapture(list, until = null) {
   list = list.filter(Boolean);
   if (!list.length) return;
+  list = await landNew(list);
   list.forEach((it) => { state.items = [it, ...state.items.filter((i) => i.id !== it.id)]; });
   if (list.some((i) => i.source === "share")) setFlag(SHARED, true);
   tick(true);
@@ -532,7 +567,11 @@ async function afterCapture(list, until = null) {
   render({ top: true });
   celebrateSave(list);
   picturePending();
+  // In the public app a save joins today only while there's room. Say so when it doesn't, or it seems lost.
+  const onToday = new Set(todayIds());
+  const waits = !until && !full() && list.every((i) => !onToday.has(i.id));
   toast(until ? `Set aside until ${shortDate(until)}. It'll be at the top of Today that morning.`
+    : waits ? `Saved. Today is full, so ${list.length === 1 ? "it comes" : "they come"} back on another day.`
     : `Saved ${list.length === 1 ? "1 item" : list.length + " items"} to ${APP}.`, {
     action: "Undo",
     onAction: async () => { await removeItems(list); render(); },
@@ -543,7 +582,7 @@ async function afterCapture(list, until = null) {
 async function importShares() {
   const shares = await db.drainShares().catch(() => []);
   if (!shares.length) return 0;
-  const list = await captureShares(shares);
+  const list = await landNew(await captureShares(shares));
   list.forEach((it) => { state.items = [it, ...state.items]; });
   return list.length;
 }
@@ -554,7 +593,7 @@ async function importFromUrl() {
   let n = p.has("share") ? 1 : 0;
   const text = [p.get("title"), p.get("text"), p.get("url")].filter(Boolean).join(" ").trim();
   if (text) {
-    const list = await captureText(text, "link");
+    const list = await landNew(await captureText(text, "link"));
     if (list.length) { state.items = [...list, ...state.items]; n += list.length; }
   }
   if (p.get("open")) state.openId = p.get("open");
@@ -689,11 +728,9 @@ async function backfillHooks() {
 async function sharedPicks(known) {
   const topics = followOrder(state.suggest).slice(0, 4);
   if (!topics.length) return [];
-  const place = placeOf(morningSettings())?.name || "";
   const lists = await Promise.all(topics.map(async (t) => {
-    if (t === "local" && !place) return { topic: t, picks: [] };
-    const picks = await ai.topicStories(t, { place: t === "local" ? place : "" }).catch((e) => { noteError(e, { quiet: true, where: `stories: ${t}` }); return []; });
-    return { topic: t === "local" ? `local:${place}` : t, picks };
+    const picks = await ai.topicStories(t).catch((e) => { noteError(e, { quiet: true, where: `stories: ${t}` }); return []; });
+    return { topic: t, picks };
   }));
   return mixStories(lists, 3, known);
 }
@@ -704,7 +741,7 @@ async function findNew(statusEl) {
   set("Finding today's top stories…");
   try {
     const known = new Set(state.items.map((i) => i.url).filter(Boolean));
-    const profile = withFollows(interestProfile(discoveryItems(state.items)), state.suggest, { place: placeOf(morningSettings())?.name || "" });
+    const profile = withFollows(interestProfile(discoveryItems(state.items)), state.suggest);
     // Topics followed in Build my morning share one search a day with everyone; otherwise a search of their own.
     let picks = await sharedPicks(known).catch((e) => { noteError(e, { quiet: true, where: "shared stories" }); return []; });
     if (!picks.length) picks = await ai.discover(profile, { known, guide: suggestionGuide(state.suggest), vocab: vocab(), blocked: state.suggest?.blocked || [] });
@@ -1051,7 +1088,7 @@ function todaySections() {
   const v = editionView(state.items, state.edition);
   const six = v.pages.filter((p) => !freshIds.has(p.id) && !p.school);
   const sixIds = new Set(six.map((p) => p.id));
-  const sugg = state.items.filter((i) => i.suggested && !sixIds.has(i.id) && isNew(i))
+  const sugg = !full() ? [] : state.items.filter((i) => i.suggested && !sixIds.has(i.id) && isNew(i))
     .sort((a, b) => b.created - a.created).slice(0, SUGGESTIONS_PER_DAY);
   // School posts: every one not done, each day, apart from New and the six. Settled ones stay till tomorrow, stamped.
   // School posts: the newest newsletter's posts first (in its own order), then the rest by their date.
@@ -1119,15 +1156,26 @@ function render({ top = false } = {}) {
   bindTimeline(tl);
   tintVisible(tl);
   if (state.reveal) $("#panel", tl)?.classList.add("reveal");
-  requestAnimationFrame(() => { placeSpot(); coachPass(tl); tintSongCard(); refreshDayLine(); watchFoldCards(); });
+  requestAnimationFrame(() => { refocusWhy(); placeSpot(); coachPass(tl); tintSongCard(); refreshDayLine(); watchFoldCards(); });
   updateWidget();
 }
 
 /** Replace one post in place (a summary or picture arrived), without disturbing the page. */
+/** A "Why did you keep this?" answer being typed: kept across redraws, so enrichment landing doesn't wipe it. */
+const whyDrafts = new Map();
+let whyFocus = null;
+function refocusWhy() {
+  const el = whyFocus && document.getElementById("why-" + whyFocus);
+  if (!el || document.activeElement === el) return;
+  el.focus({ preventScroll: true });
+  try { el.setSelectionRange(el.value.length, el.value.length); } catch { /* not a text field */ }
+}
+
 function refreshPost(id) {
   const el = document.getElementById("p-" + id);
   const item = byId(id);
   if (!el || !item || $(".sheet-wrap")) return;
+  if (whyFocus === id && el.contains(document.activeElement)) return; // redraw once they're done typing
   const compact = el.classList.contains("compact");
   const tmp = document.createElement("div");
   tmp.innerHTML = postHtml(item, { compact });
@@ -1213,8 +1261,8 @@ function goAway(id) {
 function lingerFlush() { for (const id of [...state.linger.keys()]) stopLinger(id); }
 
 /* ================= This morning =================
- * The daily set at the top of Today: weather and radar (or your camera),
- * last night's games, a Jung quote, On this day, and CPMAI practice. Each
+ * The daily set at the top of Today: a quote, On this day, a song,
+ * and CPMAI practice. Each
  * can be turned off in Settings › Mornings. Read fresh each day; never saved.
  */
 const MORNING_KEY = "edition.morning", MORNING_CACHE = "edition.morningCache";
@@ -1228,7 +1276,8 @@ const personal = () => { try { return Boolean(window.shoeboxNative) && localStor
  * decides what's drawn and what's fetched.
  */
 const FULL_KEY = "edition.full";
-const full = () => { if (personal()) return true; try { return localStorage.getItem(FULL_KEY) === "1"; } catch { return false; } };
+/** The App Store app is always the feed: Show everything is for the web, and Shoebox Me has it all. */
+const full = () => { if (personal()) return true; if (window.shoeboxNative) return false; try { return localStorage.getItem(FULL_KEY) === "1"; } catch { return false; } };
 const setFull = (on) => { try { localStorage.setItem(FULL_KEY, on ? "1" : "0"); } catch { /* blocked */ } };
 /** Shoebox Me: write today's school and morning settings to the phone once, so they never depend on defaults in the code. */
 function sealMeSettings() {
@@ -1254,11 +1303,11 @@ async function keepAddress() {
     if (res.ok && d.address) localStorage.setItem("edition.inboxAddress", d.address);
   } catch { /* next launch */ }
 }
-/** Modules that only Shoebox Me shows: unofficial scores, a quote set, a one-library song. */
-const PERSONAL_MODULES = ["hockey", "song"];
-const MORNING_PUBLIC = { weather: true, zip: "", place: null, cam: "", otd: true, study: false, studyTopic: "", hockey: false, teams: [], jung: false, song: false, quote: false, quoteFrom: "" };
+/** Modules that only Shoebox Me shows: a quote set, a one-library song. */
+const PERSONAL_MODULES = ["song"];
+const MORNING_PUBLIC = { otd: true, study: false, studyTopic: "", jung: false, song: false, quote: false, quoteFrom: "" };
 // Shoebox Me's own choices live on its phone (written there once by sealMeSettings); only the modules are switched on here.
-const MORNING_ME = { ...MORNING_PUBLIC, hockey: true, song: true, quote: true, quoteFrom: "Carl Jung" };
+const MORNING_ME = { ...MORNING_PUBLIC, song: true, quote: true, quoteFrom: "Carl Jung" };
 function morningSettings() {
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem(MORNING_KEY) || "{}") || {}; } catch { /* storage blocked */ }
@@ -1271,20 +1320,6 @@ function morningSettings() {
   if (!personal()) for (const k of PERSONAL_MODULES) if (!(k === "song" && nativeCan("music"))) m[k] = false;
   return m;
 }
-/** Can this phone tell Shoebox where it is? (the iPhone app, or a browser that shares location) */
-const canLocate = () => nativeCan("location") || (!NATIVE && typeof navigator !== "undefined" && Boolean(navigator.geolocation));
-
-/** Weather for wherever the phone is, from now on. Asks for permission. Returns the place. */
-async function useMyLocation() {
-  const loc = await getLocation({ ask: true });
-  const place = await withTimeout(daily.placeFromCoords(loc.lat, loc.lon, { name: loc.name || "", zip: loc.zip || "" }), 15000);
-  setMorningSettings({ ...morningSettings(), place, zip: "", useLocation: true, weather: true });
-  const c = morningCache(); delete c.weather; c.locAt = Date.now(); saveMorningCache(c);
-  render({ top: false });
-  loadMorning();
-  return place;
-}
-
 /** Turn on the iPhone's own calendars: asks for access, then reads today. */
 async function turnOnNativeCalendar() {
   try {
@@ -1298,27 +1333,9 @@ async function turnOnNativeCalendar() {
   } catch (e) { return { ok: false, msg: e.message }; }
 }
 
-/** Weather pictures for the small weather card. */
-const wxSvg = (d) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
-const CLOUD = '<path d="M7 18.5h10a3.5 3.5 0 0 0 .4-7A5 5 0 0 0 7.8 10 4.3 4.3 0 0 0 7 18.5z"/>';
-const WX_ICONS = {
-  sun: wxSvg('<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.2M12 19.3v2.2M4.6 4.6l1.6 1.6M17.8 17.8l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.6 19.4l1.6-1.6M17.8 6.2l1.6-1.6"/>'),
-  moon: wxSvg('<path d="M19.5 14.5A8 8 0 0 1 9.5 4.5a8 8 0 1 0 10 10z"/>'),
-  partly: wxSvg('<path d="M8.5 3v1.6M3.3 8.2h1.6M4.8 4.6l1.1 1.1M13 4.6l-1.1 1.1"/><path d="M6.2 10.5a3.3 3.3 0 0 1 5.9-2.4"/><path d="M8.5 19.5h9a3 3 0 0 0 .3-6 4.4 4.4 0 0 0-8.4-.9 3.5 3.5 0 0 0-.9 6.9z"/>'),
-  cloud: wxSvg(CLOUD),
-  rain: wxSvg('<path d="M7 15.5h10a3.5 3.5 0 0 0 .4-7A5 5 0 0 0 7.8 7 4.3 4.3 0 0 0 7 15.5z"/><path d="M8.5 18.5l-1 2.5M12.5 18.5l-1 2.5M16.5 18.5l-1 2.5"/>'),
-  storm: wxSvg('<path d="M7 15.5h10a3.5 3.5 0 0 0 .4-7A5 5 0 0 0 7.8 7 4.3 4.3 0 0 0 7 15.5z"/><path d="M12.5 14.5l-2 3.5h3l-2 3.5"/>'),
-  snow: wxSvg('<path d="M7 15.5h10a3.5 3.5 0 0 0 .4-7A5 5 0 0 0 7.8 7 4.3 4.3 0 0 0 7 15.5z"/><path d="M8.5 19h.01M12 20.5h.01M15.5 19h.01"/>'),
-  fog: wxSvg('<path d="M4 10h16M6 14h12M4 18h16M8 6h8"/>'),
-  wind: wxSvg('<path d="M3 9h11a2.5 2.5 0 1 0-2.5-2.5M3 13h15a2.5 2.5 0 1 1-2.5 2.5M3 17h8"/>'),
-};
-const WX_MIN = '<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 15l6-6 6 6"/></svg>';
-
 /** The ••• on a card: opens that card's settings right there. */
 const cardMore = (panel, label) => `<button class="act icon more" type="button" data-panel="${panel}" aria-label="${esc(label)} settings">${I.menu}</button>`;
 
-/** Where the weather is for: the built-in place for a known ZIP, or one looked up in Settings. */
-const placeOf = (m) => daily.PLACES[m.zip] || m.place || null;
 const studyLabel = (m) => String(m.studyTopic || "Study").slice(0, 40);
 function setMorningSettings(v) { try { localStorage.setItem(MORNING_KEY, JSON.stringify(v)); } catch { /* private mode */ } }
 function morningCache() {
@@ -1397,8 +1414,6 @@ function nativeSong(r) {
     plays: r.plays || 0, lastPlayed: r.lastPlayed || 0, art: r.art ? `data:image/jpeg;base64,${r.art}` : "" };
 }
 function saveMorningCache(c) { try { localStorage.setItem(MORNING_CACHE, JSON.stringify(c)); } catch { /* full */ } }
-const yesterdayKey = () => dayKey(Date.now() - 864e5);
-
 let morningLoading = false;
 async function loadMorning() {
   if (morningLoading || !full()) return;
@@ -1406,36 +1421,9 @@ async function loadMorning() {
   let m = morningSettings();
   let c = morningCache(), changed = false;
   try {
-    // Weather follows the phone: once a day, if it has moved town, the place moves with it.
-    if (m.weather && m.useLocation && !c.locAt) {
-      c.locAt = Date.now(); changed = true;
-      try {
-        const loc = await withTimeout(getLocation({ ask: false }), 25000);
-        if (!m.place || daily.kmBetween(m.place, loc) > 15) {
-          const place = await withTimeout(daily.placeFromCoords(loc.lat, loc.lon, { name: loc.name || "", zip: loc.zip || "" }), 15000);
-          m = { ...morningSettings(), place, zip: "" };
-          setMorningSettings(m);
-          delete c.weather;
-        }
-      } catch (e) { if (e.message !== "notAsked") noteError(e, { quiet: true, where: "location" }); }
-    }
-    const place = placeOf(m);
     const relay = ai.relayBase();
     if (relay && (!c.relayInfo || Date.now() - c.relayInfo.at > 6 * 3600e3)) {
       try { const r = await withTimeout(fetch(`${relay}/version`), 10000); c.relayInfo = { ...(r.ok ? await r.json() : {}), at: Date.now() }; changed = true; } catch { /* older relay */ }
-    }
-    if (m.weather && place && (!c.weather || c.weatherFor !== place.name || Date.now() - c.weather.at > 30 * 60e3)) {
-      let w = null;
-      // Apple Weather when the relay has the Apple key and Services ID; the free source otherwise.
-      if (relay && c.relayInfo?.weatherkit) {
-        try {
-          const r = await withTimeout(fetch(`${relay}/apple/weather?lat=${place.lat}&lon=${place.lon}&tz=${encodeURIComponent(Intl.DateTimeFormat().resolvedOptions().timeZone || "America/New_York")}`), 15000);
-          if (r.ok) w = daily.fromWeatherKit(await r.json());
-        } catch (e) { noteError(e, { quiet: true, where: "Apple Weather" }); }
-      }
-      if (!w) { try { w = await withTimeout(daily.fetchWeather({ ...place, tide: null }), 15000); } catch (e) { noteError(e, { quiet: true, where: "weather" }); } }
-      if (w && place.tide) { try { w.tides = await withTimeout(daily.fetchTides(place.tide), 10000); } catch { /* tides are a bonus */ } }
-      if (w) { c.weather = w; c.weatherFor = place.name; changed = true; }
     }
     if (m.song && nativeCan("music") && !c.song && !c.songTried) {
       c.songTried = true; changed = true;
@@ -1452,12 +1440,6 @@ async function loadMorning() {
           changed = true;
         } else { try { localStorage.setItem("edition.songErr", d?.error?.message || `The relay said ${r.status}.`); } catch { /* full */ } }
       } catch (e) { noteError(e, { quiet: true, where: "song of the day" }); }
-    }
-    if (m.hockey && ai.relayBase() && (!c.gamesAt || (!c.games?.length && Date.now() - c.gamesAt > 2 * 3600e3))) {
-      try {
-        const res = await withTimeout(fetch(`${ai.relayBase()}/nhl?date=${yesterdayKey()}`), 15000);
-        if (res.ok) { c.games = daily.gamesFor(await res.json(), m.teams); c.gamesAt = Date.now(); changed = true; }
-      } catch (e) { noteError(e, { quiet: true, where: "hockey" }); }
     }
     if (c.quotes && c.quotes.from !== m.quoteFrom) { delete c.quotes; delete c.quotesTried; changed = true; }
     if (m.quote && m.quoteFrom && !isJung(m.quoteFrom) && ai.settings.enabled() && !c.quotes && !c.quotesTried) {
@@ -1496,7 +1478,6 @@ async function loadMorning() {
 function morningHtml() {
   const m = morningSettings(), c = morningCache();
   const cards = [];
-  const place = placeOf(m);
   // A card you can finish for the day: a button folds it to one line (or hides it, by your choice) until tomorrow.
   const folds = [], foldMode = m.doneMode === "hide" ? "hide" : "fold";
   const card = (cls, rail, meta, body, f) => {
@@ -1504,34 +1485,6 @@ function morningHtml() {
     const done = f ? `<div class="acts fold-acts"><span class="grow"></span><button class="act done" type="button" data-day="fold:${esc(f.key)}">${I.done}<span>${esc(f.btn)}</span></button></div>` : "";
     return `<article class="post daily ${cls}"${f ? ` data-fold="${esc(f.key)}"` : ""}><div class="rail">${rail}</div><div class="main"><div class="meta">${meta}</div>${body}${done}</div></article>`;
   };
-  const hm = (iso) => (iso ? new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) : "");
-  if (m.weather && !place && flag(ONBOARDED)) {
-    cards.push(`<div class="wx-mini"><span class="wx-ic-s" aria-hidden="true">${I.sun}</span><span>Weather: add your ZIP code and it shows here each morning.</span>
-      <button class="btn sm ghost" type="button" data-day="wx-setup">Add</button></div>`);
-  } else if (m.weather && c.weather && (m.wxSmall || c.wxHidden)) {
-    // Small: the picture and the temperature. Tap for the whole card.
-    const w = c.weather;
-    cards.push(`<button class="wx-small" type="button" data-day="wx-big" aria-label="Weather: ${w.now} degrees, ${esc(w.word)}. Show the full weather.">
-        <span class="wx-ico wx-${daily.weatherKind(w)}" aria-hidden="true">${WX_ICONS[daily.weatherKind(w)]}</span><span class="deg">${w.now}°</span><span class="wx-open" aria-hidden="true">${WX_MIN}</span></button>`);
-  } else if (m.weather && c.weather) {
-    const w = c.weather;
-    const yt = daily.youtubeId(m.cam);
-    const radar = place.radar ? `https://radar.weather.gov/ridge/standard/${place.radar}_0.gif?t=${Math.floor(Date.now() / 6e5)}` : "";
-    const pic = yt ? "" : m.cam || radar;
-    const fig = yt
-      ? `<figure class="wx-pic wx-live"><iframe src="https://www.youtube-nocookie.com/embed/${esc(yt)}?autoplay=1&mute=1&playsinline=1" title="Live camera" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen loading="lazy"></iframe><figcaption>Your live camera</figcaption></figure>`
-      : pic ? `<figure class="wx-pic"><img alt="${m.cam ? "Camera view" : `Weather radar around ${esc(place.name)}`}" src="${esc(pic)}" referrerpolicy="no-referrer" loading="lazy" onerror="this.closest('figure')?.remove()">
-         <figcaption>${m.cam ? "Your camera" : `Radar, ${esc(place.radar)} ${esc(place.name)} (National Weather Service)`}</figcaption></figure>` : "";
-    cards.push(card("wx", `<span class="av av-day wx-ic" aria-hidden="true">${I.sun}</span>`,
-      `<span class="who">Weather,</span> <span class="when">${esc(place.name)}${m.zip ? ` ${esc(m.zip)}` : ""}</span><button class="act icon more wx-min" type="button" data-day="wx-small" aria-label="Make the weather small">${WX_MIN}</button>${cardMore("weather", "Weather")}`,
-      `<p class="wx-now"><span class="deg">${w.now}°</span><span class="wx-word">${esc(w.word)}<small>Feels like ${w.feels}°</small></span></p>
-       <p class="wx-line">High ${w.hi}° · Low ${w.lo}°${w.rain != null ? ` · Rain ${w.rain}%` : ""} · Wind ${esc(w.windFrom)} ${w.wind} mph${w.gusts > w.wind + 5 ? `, gusts ${w.gusts}` : ""}</p>
-       ${w.nextHour ? `<p class="wx-line wx-next">${esc(w.nextHour)}</p>` : ""}
-       <p class="wx-line">Sunrise ${hm(w.sunrise)} · Sunset ${hm(w.sunset)}</p>
-       ${w.tides?.length ? `<p class="wx-line">Tides: ${w.tides.map((t) => `${t.type} ${hm(t.t.replace(" ", "T"))}`).join(" · ")}</p>` : ""}
-       ${fig}
-       ${w.source === "apple" ? `<p class="wx-attr"><a href="https://weatherkit.apple.com/legal-attribution.html" target="_blank" rel="noopener"> Weather</a></p>` : ""}`));
-  }
   if (m.song && c.song?.native) {
     const sg = c.song;
     if (!sg.looked && !findInAppleMusic.busy) { findInAppleMusic.busy = true; setTimeout(() => findInAppleMusic().finally(() => { findInAppleMusic.busy = false; }), 0); }
@@ -1547,18 +1500,6 @@ function morningHtml() {
     const t = sg.lastPlayed ? Date.parse(sg.lastPlayed) : NaN;
     cards.push(card("song", `<span class="av av-day" aria-hidden="true">${I.music}</span>`, `<span class="who">Song of the day</span>${cardMore("cards", "Daily cards")}`,
       songCard({ art: mt.artwork, title: mt.name || sg.title, artist: mt.artist || sg.artist, year: mt.year, when: Number.isFinite(t) ? t : 0, preview: mt.preview, url: mt.url, tint: sg.tint }), { key: "song", label: mt.name || sg.title, btn: "Listened" }));
-  }
-  if (m.hockey) for (const g0 of c.games || []) {
-    if (!g0.done) continue;
-    // Games saved this morning, before highlights links: make one from the teams.
-    const g = g0.highlights ? g0 : { ...g0, highlights: daily.highlightsLink(g0.home ? g0.opp : g0.name, g0.home ? g0.name : g0.opp, yesterdayKey()) };
-    const res = g.won ? "W" : "L";
-    cards.push(card(`nhl t-${esc(g.team)}`, `<span class="av av-day team" aria-hidden="true">${esc(g.team)}</span>`,
-      `<span class="who">${esc(g.name)},</span> <span class="when">last night</span><span class="tag ${g.won ? "won" : ""}">${res}${g.end ? ` · ${esc(g.end)}` : ""}</span>${cardMore("cards", "Daily cards")}`,
-      `<p class="score">${esc(g.name)} ${g.us}, ${esc(g.opp)} ${g.them}</p>
-       <p class="wx-line">${g.home ? "At home" : "Away"}${g.scorers.length ? ` · Goals: ${esc(g.scorers.join(", "))}` : ""}</p>
-       ${g.highlights ? `<a class="btn sm hl" href="${esc(g.highlights)}" target="_blank" rel="noopener">${I.play}<span>Watch highlights</span></a>` : g.recap || g.center ? `<a class="btn sm hl" href="${esc(g.recap || g.center)}" target="_blank" rel="noopener">${I.play}<span>${g.recap ? "Watch highlights" : "Game recap"}</span></a>` : ""}`,
-      { key: `nhl-${g.team}`, label: `${g.name} ${g.us}–${g.them}`, btn: "Seen it" }));
   }
   if (m.quote && isJung(m.quoteFrom)) {
     // Carl Jung: the hand-picked set, on the phone, no AI needed.
@@ -1634,7 +1575,7 @@ function morningHtml() {
   return shown.length ? sectionHead(h < 5 || h >= 17 ? "This evening" : h < 12 ? "This morning" : "This afternoon") + shown.join("") : "";
 }
 
-/* The morning cards' own buttons: shrink the weather, finish CPMAI, keep or retire a Jung quote. */
+/* The morning cards' own buttons: finish CPMAI, keep or retire a Jung quote. */
 /*
  * On/off settings are switches. They're still drawn as two buttons (On, Off or Show, Hide) so every
  * panel's own handler keeps working; this turns each such pair into one switch you tap or press Space on.
@@ -1671,11 +1612,11 @@ if (typeof document !== "undefined") {
 /** Finish a morning card for today; it folds to a line (or hides) until tomorrow. */
 function foldCard(c, key) {
   c.folded = { ...(c.folded || {}), [key]: Date.now() };
-  track(`fold_${String(key).replace(/^nhl-.*/, "nhl").replace(/[^a-z]/g, "")}`);
+  track(`fold_${String(key).replace(/[^a-z]/g, "")}`);
 }
 /*
  * Folding by itself: the song once you come back from Apple Music or the preview plays out;
- * scores and On this day once you've had them on screen and leave the app. A card you
+ * On this day once you've had it on screen and leave the app. A card you
  * opened again stays open. Settings › Daily cards turns this off.
  */
 const autoFoldOn = () => morningSettings().doneAuto !== false;
@@ -1715,16 +1656,13 @@ function cpmaiScore(now = Date.now()) {
 async function dayAction(what) {
   const [act, arg] = what.split(":");
   const c = morningCache();
-  if (act === "wx-setup") { openSettings("weather", { fromCard: true }); return; }
   if (act === "done-list") {
     state.showDone = !state.showDone;
     render({ top: false });
     if (state.showDone) $(".done-today")?.scrollIntoView({ behavior: reduced() ? "auto" : "smooth", block: "start" });
     return;
   }
-  if (act === "wx-small" || act === "wx-hide") { setMorningSettings({ ...morningSettings(), wxSmall: true }); delete c.wxHidden; }
-  else if (act === "wx-big" || act === "wx-show") { setMorningSettings({ ...morningSettings(), wxSmall: false }); delete c.wxHidden; }
-  else if (act === "cq-done" && c.cpmai) {
+  if (act === "cq-done" && c.cpmai) {
     c.cpmai.done = true; c.cpmai.right = +arg || 0;
     try { const all = JSON.parse(localStorage.getItem("edition.cpmaiScores") || "{}"); all[dayKey()] = [c.cpmai.right, c.cpmai.questions.length]; localStorage.setItem("edition.cpmaiScores", JSON.stringify(all)); } catch { /* full */ }
     tick(true);
@@ -2126,7 +2064,7 @@ async function showUsage(box) {
 
 /* ================= Welcome =================
  * A new phone starts empty. One button builds their morning for real
- * (topics, weather, calendar, AI); then a card teaches saving from other
+ * (topics, calendar, AI); then a card teaches saving from other
  * apps by doing it, and coach marks teach the rest when it first applies.
  */
 const ONBOARDED = "edition.onboarded";
@@ -2144,7 +2082,7 @@ function welcomeHtml() {
     return `<section class="ask welcome hero" aria-labelledby="wel-h">
       <div class="ask-top"><span class="av av-sb" aria-hidden="true">${LOGO}</span>
         <div><h2 id="wel-h">Welcome to Shoebox</h2>
-        <p>${full() ? "Your own feed: the things you saved come back a few at a time, with your day and weather on top. It ends when you're done." : "Your own feed: the things you save come back a few at a time, with your reason on top. It ends when you're done."}</p></div></div>
+        <p>${full() ? "Your own feed: the things you saved come back a few at a time, with your day on top. It ends when you're done." : "Your own feed: the things you save come back a few at a time, with your reason on top. It ends when you're done."}</p></div></div>
       <div class="ask-acts"><button class="btn primary" type="button" data-welcome="start">Get started</button></div>
       <button class="btn ghost sm wel-skip" type="button" data-welcome="skip">Skip</button>
     </section>`;
@@ -2195,10 +2133,12 @@ async function welcomeAction(what) {
 
 /*
  * Build my morning: five short steps in one sheet (getting things in, your day, school, optional topics, AI),
- * then Today assembles in front of them with their own weather, calendar
+ * then Today assembles in front of them with their own calendar
  * and top stories.
  */
 function openBuild(step = 1) {
+  // "Your day" is the calendar and the song: with neither on this device there's nothing to ask.
+  if (step === 2 && !nativeCan("calendar") && !nativeCan("music")) step = 3;
   state.build = state.build || { topics: new Set(followedTopics(state.suggest)), study: "" };
   const b = state.build, m = morningSettings();
   // Your own things first: how they get in. Then your day, school, optional topics, and AI.
@@ -2222,13 +2162,8 @@ function openBuild(step = 1) {
       <span class="st" id="bm-st" role="status"></span>
       <div class="sheet-foot two">${!mailOk || mine ? `<button class="btn primary" type="button" data-bm="2" style="grid-column: 1 / -1">Next</button>` : `<button class="btn" type="button" data-bm="2">Not now</button><button class="btn primary" type="button" data-bm="mail">Make my address</button>`}</div>`;
   } else if (step === 2) {
-    const place = placeOf(m);
     html = `${head("Your day")}
-      <p class="note">Your weather and today's calendar sit at the top of Today, so there's a reason to look each morning.</p>
-      <div class="bm-row"><div><b>Weather</b><span id="bm-wx">${place ? `For ${esc(place.name)}` : "Where are you?"}</span></div>
-        ${canLocate() ? `<button class="btn${place ? "" : " primary"}" type="button" data-bm="loc">${place ? "Update" : "Use my location"}</button>` : ""}</div>
-      <div class="bm-zip"><label class="sr-only" for="bm-zip">ZIP code or city</label><input id="bm-zip" type="text" autocomplete="postal-code" placeholder="Or a ZIP code" inputmode="numeric">
-        <button class="btn" type="button" data-bm="zip">Set</button></div>
+      <p class="note">Your calendar sits at the top of Today, so there's a reason to look each morning.</p>
       ${nativeCan("calendar") ? `<div class="bm-row"><div><b>Calendar</b><span id="bm-cal">${calNative() ? "On" : "Your day at a glance, with free time"}</span></div>
         ${calNative() ? "" : `<button class="btn primary" type="button" data-bm="cal">Show my calendar</button>`}</div>` : ""}
       ${nativeCan("music") ? `<div class="bm-row"><div><b>Song of the day</b><span id="bm-song">${m.song ? "On" : "One from your music you haven't played in a while"}</span></div>
@@ -2325,26 +2260,6 @@ async function buildClick(e, step, wrap) {
       const c = morningCache(); c.song = nativeSong(r); c.songTried = true; saveMorningCache(c);
       $("#bm-song", wrap).textContent = `On. Today: ${r.title}`; btn.remove(); say("");
     } else { btn.disabled = false; say(r.status === "denied" ? "Music access is off. Turn it on in the iPhone's Settings › Shoebox." : "No songs with plays in your Music library yet.", true); }
-  } else if (what === "loc") {
-    btn.disabled = true; say("Finding where you are…");
-    try { const p = await useMyLocation(); $("#bm-wx", wrap).textContent = `For ${p.name}`; btn.textContent = "Update"; btn.classList.remove("primary"); say(""); }
-    catch (err) { say(err.message, true); }
-    btn.disabled = false;
-  } else if (what === "zip") {
-    const q = $("#bm-zip", wrap).value.trim();
-    if (!q) { say("Type a ZIP code or a city.", true); return; }
-    btn.disabled = true; say("Finding that place…");
-    try {
-      const place = await withTimeout(daily.lookupPlace(q), 15000);
-      if (!place) say("Couldn't find that place. Try a 5-digit ZIP code.", true);
-      else {
-        setMorningSettings({ ...morningSettings(), zip: place.zip || "", place, weather: true, useLocation: false });
-        const c = morningCache(); delete c.weather; saveMorningCache(c);
-        loadMorning();
-        $("#bm-wx", wrap).textContent = `For ${place.name}`; say("");
-      }
-    } catch (err) { noteError(err, { quiet: true, where: "place lookup" }); say("Couldn't look that up right now.", true); }
-    btn.disabled = false;
   } else if (what === "cal") {
     btn.disabled = true; say("Asking for your calendars…");
     const r = await turnOnNativeCalendar();
@@ -2570,7 +2485,7 @@ const START_DAY = "edition.onboardedDay", TIP_LOG = "edition.dayTips";
 const dayTips = () => ({
   song: { h: "A song you forgot you loved", p: "Turn on Song of the day and each morning brings one from your music you haven't played in a while.", go: "Turn it on", act: () => openSettings("cards") },
   email: { h: "Your own Shoebox email address", p: "Sign up for newsletters with it and they come straight here. Anything else, forward to it.", go: "Set it up", act: () => openSettings("email") },
-  more: { h: "Change a card where you see it", p: "Tap ••• on the weather or calendar card to change just that card, without hunting through Settings.", go: "Try it on weather", act: () => openSettings("weather", { fromCard: true }) },
+  more: { h: "Change a card where you see it", p: "Tap ••• on a morning card to change just that card, without hunting through Settings.", go: "Open Daily cards", act: () => openSettings("cards", { fromCard: true }) },
   newsletters: { h: "School email becomes short posts", p: "Forward school email and newsletters. Shoebox pulls out each thing to do, decide or know, with the dates.", go: "Set it up", act: () => openSettings("newsletters") },
   later: { h: "Pick when things come back", p: "Set something aside until a day you choose. It waits under Coming back, then tops Today that morning, with a reminder if you like.", go: "Pick a reminder time", act: () => openSettings("reminders") },
   find: { h: "Find anything you saved", p: "All saves has Loved, Coming back and Finished, and search looks through everything, even your notes on a save. Untouched saves fade after a few weeks, so the list stays light.", go: "Open All saves", act: () => selectTab("all") },
@@ -2622,7 +2537,6 @@ const features = () => [
     ["School email and newsletters", "Each thing to do, decide or know becomes its own short post.", "newsletters"],
   ]],
   ["Your morning", [
-    ["Weather", "Tap the small weather line to open the full card. ••• changes the place.", ""],
     ["Day bar", "Your day at a glance with free time. Tap it for each event and Join.", "daybar"],
     ["Top stories", "Picked each morning from the topics you follow. Say why you let one go and the picks change.", "stories"],
     ["Study deck", "Three practice questions a day on whatever you're studying.", "study"],
@@ -3057,7 +2971,7 @@ function stripHtml(s) {
  */
 const DAY_LINE = "edition.dayLine";
 function dayFacts() {
-  const c = morningCache(), w = c.weather, sc = schoolSettings(), kids = childNames(sc);
+  const sc = schoolSettings(), kids = childNames(sc);
   const now = Date.now(), facts = [`Today is ${new Date().toLocaleDateString("en-US", { weekday: "long" })}.`];
   const weekday = (d) => { const t = fromDateInput(d); return t ? new Date(t).toLocaleDateString("en-US", { weekday: "long" }) : ""; };
   const school = state.items.filter((i) => i.school && isOpen(i) && schoolToday([i]).length)
@@ -3066,13 +2980,11 @@ function dayFacts() {
   const cal = calCache(), hidden = new Set(calHidden());
   const evs = (cal?.events || []).filter((e) => !e.allDay && !hidden.has(calName(e.calendar, "Calendar")) && (e.end || e.start) > now).sort((a, b) => a.start - b.start);
   if (evs.length) facts.push(`Calendar: ${evs.length} more event${evs.length === 1 ? "" : "s"} today, the next at ${shortClock(evs[0].start)}.`);
-  if (w) facts.push(`Weather${c.weatherFor ? ` in ${c.weatherFor}` : ""}: ${w.now}° now, ${String(w.word || "").toLowerCase()}, high ${w.hi}°${w.rain != null ? `, ${w.rain}% chance of rain` : ""}.${w.nextHour ? ` ${w.nextHour}.` : ""}`);
-  const key = `${dayKey()}|${school.map((i) => i.id).join(",")}|${evs.length}|${w ? 1 : 0}`;
-  return { facts, key, school, kids, w, evs };
+  const key = `${dayKey()}|${school.map((i) => i.id).join(",")}|${evs.length}`;
+  return { facts, key, school, kids, evs };
 }
-function dayLineLocal({ school, kids, w }) {
+function dayLineLocal({ school, kids }) {
   const parts = school.slice(0, 2).map((i, k) => { const t = ai.nameIn(ai.maskNames(i.title, kids, ai.CHILD_TOKEN), kids[0] || ""); return k && /^[A-Z][a-z]/.test(t) && !kids.some((n) => t.startsWith(n)) ? t.charAt(0).toLowerCase() + t.slice(1) : t; });
-  if (w) parts.push(`it's ${w.now}° and ${String(w.word || "").toLowerCase()}${w.hi != null ? `, up to ${w.hi}°` : ""}`);
   if (!parts.length) return "";
   const line = parts.length > 1 ? `${parts.slice(0, -1).join(", ")}, and ${parts[parts.length - 1]}.` : `${parts[0]}.`;
   return line.charAt(0).toUpperCase() + line.slice(1);
@@ -3270,7 +3182,7 @@ function postHtml(item, { compact = false } = {}) {
     + (item.school.fromFile ? `<p class="ev-place">${I.attach}<span>From the attached ${esc(item.school.fromFile)}</span></p>` : "");
   else if (item.kind === KIND.NOTE) say = `<p class="say">${esc(item.text || item.title)}</p>`;
   else if (item.why) say = `<p class="say">${esc(item.why)}</p>`;
-  else if (!full() && !words && !compact && open) say = `<form class="why-ask" data-why-for="${esc(item.id)}"><label class="sr-only" for="why-${esc(item.id)}">Why did you keep this?</label><input id="why-${esc(item.id)}" type="text" maxlength="140" autocomplete="off" placeholder="Why did you keep this?"></form>`;
+  else if (!full() && !words && !compact && open) say = `<form class="why-ask" data-why-for="${esc(item.id)}"><label class="sr-only" for="why-${esc(item.id)}">Why did you keep this?</label><input id="why-${esc(item.id)}" type="text" maxlength="140" autocomplete="off" placeholder="Why did you keep this?" value="${esc(whyDrafts.get(item.id) || "")}"></form>`;
   else if (full() && item.hook && !words) say = `<p class="guess"><span class="sr-only">${APP}'s guess: </span>${esc(item.hook)}</p>`;
   const why = item.why && item.kind === KIND.NOTE ? `<p class="why-line"><span>Why you kept it</span>${esc(item.why)}</p>` : "";
   const quote = item.kind === KIND.QUOTE ? `<figure class="quote ${String(item.text || "").length > 160 ? "long" : ""}"><blockquote>“${esc(item.text || item.title)}”</blockquote>${item.author ? `<figcaption>${esc(item.author)}</figcaption>` : ""}</figure>${item.why ? `<p class="why-line"><span>Why you kept it</span>${esc(item.why)}</p>` : ""}` : "";
@@ -3496,12 +3408,16 @@ function bindTimeline(tl) {
     const id = form.dataset.whyFor, input = form.querySelector("input"), why = input?.value.trim().slice(0, 140) || "";
     const item = byId(id);
     if (!item || !why || item.why === why) return;
+    whyDrafts.delete(id);
     await saveItem({ ...item, why });
     track("why_on_card");
+    if (whyFocus === id) whyFocus = null;
     refreshPost(id);
   };
   tl.addEventListener("submit", (e) => { const f = e.target.closest(".why-ask"); if (f) { e.preventDefault(); saveWhy(f); } });
-  tl.addEventListener("focusout", (e) => { const f = e.target.closest?.(".why-ask"); if (f) saveWhy(f); });
+  tl.addEventListener("focusout", (e) => { const f = e.target.closest?.(".why-ask"); if (!f || !f.isConnected) return; if (whyFocus === f.dataset.whyFor) whyFocus = null; saveWhy(f); });
+  tl.addEventListener("focusin", (e) => { const f = e.target.closest?.(".why-ask"); if (f) whyFocus = f.dataset.whyFor; });
+  tl.addEventListener("input", (e) => { const f = e.target.closest?.(".why-ask"); if (f) whyDrafts.set(f.dataset.whyFor, e.target.value); });
   $("#ask-in", tl)?.addEventListener("input", (e) => { state.schoolDraft = e.target.value; });
   if (q) q.addEventListener("input", () => {
     state.allQuery = q.value; state.allShown = PAGE;
@@ -4408,7 +4324,7 @@ function dropReminder(item) {
  * announces itself as window.shoeboxNative; messages go to it here.
  */
 const NATIVE = typeof window !== "undefined" && Boolean(window.shoeboxNative);
-/** What this copy of the iPhone app can do (older builds can't answer calendar or location questions). */
+/** What this copy of the iPhone app can do (older builds can't answer calendar questions). */
 const nativeCan = (f) => NATIVE && (window.shoeboxNative.features || []).includes(f);
 const nativeWaits = new Map();
 /** Ask the iPhone app something and wait for its answer. */
@@ -4425,22 +4341,6 @@ if (NATIVE) window.shoeboxReply = (id, r) => { const f = nativeWaits.get(id); if
 // The iPhone app proves itself to the relay (App Attest) so it can use Shoebox's AI; a web page can't.
 if (nativeCan("attest")) ai.setAttester((challenge) => nativeAsk("attest", { challenge }, 30000));
 
-/** Roughly where the phone is: the iPhone app's own location, or the browser's. Asks only when told to. */
-async function getLocation({ ask = false } = {}) {
-  if (nativeCan("location")) {
-    const r = await nativeAsk("location", { ask }, ask ? 90000 : 20000);
-    if (!r.ok) throw new Error(r.status === "denied" ? "Location is off for Shoebox. Turn it on in the iPhone's Settings › Shoebox." : r.status === "notAsked" ? "notAsked" : "Couldn't find where you are right now.");
-    return r;
-  }
-  if (!navigator.geolocation) throw new Error("This browser can't share a location.");
-  if (!ask) {
-    const st = await navigator.permissions?.query({ name: "geolocation" }).catch(() => null);
-    if (!st || st.state !== "granted") throw new Error("notAsked");
-  }
-  const pos = await new Promise((res, rej) => navigator.geolocation.getCurrentPosition(res, rej, { maximumAge: 3600e3, timeout: 30000, enableHighAccuracy: false }))
-    .catch((e) => { throw new Error(e && e.code === 1 ? "Location is off for Shoebox in this browser." : "Couldn't find where you are right now."); });
-  return { lat: pos.coords.latitude, lon: pos.coords.longitude };
-}
 function toNative(msg) {
   try { window.webkit?.messageHandlers?.shoebox?.postMessage(msg); } catch { /* not in the app */ }
 }
@@ -4998,13 +4898,13 @@ function bindPushSettings(wrap) {
 }
 
 /*
- * Settings: one list with each thing's current value ("Weather — Wilmington ›"),
+ * Settings: one list with each thing's current value ("Calendar — On ›"),
  * and a page for each. Every card on Today opens its own page from its •••
  * button too, so the usual changes happen where you see them.
  */
 const SETTINGS_ORDER = [
   ["", ["you"]],
-  ["Your Today", ["calendar", "weather", "study", "cards", "newsletters"]],
+  ["Your Today", ["calendar", "study", "cards", "newsletters"]],
   ["Saving and reminders", ["email", "reminders", "ai"]],
   ["Your data", ["backup", "learned", "privacy"]],
   ["", ["features", "help", "usage"]],
@@ -5024,7 +4924,7 @@ function openSettings(panel = "", { fromCard = false } = {}) {
   const mailOn = (() => { try { return Boolean(localStorage.getItem("edition.inboxAddress")); } catch { return false; } })();
   const mailPick = (() => { try { return localStorage.getItem("edition.inboxPick") || ""; } catch { return ""; } })();
   const calShown = [...new Set((calCache()?.events || []).map((e) => calName(e.calendar, "Calendar")))].filter((n) => !calHidden().includes(n));
-  const cardsOn = ["otd", "quote", ...(me ? ["song", "hockey"] : nativeCan("music") ? ["song"] : [])].filter((k) => m[k]).length;
+  const cardsOn = ["otd", "quote", ...(me || nativeCan("music") ? ["song"] : [])].filter((k) => m[k]).length;
   const P = {
     you: { title: "You", value: { system: "Phone look", light: "Light", dark: "Dark" }[themeChoice()], body: `
       <div class="group">
@@ -5062,19 +4962,6 @@ function openSettings(panel = "", { fromCard = false } = {}) {
       })()}
       <span class="st" id="set-cal-st" role="status"></span>
       </div>` },
-    weather: { title: "Weather", value: m.weather ? placeOf(m)?.name || "Add a place" : "Off", body: `
-      <div class="group">
-      ${onOff("weather", "Show weather", m.weather)}
-      ${canLocate() ? `<div class="row"><span class="rk">Where</span><button class="btn sm" type="button" id="set-mo-loc">${m.useLocation ? `Following you: ${esc(placeOf(m)?.name || "…")}` : "Use my location"}</button></div>` : ""}
-      <div class="field"><label for="set-mo-zip">${canLocate() ? "Or a ZIP code or town" : "ZIP code or town"}</label>
-        <input id="set-mo-zip" type="text" autocomplete="postal-code" value="${esc(m.useLocation ? "" : m.zip || placeOf(m)?.name || "")}" placeholder="e.g. 10001"></div>
-      <div class="field"><label for="set-mo-cam">Camera <span class="hint">(optional)</span></label>
-        <input id="set-mo-cam" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="A webcam picture or a YouTube live link" value="${esc(m.cam)}"></div>
-      ${placeOf(m) && ai.settings.enabled() ? `<button class="btn" type="button" id="set-cam-find">Find live cameras near ${esc(placeOf(m).name)}</button><div class="cam-picks" id="set-cam-picks"></div><span class="st" id="set-cam-st" role="status"></span>` : ""}
-      <p class="note">Blank shows the weather radar. ${placeOf(m) && ai.settings.enabled() ? "Or paste" : "Paste"} a webcam's picture address (often ending in .jpg) or a YouTube live link.</p>
-      <button class="btn primary" type="button" id="set-mo-save">Save</button>
-      <span class="st" id="set-mo-st" role="status"></span>
-      </div>` },
     study: { title: "Study deck", value: m.study && m.studyTopic ? studyLabel(m) : "Off", body: `
       <div class="group">
       ${onOff("study", "Daily questions", m.study)}
@@ -5098,10 +4985,7 @@ function openSettings(panel = "", { fromCard = false } = {}) {
         <div class="mail-pick"><input id="set-q-from" type="text" autocomplete="off" maxlength="50" placeholder="Seneca, stoicism, faith…" value="${esc(m.quoteFrom || "")}"><button class="btn sm" type="button" id="set-q-save">Use</button></div>
         <div class="chips wrap q-picks">${["Stoicism", "Motivation", "Faith", "Leadership", "Poetry", "Carl Jung"].map((t) => `<button class="chip" type="button" data-q-pick="${t}" aria-pressed="${(m.quoteFrom || "").toLowerCase() === t.toLowerCase()}">${t}</button>`).join("")}</div>
         <p class="note">Every quote comes with where it's from, checked against a real source. Carl Jung works without AI; anything else needs AI on.</p></div>
-      ${me ? onOff("hockey", "Last night's games", m.hockey) : ""}
-      ${me ? `<div class="field"><label for="set-mo-teams">Teams</label><input id="set-mo-teams" type="text" autocomplete="off" autocapitalize="characters" value="${esc(m.teams.join(", "))}"></div>
-      <button class="btn" type="button" id="set-mo-teams-save">Save teams</button>
-      ${nativeCan("music") ? "" : `<h3 class="sub">Song of the day: your Shortcut</h3>
+      ${me ? `${nativeCan("music") ? "" : `<h3 class="sub">Song of the day: your Shortcut</h3>
       ${(() => {
         const got = (k) => { try { return localStorage.getItem(k) || ""; } catch { return ""; } };
         const key = got("edition.songKey"), err = got("edition.songErr"), last = +got("edition.songLast");
@@ -5243,7 +5127,7 @@ function openSettings(panel = "", { fromCard = false } = {}) {
       <button class="btn" type="button" id="set-rebuild">Rebuild today</button>
       <span class="st" id="set-ed-st" role="status"></span>
       </div>
-      ${me ? "" : `<div class="group">
+      ${me || NATIVE ? "" : `<div class="group">
       <div class="row"><span class="rk">Show everything</span>
         <div class="seg" role="group" aria-label="Show everything"><button type="button" data-full="1" aria-pressed="${full()}">On</button><button type="button" data-full="0" aria-pressed="${!full()}">Off</button></div></div>
       <p class="note">Off is Shoebox: your saves, a few a day. On adds the morning cards, calendar, school posts, top stories, love and replies, for trying them side by side.</p>
@@ -5254,7 +5138,6 @@ function openSettings(panel = "", { fromCard = false } = {}) {
   let html;
   if (panel && P[panel]) {
     html = `<div class="sheet-head set-head">${fromCard ? "" : `<button class="x" type="button" data-set-back aria-label="All settings">${I.back}</button>`}<h2>${esc(P[panel].title)}</h2>${close}</div>
-      ${fromCard && panel === "weather" && morningCache().weather ? `<button class="btn" type="button" id="set-wx-hide">${m.wxSmall ? "Show the full weather card" : "Make the weather card small"}</button>` : ""}
       ${P[panel].body}
       ${fromCard ? `<button class="btn ghost sm set-all" type="button" data-set-back>All settings</button>` : ""}`;
   } else {
@@ -5266,7 +5149,6 @@ function openSettings(panel = "", { fromCard = false } = {}) {
   const wrap = sheet(html, { label: panel && P[panel] ? P[panel].title : "Settings" });
   wrap.querySelectorAll("[data-set]").forEach((b) => b.addEventListener("click", () => openSettings(b.dataset.set)));
   wrap.querySelectorAll("[data-set-back]").forEach((b) => b.addEventListener("click", () => openSettings()));
-  $("#set-wx-hide", wrap)?.addEventListener("click", () => { closeSheet(); dayAction(m.wxSmall ? "wx-big" : "wx-small"); });
   wrap.querySelectorAll("[data-full]").forEach((b) => b.addEventListener("click", () => {
     setFull(b.dataset.full === "1");
     track(full() ? "full_on" : "full_off");
@@ -5334,53 +5216,6 @@ function openSettings(panel = "", { fromCard = false } = {}) {
   $("#set-q-save", wrap)?.addEventListener("click", () => useQuoteFrom($("#set-q-from", wrap).value));
   $("#set-q-from", wrap)?.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); useQuoteFrom(e.target.value); } });
   wrap.querySelectorAll("[data-q-pick]").forEach((b) => b.addEventListener("click", () => useQuoteFrom(b.dataset.qPick)));
-  $("#set-cam-find", wrap)?.addEventListener("click", async (e) => {
-    const st2 = $("#set-cam-st", wrap), box = $("#set-cam-picks", wrap), place = placeOf(morningSettings()), label = e.target.textContent;
-    const waitBox = (html, err = false) => { box.innerHTML = `<div class="cam-wait${err ? " err" : ""}" role="status">${err ? "" : '<span class="spin" aria-hidden="true"></span>'}<span>${html}</span></div>`; box.scrollIntoView({ block: "nearest", behavior: reduced() ? "auto" : "smooth" }); };
-    e.target.disabled = true; e.target.textContent = "Looking…"; say(st2, "");
-    waitBox(`Looking for live cameras near ${esc(place.name)}. The first look for a town can take a minute.`);
-    const done = () => { e.target.disabled = false; e.target.textContent = label; };
-    try {
-      const cams = await ai.findCams(place.name);
-      track("cams_found");
-      done();
-      if (!cams.length) { waitBox(`Couldn't find a live camera near ${esc(place.name)} that works. Keep the radar, or paste one you know.`, true); return; }
-      box.innerHTML = cams.map((c, k) => `<button type="button" class="cam-pick" data-cam="${k}"><img alt="" src="${esc(c.thumb)}" referrerpolicy="no-referrer" onerror="this.closest('.cam-pick').remove()">
-        <span><b>${esc(c.title)}</b>${c.where ? `<i>${esc(c.where)}</i>` : ""}<em>${c.kind === "youtube" ? "Live video" : "Webcam picture"}</em></span></button>`).join("")
-        + `<button type="button" class="cam-pick radar" data-cam="radar"><span><b>Weather radar</b><em>No camera</em></span></button>`;
-      box.querySelectorAll("[data-cam]").forEach((b) => b.addEventListener("click", () => {
-        const c = b.dataset.cam === "radar" ? null : cams[+b.dataset.cam];
-        setMorningSettings({ ...morningSettings(), cam: c ? c.url : "" });
-        $("#set-mo-cam", wrap).value = c ? c.url : "";
-        box.querySelectorAll("[data-cam]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
-        affirm(st2, c ? `Your weather card now shows ${c.title}.` : "Your weather card shows the radar.");
-        render({ top: false });
-      }));
-    } catch (err) { done(); waitBox(esc(err.message || "Couldn't look right now. Try again in a bit."), true); }
-  });
-  $("#set-mo-save", wrap)?.addEventListener("click", async () => {
-    const st2 = $("#set-mo-st", wrap);
-    const q = $("#set-mo-zip", wrap).value.trim();
-    const cam = $("#set-mo-cam", wrap).value.trim();
-    const cur = morningSettings();
-    let next = { ...cur, cam: /^https:\/\//.test(cam) ? cam : "" };
-    if (cam && !next.cam) { say(st2, "The camera address needs to start with https://.", true); return; }
-    if (q && q !== cur.zip && q !== placeOf(cur)?.name) {
-      say(st2, "Finding that place…");
-      try {
-        const place = await withTimeout(daily.lookupPlace(q), 15000);
-        if (!place) { say(st2, "Couldn't find that place. Try a 5-digit ZIP code.", true); return; }
-        next = { ...next, zip: place.zip || "", place, weather: true };
-        const c = morningCache(); delete c.weather; saveMorningCache(c);
-      } catch (e) { noteError(e, { quiet: true, where: "place lookup" }); say(st2, "Couldn't look that up right now. Try again shortly.", true); return; }
-      next.useLocation = false;
-    } else if (!q && !cur.useLocation) next = { ...next, zip: "", place: null };
-    setMorningSettings(next);
-    say(st2, placeOf(next) ? `Saved: weather for ${placeOf(next).name}.` : "Saved.");
-    const sv = $("#set-morning .sv", wrap); if (sv) sv.textContent = next.weather ? placeOf(next)?.name || "Add a place" : "Off";
-    render({ top: false });
-    loadMorning();
-  });
   $("#set-study-save", wrap)?.addEventListener("click", () => {
     const topic = $("#set-study-topic", wrap).value.trim().slice(0, 80);
     setMorningSettings({ ...morningSettings(), studyTopic: topic, study: Boolean(topic) });
@@ -5388,13 +5223,6 @@ function openSettings(panel = "", { fromCard = false } = {}) {
     say($("#set-study-st", wrap), topic ? (ai.settings.enabled() ? `Saved. Questions on ${topic} come each morning.` : "Saved. Turn on AI for the questions.") : "Study deck off.");
     const sv = $("#set-study .sv", wrap); if (sv) sv.textContent = topic ? topic.slice(0, 40) : "Off";
     render({ top: false });
-    loadMorning();
-  });
-  $("#set-mo-teams-save", wrap)?.addEventListener("click", () => {
-    const teams = $("#set-mo-teams", wrap).value.toUpperCase().split(/[\s,]+/).filter((t) => /^[A-Z]{3}$/.test(t)).slice(0, 4);
-    setMorningSettings({ ...morningSettings(), teams: teams.length ? teams : MORNING_ME.teams });
-    const c = morningCache(); delete c.gamesAt; delete c.games; saveMorningCache(c);
-    say($("#set-more-st", wrap), "Teams saved.");
     loadMorning();
   });
   $("#set-song-copy", wrap)?.addEventListener("click", async () => {
@@ -5466,17 +5294,6 @@ function openSettings(panel = "", { fromCard = false } = {}) {
     $("#set-samples-clear", wrap).disabled = true;
     say($("#set-sm-st", wrap), `Removed ${n} sample items.`);
     render();
-  });
-  $("#set-mo-loc", wrap)?.addEventListener("click", async (ev) => {
-    const btn = ev.currentTarget, st2 = $("#set-mo-st", wrap);
-    say(st2, "Finding where you are…");
-    try {
-      const place = await useMyLocation();
-      btn.textContent = `Following you: ${place.name}`;
-      $("#set-mo-zip", wrap).value = "";
-      say(st2, `Weather for ${place.name}. It follows you when you travel.`);
-      const sv = $("#set-morning .sv", wrap); if (sv) sv.textContent = place.name;
-    } catch (e) { say(st2, e.message, true); }
   });
   wrap.querySelectorAll("[data-calshow]").forEach((b) => b.addEventListener("click", () => {
     const i = b.dataset.calshow.lastIndexOf(":"), name = b.dataset.calshow.slice(0, i), show = b.dataset.calshow.slice(i + 1) === "1";

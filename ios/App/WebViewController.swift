@@ -3,7 +3,6 @@ import WebKit
 import UserNotifications
 import WidgetKit
 import EventKit
-import CoreLocation
 import MediaPlayer
 import DeviceCheck
 import CryptoKit
@@ -15,7 +14,6 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
     private var ready = false          // Shoebox has started and can take things in
     private var queued: [String] = []  // scripts waiting for that
     private let events = EKEventStore()
-    private var locator: Locator?
 
     override func loadView() {
         let config = WKWebViewConfiguration()
@@ -27,7 +25,7 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
         config.limitsNavigationsToAppBoundDomains = true
         let content = WKUserContentController()
         content.add(WeakHandler(self), name: "shoebox")
-        content.addUserScript(WKUserScript(source: "window.shoeboxNative = { version: 2, platform: 'ios', features: ['calendar', 'location', 'backup', 'restore', 'music', 'attest'] };",
+        content.addUserScript(WKUserScript(source: "window.shoeboxNative = { version: 2, platform: 'ios', features: ['calendar', 'backup', 'restore', 'music', 'attest'] };",
                                            injectionTime: .atDocumentStart, forMainFrameOnly: true))
         content.addUserScript(WKUserScript(source: Self.textScript(), injectionTime: .atDocumentStart, forMainFrameOnly: true))
         config.userContentController = content
@@ -140,8 +138,6 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
             }
         case "calendar":
             calendar(body)
-        case "location":
-            location(body)
         case "backup":
             backup(body)
         case "restore":
@@ -157,7 +153,7 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
         }
     }
 
-    /// The answer to a question Shoebox asked (calendar, location), by its id.
+    /// The answer to a question Shoebox asked (calendar, music, backup), by its id.
     private func reply(_ id: String, _ payload: [String: Any]) {
         guard id.range(of: "^[A-Za-z0-9_-]{1,40}$", options: .regularExpression) != nil,
               let data = try? JSONSerialization.data(withJSONObject: payload),
@@ -308,26 +304,6 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
                 if status == .authorized { go() } else { self.reply(id, ["ok": false, "status": "denied"]) }
             }
         default: reply(id, ["ok": false, "status": "denied"])
-        }
-    }
-
-    /// Where the phone is, roughly, for the morning weather. Asks only when Shoebox says to.
-    private func location(_ body: [String: Any]) {
-        guard let id = body["id"] as? String else { return }
-        let ask = body["ask"] as? Bool ?? false
-        let finder = Locator()
-        locator = finder
-        finder.find(ask: ask) { [weak self] place, status in
-            self?.locator = nil
-            guard let place else { self?.reply(id, ["ok": false, "status": status]); return }
-            CLGeocoder().reverseGeocodeLocation(place) { marks, _ in
-                var out: [String: Any] = ["ok": true, "lat": place.coordinate.latitude, "lon": place.coordinate.longitude]
-                if let m = marks?.first {
-                    if let city = m.locality { out["name"] = city }
-                    if let zip = m.postalCode { out["zip"] = zip }
-                }
-                self?.reply(id, out)
-            }
         }
     }
 
@@ -498,37 +474,6 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         ready = false
         webView.reload()
-    }
-}
-
-/// One rough location fix (to the kilometre), then done.
-final class Locator: NSObject, CLLocationManagerDelegate {
-    private let manager = CLLocationManager()
-    private var done: ((CLLocation?, String) -> Void)?
-    private var ask = false
-
-    func find(ask: Bool, done: @escaping (CLLocation?, String) -> Void) {
-        self.done = done
-        self.ask = ask
-        manager.desiredAccuracy = kCLLocationAccuracyKilometer
-        manager.delegate = self // answers with the current permission straight away
-    }
-
-    func locationManagerDidChangeAuthorization(_ m: CLLocationManager) {
-        switch m.authorizationStatus {
-        case .authorizedWhenInUse, .authorizedAlways: m.requestLocation()
-        case .notDetermined: if ask { ask = false; m.requestWhenInUseAuthorization() } else { finish(nil, "notAsked") }
-        default: finish(nil, "denied")
-        }
-    }
-
-    func locationManager(_ m: CLLocationManager, didUpdateLocations list: [CLLocation]) { finish(list.last, "ok") }
-    func locationManager(_ m: CLLocationManager, didFailWithError error: Error) { finish(nil, "failed") }
-
-    private func finish(_ place: CLLocation?, _ status: String) {
-        guard let d = done else { return }
-        done = nil
-        d(place, status)
     }
 }
 

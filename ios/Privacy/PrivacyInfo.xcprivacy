@@ -5,8 +5,8 @@
   Collected (off the phone and kept): anonymous daily usage counts and kinds
   of problem, not linked to the person, for analytics.
   Not collected: saves, notes and photos sent to AI (processed in real time,
-  not kept), location (used in real time for weather), calendar (read on the
-  phone only).
+  not kept), calendar (read on the phone only). Shoebox does not ask for
+  location.
 -->
 <plist version="1.0">
 <dict>

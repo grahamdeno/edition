@@ -794,26 +794,11 @@ details.group[open] { padding-bottom: 14px; }
 /* A sheet's parts keep their size; when they don't fit, the sheet scrolls (iOS would otherwise squeeze them). */
 
 /* The Save bar runs edge to edge (it's meant to be wider than the sheet's padding) and sits above the home bar. */
-/* This morning: weather, games, Jung, On this day, CPMAI */
+/* This morning: Jung, On this day, CPMAI, the song */
 .post.daily { padding-bottom: 16px; }
 .av-day { display: grid; place-items: center; background: var(--sig-soft); color: var(--sig-ink); font: 600 0.9rem var(--sans); box-shadow: none; }
 .av-day .i { width: 58%; height: 58%; }
-.wx-ic { background: var(--gold); color: var(--on-gold); }
-.wx-now { display: flex; align-items: center; gap: 12px; margin: 4px 0 2px; }
-.wx-now .deg { font: 400 3rem/1 var(--serif); color: var(--fg); }
-.wx-word { display: flex; flex-direction: column; font-weight: 600; }
-.wx-word small { font-weight: 400; color: var(--muted); font-size: 0.875rem; }
 .wx-line { margin: 4px 0 0; color: var(--muted); font-size: 0.875rem; }
-.wx-pic { margin: 12px 0 0; }
-.wx-pic img { width: 100%; border-radius: 14px; display: block; background: var(--soft); aspect-ratio: 6 / 5; object-fit: cover; }
-.wx-pic figcaption { margin-top: 6px; font-size: 0.75rem; color: var(--faint); }
-.team { color: #fff; font-size: 0.8rem; letter-spacing: 0.02em; }
-.t-CAR .team { background: #CE1126; }
-.t-WSH .team { background: #041E42; }
-.score { margin: 2px 0 0; font: 400 1.6rem/1.15 var(--serif); }
-.tag.won { background: #1F6F5C; color: #fff; }
-.hl { margin-top: 10px; display: inline-flex; align-items: center; gap: 6px; text-decoration: none; }
-.hl .i { width: 16px; height: 16px; }
 .jung-q { margin: 4px 0 0; font: 400 1.35rem/1.3 var(--serif); color: var(--fg); }
 .otd-card { display: flex; gap: 12px; align-items: center; width: 100%; margin-top: 6px; padding: 10px; border-radius: 14px; border: 1px solid var(--line-2); background: var(--panel); text-align: left; }
 .otd-pic { flex: none; width: 64px; height: 64px; border-radius: 10px; overflow: hidden; background: var(--soft); }
@@ -834,7 +819,6 @@ details.group[open] { padding-bottom: 14px; }
 .cq-why { margin: 8px 0 0; font-size: 0.9rem; color: var(--muted); }
 .cq-why b { color: var(--fg); }
 
-/* Song of the day, Apple Weather */
 /* Song of the day: the cover large with the preview on it, tinted from the cover. */
 .disc { --tint: var(--sig); margin-top: 8px; padding: 14px; border-radius: 22px;
   background: linear-gradient(160deg, color-mix(in srgb, var(--tint) 30%, var(--bg)) 0%, color-mix(in srgb, var(--tint) 10%, var(--bg)) 100%);
@@ -867,12 +851,9 @@ details.group[open] { padding-bottom: 14px; }
 .disc-next .i { width: 20px; height: 20px; }
 .disc .song-tally { margin-top: 10px; }
 @media (prefers-reduced-motion: reduce) { .disc-play .ring .fill { transition: none; } }
-.wx-next { color: var(--fg); font-weight: 500; }
-.wx-attr { margin: 6px 0 0; font-size: 0.75rem; }
-.wx-attr a { color: var(--faint); text-decoration: none; }
 .post.daily .rail { align-self: start; }
 
-/* Morning cards: shrunk weather, finished quiz, Jung buttons, live event */
+/* Morning cards: one-line notes, finished quiz, Jung buttons, live event */
 .wx-mini { display: flex; align-items: center; gap: 10px; margin: 0 var(--gutter-r) 0 var(--gutter-l); padding: 10px 0; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 0.9rem; }
 .wx-mini > span:nth-child(2) { flex: 1; min-width: 0; }
 .wx-ic-s { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; background: var(--sig-soft); color: var(--sig-ink); font-weight: 600; font-size: 0.75rem; flex: none; }
@@ -886,7 +867,6 @@ details.group[open] { padding-bottom: 14px; }
 .help-links .row { min-height: 52px; text-decoration: none; color: inherit; font-weight: 600; }
 .help-links .row + .row { border-top: 1px solid var(--line); }
 .help-links .sv { margin-left: auto; font-weight: 500; color: var(--muted); font-size: 0.875rem; }
-.wx-live iframe { display: block; width: 100%; aspect-ratio: 16 / 9; border: 0; border-radius: 12px; background: #000; }
 /* Welcome steps */
 .welcome .wel-steps { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
 .welcome .wel-steps li { display: flex; gap: 12px; align-items: flex-start; }
@@ -975,18 +955,6 @@ table.usage th { color: var(--muted); font-weight: 600; }
 .set-all { align-self: center; }
 .help-links .row .i { width: 16px; height: 16px; color: var(--faint); margin-left: auto; }
 .ask-top .more { margin: -6px -6px 0 auto; flex: none; color: var(--faint); }
-/* Weather, small: the picture and the temperature */
-.wx-small { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 12px; cursor: pointer; margin: 6px var(--gutter-r) 6px var(--gutter-l); padding: 8px 14px 8px 8px; min-height: 56px; border-radius: 999px; background: var(--panel); border: 1px solid var(--line-2); width: max-content; }
-.wx-small:focus-visible { outline: 2px solid var(--sig); outline-offset: 2px; }
-.wx-small .deg { font: 400 2rem/1 var(--serif); color: var(--fg); }
-.wx-ico { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; background: #F6CF4E; color: #22123B; }
-.wx-ico svg { width: 24px; height: 24px; }
-.wx-moon, .wx-cloud, .wx-fog { background: #DCD6E8; }
-.wx-rain, .wx-storm { background: #BFD7F2; }
-.wx-snow { background: #E8F0FA; }
-.wx-wind { background: #D5EEE6; }
-.meta .wx-min { margin-left: auto; }
-.meta .wx-min + .more { margin-left: 0; }
 /* All saves: what you'd reach for, then what kind it was */
 .chip .n { margin-left: 4px; font-weight: 500; color: var(--muted); font-variant-numeric: tabular-nums; }
 .chip[aria-pressed="true"] .n { color: inherit; opacity: 0.8; }
@@ -1008,9 +976,6 @@ details.adv > summary::-webkit-details-marker { display: none; }
 .group details.adv[open] > summary::after { transform: rotate(90deg); margin: 0; }
 details.adv[open] { display: flex; flex-direction: column; gap: 10px; }
 input.time { font: 600 1rem var(--sans); color: var(--fg); background: var(--soft); border: 0; border-radius: 10px; padding: 8px 10px; min-height: 40px; }
-/* The small weather card shows it opens: the same chevron as on the full card, turned down. */
-.wx-small .wx-open { display: grid; place-items: center; width: 28px; height: 28px; margin-left: 2px; border-radius: 50%; background: var(--soft); color: var(--sig-ink); }
-.wx-small .wx-open .i { width: 16px; height: 16px; transform: rotate(180deg); }
 
 /* ===== Onboarding: Build my morning, the share guide, coach marks, the first-save box ===== */
 .welcome.hero, .ask.guide { border-color: var(--sig); background: var(--sig-soft); }
@@ -1121,21 +1086,9 @@ details.adv > summary, .group details.adv > summary, .ag-more summary { min-heig
 .wn-list li > div { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .wn-list span { font-size: 0.875rem; color: var(--muted); }
 .wn-list .btn { flex: none; }
-.cam-picks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 10px 0 4px; }
-.cam-picks:empty { display: none; }
-.cam-pick { display: flex; flex-direction: column; text-align: left; border-radius: 14px; overflow: hidden; border: 2px solid var(--line-2); background: var(--panel); color: var(--fg); padding: 0; }
-.cam-pick[aria-pressed="true"] { border-color: var(--sig); }
-.cam-pick img { width: 100%; aspect-ratio: 16 / 10; object-fit: cover; display: block; background: var(--soft); }
-.cam-pick span { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px 10px; }
-.cam-pick b { font-size: 0.875rem; line-height: 1.25; }
-.cam-pick i, .cam-pick em { font-style: normal; font-size: 0.75rem; color: var(--muted); }
-.cam-pick.radar { justify-content: center; min-height: 96px; }
 
 /* While typing, the "More below" pill would sit on the field: hide it. */
 .kb .more-hint, .kb .sheet.more-below .sheet-foot::before { display: none !important; }
-.cam-wait { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; padding: 14px; border-radius: 14px; background: var(--sig-soft); color: var(--sig-ink); font-size: 0.9375rem; font-weight: 600; }
-.cam-wait .spin { width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--line-2); border-top-color: var(--sig); animation: spin 0.9s linear infinite; flex: none; }
-.cam-wait.err { background: transparent; color: var(--warn); padding: 4px 0; font-weight: 500; }
 /* Quote of the day */
 .q-src { margin-left: 4px; color: var(--sig-ink); font-weight: 600; text-underline-offset: 3px; }
 .q-from .q-picks { margin-top: 10px; gap: 8px; }

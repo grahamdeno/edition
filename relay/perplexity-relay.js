@@ -44,8 +44,8 @@
  */
 
 /** What this copy of the relay can do; the app checks it to say when an update is needed. */
-export const RELAY_VERSION = 25;
-export const RELAY_FEATURES = ["preview", "image", "photo", "agent", "push", "remind", "ical", "nhl", "inbox", "apple", "ai", "stats", "stories", "beta", "attest"];
+export const RELAY_VERSION = 26;
+export const RELAY_FEATURES = ["preview", "image", "photo", "agent", "push", "remind", "ical", "inbox", "apple", "ai", "stats", "stories", "beta", "attest"];
 
 // inmyshoebox.com is home; shoebox.tangomike.app stays allowed while phones move over.
 const ALLOWED_ORIGINS = ["https://inmyshoebox.com", "https://shoebox.tangomike.app", "https://grahamdeno.github.io"];
@@ -106,11 +106,10 @@ const RELAY = {
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
     const { pathname, searchParams } = new URL(request.url);
     if (request.method === "GET" && pathname === "/preview") return preview(searchParams.get("url"), cors, searchParams.get("text") === "1");
-    if (request.method === "GET" && pathname === "/version") return new Response(JSON.stringify({ version: RELAY_VERSION, features: RELAY_FEATURES, push: Boolean(env.SHOEBOX), email: env.EMAIL_ADDRESS || null, apple: Boolean(env.APPLE_P8), weatherkit: Boolean(env.APPLE_P8 && env.APPLE_WEATHER_SERVICE_ID), ai: Boolean(env.ANTHROPIC_API_KEY && env.SHOEBOX) }), { headers: { ...cors, "content-type": "application/json" } });
+    if (request.method === "GET" && pathname === "/version") return new Response(JSON.stringify({ version: RELAY_VERSION, features: RELAY_FEATURES, push: Boolean(env.SHOEBOX), email: env.EMAIL_ADDRESS || null, apple: Boolean(env.APPLE_P8), ai: Boolean(env.ANTHROPIC_API_KEY && env.SHOEBOX) }), { headers: { ...cors, "content-type": "application/json" } });
     if (pathname.startsWith("/ai/")) return aiRoute(request, env, pathname, cors, ctx);
     if (pathname === "/stats" || pathname === "/stats/report") return statsRoute(request, env, pathname, cors);
     if (pathname.startsWith("/apple/") || pathname === "/song") return appleRoute(request, env, pathname, searchParams, cors);
-    if (request.method === "GET" && pathname === "/nhl") return nhl(searchParams.get("date"), cors);
     if (pathname === "/beta") return betaRoute(request, env, cors);
     if (request.method === "POST" && pathname === "/me/delete") return deleteMe(request, env, cors);
     if (pathname === "/inbox" || pathname === "/inbox/ack" || pathname === "/inbox/file" || pathname === "/inbox/address") return inboxRoute(request, env, pathname, cors);
@@ -539,20 +538,6 @@ async function sendPush(kv, sub, message) {
 }
 
 
-/* ================= NHL scores =================
- * One day's games from the NHL's public score feed, passed through (it
- * doesn't let web pages read it directly). Cached for 10 minutes.
- */
-export async function nhl(date, cors) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date || ""))) return json(400, "Date as YYYY-MM-DD.", cors);
-  let res;
-  try {
-    res = await fetch(`https://api-web.nhle.com/v1/score/${date}`, { headers: { accept: "application/json", "user-agent": "ShoeboxRelay/1.0" }, cf: { cacheTtl: 600, cacheEverything: true } });
-  } catch { return json(502, "Couldn't reach the NHL.", cors); }
-  if (!res.ok) return json(502, `The NHL said ${res.status}.`, cors);
-  return new Response(await res.text(), { status: 200, headers: { ...cors, "content-type": "application/json", "cache-control": "public, max-age=600" } });
-}
-
 /* ================= Your Shoebox email address =================
  * Mail arrives through Cloudflare Email Routing and waits in KV until the
  * phone picks it up, then it's deleted.
@@ -795,11 +780,10 @@ export function parseMail(raw) {
 }
 
 
-/* ================= Apple: MusicKit, WeatherKit, MapKit JS =================
- * One Apple key (.p8) does all three. Put its contents in a Worker secret
- * named APPLE_P8; the Key ID and Team ID are built in below (they aren't
- * secret: Apple puts them in every token). WeatherKit also needs your
- * Services ID in APPLE_WEATHER_SERVICE_ID.
+/* ================= Apple: MusicKit =================
+ * Put the Apple key's (.p8) contents in a Worker secret named APPLE_P8; the
+ * Key ID and Team ID are built in below (they aren't secret: Apple puts them
+ * in every token).
  */
 const APPLE_KEY_ID = "79QU7DSTN9";
 const APPLE_TEAM_ID = "7MHDTK68M2";
@@ -819,21 +803,14 @@ export async function appleJwt(key, header, payload) {
 }
 
 const tokenCache = {};
-async function appleToken(env, kind, now = Math.floor(Date.now() / 1000), origin = ALLOWED_ORIGINS[0]) {
-  // A maps token is tied to the page's address, so each allowed address gets its own.
-  const slot = kind === "maps" ? `maps ${origin}` : kind;
+async function appleToken(env, kind, now = Math.floor(Date.now() / 1000)) {
+  const slot = kind;
   const c = tokenCache[slot];
   if (c && c.exp - now > 3600) return c.token;
   const key = await appleKey(env.APPLE_P8);
   const kid = env.APPLE_KEY_ID || APPLE_KEY_ID, iss = env.APPLE_TEAM_ID || APPLE_TEAM_ID;
   let token, exp;
   if (kind === "music") { exp = now + 30 * 86400; token = await appleJwt(key, { kid }, { iss, iat: now, exp }); }
-  else if (kind === "maps") { exp = now + 7 * 86400; token = await appleJwt(key, { kid, typ: "JWT" }, { iss, iat: now, exp, origin }); }
-  else if (kind === "weather") {
-    const sub = env.APPLE_WEATHER_SERVICE_ID;
-    exp = now + 3600 * 6;
-    token = await appleJwt(key, { kid, id: `${iss}.${sub}` }, { iss, iat: now, exp, sub });
-  }
   tokenCache[slot] = { token, exp };
   return token;
 }
@@ -850,9 +827,6 @@ async function findSong(env, title, artist = "") {
   return { id: best.id, name: a.name, artist: a.artistName, album: a.albumName, url: a.url, preview: a.previews?.[0]?.url || null,
     artwork: a.artwork?.url ? a.artwork.url.replace("{w}", "600").replace("{h}", "600") : null, year: (a.releaseDate || "").slice(0, 4) || null };
 }
-
-/** The page address a maps token is for: the caller's, when it's one of Shoebox's. */
-const mapsOrigin = (request) => { const o = request.headers.get("origin") || ""; return ALLOWED_ORIGINS.includes(o) ? o : ALLOWED_ORIGINS[0]; };
 
 async function appleRoute(request, env, pathname, params, cors) {
   const out = (status, body, extra = {}) => new Response(JSON.stringify(body), { status, headers: { ...cors, "content-type": "application/json", ...extra } });
@@ -872,17 +846,6 @@ async function appleRoute(request, env, pathname, params, cors) {
   if (!env.APPLE_P8) return out(501, { error: { message: "Add your Apple key to the relay (secret APPLE_P8)." } });
   try {
     if (pathname === "/apple/music-token") return out(200, { token: await appleToken(env, "music") }, { "cache-control": "private, max-age=3600" });
-    if (pathname === "/apple/maps-token") return out(200, { token: await appleToken(env, "maps", undefined, mapsOrigin(request)) }, { "cache-control": "private, max-age=3600" });
-    if (pathname === "/apple/weather") {
-      if (!env.APPLE_WEATHER_SERVICE_ID) return out(501, { error: { message: "Add your WeatherKit Services ID to the relay (APPLE_WEATHER_SERVICE_ID)." } });
-      const lat = Number(params.get("lat")), lon = Number(params.get("lon"));
-      if (!Number.isFinite(lat) || !Number.isFinite(lon)) return out(400, { error: { message: "lat and lon." } });
-      const tz = params.get("tz") || "America/New_York";
-      const u = `https://weatherkit.apple.com/api/v1/weather/en/${lat.toFixed(3)}/${lon.toFixed(3)}?dataSets=currentWeather,forecastDaily,forecastNextHour&timezone=${encodeURIComponent(tz)}&countryCode=US`;
-      const res = await fetch(u, { headers: { authorization: `Bearer ${await appleToken(env, "weather")}` } });
-      if (!res.ok) return out(502, { error: { message: `Apple Weather said ${res.status}.` } });
-      return new Response(await res.text(), { headers: { ...cors, "content-type": "application/json", "cache-control": "private, max-age=600" } });
-    }
     // A song from the phone's own library, looked up in Apple Music: its page (to open it there), a 30-second preview and artwork.
     if (pathname === "/apple/find") {
       const title = String(params.get("title") || "").slice(0, 200), artist = String(params.get("artist") || "").slice(0, 200);
@@ -1021,7 +984,6 @@ async function aiRoute(request, env, pathname, cors, ctx = null) {
   }
   // Shoebox pays for AI, so it's for the iPhone app (proved by App Attest) and the owner's devices, not any web page.
   if (attestRequired(env) && !owner && !rec.attested) return aiJson(403, { error: { message: "AI comes with the Shoebox iPhone app.", code: "attest" } }, cors);
-  if (request.method === "POST" && pathname === "/ai/cams") return camsRoute(request, env, { kv, ctx, cors, charge, over: all >= allCap });
   if (request.method === "POST" && pathname === "/ai/quotes") return quotesRoute(request, env, { kv, today, ctx, cors, charge, over: all >= allCap, mineOver: !owner && (mine >= deviceCap || net >= ipCap) });
   if (request.method === "POST" && pathname === "/ai/stories") return storiesRoute(request, env, { kv, today, owner, ctx, cors, charge, over: all >= allCap, mineOver: !owner && (mine >= deviceCap || net >= ipCap) });
   if (request.method !== "POST" || pathname !== "/ai/messages") return json(404, "Not found.", cors);
@@ -1084,91 +1046,6 @@ function slowAnswer(job, ctx, cors) {
   if (ctx && ctx.waitUntil) ctx.waitUntil(work);
   w.write(enc.encode(" ")).catch(() => {});
   return new Response(readable, { status: 200, headers: { ...cors, "content-type": "application/json", "cache-control": "no-store" } });
-}
-
-/* ---- Live cameras near a place ----
- * Claude searches once a week per town for public live views (YouTube live
- * streams and webcam pictures that refresh); each one is checked before it's
- * offered. Shared by everyone in that town; charged to the relay's total.
- */
-export function camYoutubeId(url) {
-  let u;
-  try { u = new URL(String(url || "").trim()); } catch { return ""; }
-  const host = u.hostname.replace(/^(www\.|m\.)/, "");
-  let id = "";
-  if (host === "youtu.be") id = u.pathname.slice(1);
-  else if (/(^|\.)youtube\.com$/.test(host)) id = u.searchParams.get("v") || (u.pathname.match(/^\/(?:live|embed)\/([^/?#]+)/) || [])[1] || "";
-  return /^[\w-]{6,20}$/.test(id) ? id : "";
-}
-export function camPlace(place) {
-  const p = String(place || "").replace(/[^A-Za-z0-9 .,'-]/g, "").replace(/\s+/g, " ").trim().slice(0, 60);
-  return p.length >= 2 ? p : "";
-}
-/** Keep the cameras that are really there: a YouTube video that exists, or a picture that loads. */
-export async function checkCams(list) {
-  const out = [], seen = new Set();
-  for (const c of (list || []).slice(0, 10)) {
-    const url = String(c?.url || "").trim();
-    if (!/^https:\/\//.test(url) || seen.has(url)) continue;
-    seen.add(url);
-    const yt = camYoutubeId(url);
-    try {
-      if (yt) {
-        const r = await fetch(`https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(`https://www.youtube.com/watch?v=${yt}`)}`);
-        if (!r.ok) continue;
-        const d = await r.json().catch(() => ({}));
-        out.push({ kind: "youtube", url: `https://www.youtube.com/watch?v=${yt}`, title: String(d.title || c.title || "Live camera").slice(0, 100), where: String(c.where || "").slice(0, 80), thumb: `https://i.ytimg.com/vi/${yt}/hqdefault_live.jpg` });
-      } else {
-        const r = await fetch(url, { headers: { "user-agent": "Mozilla/5.0 (ShoeboxRelay)", accept: "image/*" } });
-        const type = r.headers.get("content-type") || "";
-        if (!r.ok || !type.startsWith("image/")) continue;
-        const size = (await r.arrayBuffer()).byteLength;
-        if (size < 5000) continue;
-        out.push({ kind: "image", url, title: String(c.title || "Webcam").slice(0, 100), where: String(c.where || "").slice(0, 80), thumb: url });
-      }
-    } catch { /* unreachable: skip it */ }
-    if (out.length >= 6) break;
-  }
-  return out;
-}
-
-async function camsRoute(request, env, { kv, ctx, cors, charge, over }) {
-  const { place } = await request.json().catch(() => ({}));
-  const where = camPlace(place);
-  if (!where) return aiJson(400, { error: { message: "No place." } }, cors);
-  const key = `cams:${where.toLowerCase()}`;
-  const cached = await kv.get(key, "json");
-  if (cached) return aiJson(200, { ...cached, shared: true }, cors);
-  if (over) return aiJson(429, { error: { message: "Shoebox's AI is resting for today. It's back tomorrow." } }, cors);
-  const lock = `camsl:${where.toLowerCase()}`;
-  if (await kv.get(lock)) return aiJson(202, { pending: true, retry: 20 }, cors);
-  await kv.put(lock, "1", { expirationTtl: 180 });
-  const job = async () => {
-    const body = {
-      model: STORY_MODEL, max_tokens: 1500,
-      messages: [{ role: "user", content:
-        `Find public live cameras in or near ${where} that show the outdoors and the weather: beaches, piers, harbors, downtown streets, skylines, mountains. ` +
-        "Only ones anyone can view free: YouTube live streams (24/7 cams), or a webcam's still picture that refreshes, given as the direct image address (often ending in .jpg). " +
-        "No traffic cameras behind logins, no pages that only embed a player. Prefer the closest and best-known. " +
-        'Search, then reply with JSON only: {"cams":[{"title":string (short, e.g. \"Wrightsville Beach pier\"),"where":string (town or spot),"url":string}]} with up to 8.' }],
-      tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 5 }],
-    };
-    let res;
-    try { res = await fetch(ANTHROPIC_URL, { method: "POST", headers: { "content-type": "application/json", "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" }, body: JSON.stringify(body) }); }
-    catch { await kv.delete(lock); return [502, { error: { message: "The relay couldn't reach Claude." } }]; }
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) { await kv.delete(lock); return [502, { error: { message: data?.error?.message || "Couldn't search right now." } }]; }
-    await charge(aiCost(STORY_MODEL, data.usage), { device: false });
-    const text = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n");
-    let list = [];
-    try { const a = text.indexOf("{"), b = text.lastIndexOf("}"); list = JSON.parse(text.slice(a, b + 1)).cams || []; } catch { /* nothing usable */ }
-    const cams = await checkCams(list);
-    const out = { cams, place: where, at: Date.now() };
-    if (cams.length) await kv.put(key, JSON.stringify(out), { expirationTtl: 7 * 86400 });
-    await kv.delete(lock);
-    return [200, out];
-  };
-  return slowAnswer(job, ctx, cors);
 }
 
 /* ---- Shared top stories ----
