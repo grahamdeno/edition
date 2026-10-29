@@ -41,9 +41,11 @@
   --toast-fg: #FFFFFF;
   --toast-act: #FFD23F;
   --mix: 5%;
-  --logo-box: #7B3FF2;
-  --logo-rim: #4B1FA8;
-  --logo-card: #FFF7DA;
+  --logo-tile: #7B3FF2;
+  --logo-box: #FFF7DA;
+  --logo-card: #E2D4FF;
+  --logo-lid: #FFD23F;
+  --logo-rim: #7B3FF2;
 
   --serif: "Instrument Serif", "Iowan Old Style", Georgia, serif;
   --sans: "Geist", -apple-system, "SF Pro Text", system-ui, sans-serif;
@@ -85,9 +87,11 @@
     --toast-fg: #1B1033;
     --toast-act: #6A2FE0;
     --mix: 10%;
-    --logo-box: #7B3FF2;
-    --logo-rim: #B794FF;
-    --logo-card: #2A1B4A;
+    --logo-tile: #2A1B4A;
+    --logo-box: #FFF7DA;
+    --logo-card: #E2D4FF;
+    --logo-lid: #FFD23F;
+    --logo-rim: #2A1B4A;
     color-scheme: dark;
   }
 }
@@ -115,9 +119,11 @@
     --toast-fg: #1B1033;
     --toast-act: #6A2FE0;
     --mix: 10%;
-    --logo-box: #7B3FF2;
-    --logo-rim: #B794FF;
-    --logo-card: #2A1B4A;
+    --logo-tile: #2A1B4A;
+    --logo-box: #FFF7DA;
+    --logo-card: #E2D4FF;
+    --logo-lid: #FFD23F;
+    --logo-rim: #2A1B4A;
     color-scheme: dark;
 }
 
@@ -141,9 +147,11 @@
   --toast-bg: #1C1B19;
   --toast-fg: #FAF9F6;
   --toast-act: #F2C94C;
-  --logo-box: #3A3733;
-  --logo-rim: #1C1B19;
-  --logo-card: #F5E9C8;
+  --logo-tile: #3A3733;
+  --logo-box: #F5E9C8;
+  --logo-card: #C9C2B6;
+  --logo-lid: #E8C35A;
+  --logo-rim: #3A3733;
 }
 @media (prefers-color-scheme: dark) {
   :root[data-palette="plain"]:not([data-theme="light"]) {
@@ -165,9 +173,11 @@
   --toast-bg: #F2F0EC;
   --toast-fg: #161514;
   --toast-act: #2E4A7D;
-  --logo-box: #4A4640;
-  --logo-rim: #A9C0EA;
-  --logo-card: #2A2826;
+  --logo-tile: #3A3733;
+  --logo-box: #F5E9C8;
+  --logo-card: #C9C2B6;
+  --logo-lid: #E8C35A;
+  --logo-rim: #3A3733;
   color-scheme: dark;
   }
 }
@@ -190,9 +200,11 @@
   --toast-bg: #F2F0EC;
   --toast-fg: #161514;
   --toast-act: #2E4A7D;
-  --logo-box: #4A4640;
-  --logo-rim: #A9C0EA;
-  --logo-card: #2A2826;
+  --logo-tile: #3A3733;
+  --logo-box: #F5E9C8;
+  --logo-card: #C9C2B6;
+  --logo-lid: #E8C35A;
+  --logo-rim: #3A3733;
   color-scheme: dark;
 }
 
@@ -280,7 +292,7 @@ a { color: inherit; text-decoration: none; }
 .av.lg { width: 72px; height: 72px; }
 .av-none { display: grid; place-items: center; color: var(--sig); background: var(--sig-soft); }
 .av-none .i { width: 60%; height: 60%; }
-.av-sb { display: grid; place-items: center; background: var(--sig-soft); box-shadow: none; padding: 6px; }
+.av-sb { display: grid; place-items: center; background: none; box-shadow: none; padding: 2px; }
 .av-sb .logo-svg { width: 100%; height: 100%; }
 
 .sep {

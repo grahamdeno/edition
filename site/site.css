@@ -37,7 +37,7 @@ a:focus-visible, button:focus-visible { outline: 3px solid var(--gold); outline-
 /* ---- Top bar ---- */
 .bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-top: max(18px, env(safe-area-inset-top)); padding-bottom: 18px; }
 .mark { display: inline-flex; align-items: center; gap: 10px; color: #FFF7DA; text-decoration: none; font: 400 34px/1 var(--serif); }
-.mark svg { width: 40px; height: 40px; }
+.mark svg { width: 40px; height: 40px; border-radius: 9px; box-shadow: 0 0 0 1.5px rgba(255, 255, 255, 0.4); }
 .bar .open { color: #FFF7DA; font-weight: 600; text-decoration: none; padding: 10px 2px; }
 .bar .open:hover { text-decoration: underline; }
 
