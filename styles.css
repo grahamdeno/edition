@@ -331,6 +331,12 @@ a { color: inherit; text-decoration: none; }
 .say { margin: 4px 0 0; font: 400 1.35rem/1.22 var(--serif); text-wrap: pretty; overflow-wrap: anywhere; white-space: pre-line;
   text-decoration-line: underline; text-decoration-color: var(--hl); text-decoration-thickness: 0.32em; text-underline-offset: -0.12em; text-decoration-skip-ink: none; }
 .body { margin: 4px 0 0; overflow-wrap: anywhere; }
+/* The why line asked on the card: looks like the words it will become, written in the same serif. */
+.why-ask { margin: 4px 0 0; }
+.why-ask input { width: 100%; min-height: 44px; padding: 0; border: 0; border-bottom: 1px dashed var(--line-2); border-radius: 0; background: none;
+  font: 400 1.35rem/1.22 var(--serif); color: var(--fg); }
+.why-ask input::placeholder { color: var(--faint); }
+.why-ask input:focus { outline: none; border-bottom-color: var(--sig); }
 .guess { margin: 4px 0 0; color: var(--muted); overflow-wrap: anywhere; }
 .why-line { margin: 10px 0 0; font: 400 1.1rem/1.3 var(--serif); text-decoration-line: underline; text-decoration-color: var(--hl); text-decoration-thickness: 0.32em; text-underline-offset: -0.12em; text-decoration-skip-ink: none; }
 .why-line span { text-decoration: none; }
@@ -565,6 +571,7 @@ details.group[open] { padding-bottom: 14px; }
 }
 .cap textarea:focus { border-color: var(--sig); }
 .cap-src { display: flex; gap: 8px; }
+.cap-more { align-self: flex-start; margin-top: 4px; color: var(--muted); }
 .cap-src .chip { min-height: 44px; padding: 0 14px; gap: 6px; }
 .cap-src .chip .i { width: 18px; height: 18px; }
 .field[hidden], .cap-tm[hidden], .cap-tagpick[hidden] { display: none; }
