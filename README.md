@@ -14,7 +14,7 @@ Built like [Scales](https://github.com/grahamdeno/scales) and [Tabs](https://git
 
 **Shoebox** (the public app) is the feed and nothing else. Today opens on your posts: a save joins your pool as it's saved and comes back a few a day, asking why you kept it if you didn't say, with Done, Later and Let go. Add is one field, why; title, note and a day to show it wait behind More. Settings is five panels and Help.
 
-**Shoebox Me** (`?me=1` in the iPhone app) and **Settings › Help › Show everything** keep everything below: the morning cards, calendar, school posts, top stories, love and replies, samples, and the five-step Build my morning. Neither build has weather, sports scores or location any more (since web version 4.70). Nothing is deleted; `full()` in `src/app.js` decides what is drawn and fetched.
+**Shoebox Me** (`?me=1` in the iPhone app) and, on the web only, **Settings › Help › Show everything** keep everything below: the morning cards, calendar, school posts, top stories, love and replies, samples, and the five-step Build my morning. Neither build has weather, sports scores or location any more (since web version 4.70). Nothing is deleted; `full()` in `src/app.js` decides what is drawn and fetched. The App Store app has no Show everything switch, so it never asks for Calendar or Music.
 
 ## How it works
 

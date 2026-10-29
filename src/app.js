@@ -493,13 +493,23 @@ async function rankQueue() {
 }
 /* ================= Data helpers ================= */
 
+/** Public app: does a brand-new save skip the inbox? (Set-aside returns, school posts and top stories don't.) */
+const joinsPool = (item) => !full() && item && item.status === STATUS.INBOX && !item.suggested && !item.school && !item.backAt && !(item.history || []).length;
+const queueNew = (item) => ({ ...item, status: STATUS.QUEUED, queuedAt: item.created || Date.now(), history: [...(item.history || []), { v: VERDICT.LATER, at: Date.now(), stage: "inbox", auto: true }] });
+/** Captures (Add, paste, drop, the share sheet, ?url=) write straight to storage, so they pass through here too. */
+async function landNew(list) {
+  const out = [];
+  for (const it of list) {
+    if (joinsPool(it) && !state.items.some((i) => i.id === it.id)) { const q = queueNew(it); await db.items.put(q); out.push(q); } else out.push(it);
+  }
+  return out;
+}
+
 async function saveItem(item) {
   const before = state.items.find((i) => i.id === item.id);
   // One stage, not two: in the public app a new save joins the pool as it's saved. Saving is the Keep.
   // It's judged once, when it comes back. (Set-aside returns and school posts still land in the inbox.)
-  if (!before && !full() && item.status === STATUS.INBOX && !item.suggested && !item.school && !item.backAt) {
-    item = { ...item, status: STATUS.QUEUED, queuedAt: item.created || Date.now(), history: [...(item.history || []), { v: VERDICT.LATER, at: Date.now(), stage: "inbox", auto: true }] };
-  }
+  if (!before && joinsPool(item)) item = queueNew(item);
   if (!before) track(item.suggested ? "story_added" : "save");
   else if (before.status !== item.status) track(`status_${item.status}`);
   state.items = state.items.some((i) => i.id === item.id)
@@ -549,6 +559,7 @@ async function hydrate(root) {
 async function afterCapture(list, until = null) {
   list = list.filter(Boolean);
   if (!list.length) return;
+  list = await landNew(list);
   list.forEach((it) => { state.items = [it, ...state.items.filter((i) => i.id !== it.id)]; });
   if (list.some((i) => i.source === "share")) setFlag(SHARED, true);
   tick(true);
@@ -556,7 +567,11 @@ async function afterCapture(list, until = null) {
   render({ top: true });
   celebrateSave(list);
   picturePending();
+  // In the public app a save joins today only while there's room. Say so when it doesn't, or it seems lost.
+  const onToday = new Set(todayIds());
+  const waits = !until && !full() && list.every((i) => !onToday.has(i.id));
   toast(until ? `Set aside until ${shortDate(until)}. It'll be at the top of Today that morning.`
+    : waits ? `Saved. Today is full, so ${list.length === 1 ? "it comes" : "they come"} back on another day.`
     : `Saved ${list.length === 1 ? "1 item" : list.length + " items"} to ${APP}.`, {
     action: "Undo",
     onAction: async () => { await removeItems(list); render(); },
@@ -567,7 +582,7 @@ async function afterCapture(list, until = null) {
 async function importShares() {
   const shares = await db.drainShares().catch(() => []);
   if (!shares.length) return 0;
-  const list = await captureShares(shares);
+  const list = await landNew(await captureShares(shares));
   list.forEach((it) => { state.items = [it, ...state.items]; });
   return list.length;
 }
@@ -578,7 +593,7 @@ async function importFromUrl() {
   let n = p.has("share") ? 1 : 0;
   const text = [p.get("title"), p.get("text"), p.get("url")].filter(Boolean).join(" ").trim();
   if (text) {
-    const list = await captureText(text, "link");
+    const list = await landNew(await captureText(text, "link"));
     if (list.length) { state.items = [...list, ...state.items]; n += list.length; }
   }
   if (p.get("open")) state.openId = p.get("open");
@@ -1073,7 +1088,7 @@ function todaySections() {
   const v = editionView(state.items, state.edition);
   const six = v.pages.filter((p) => !freshIds.has(p.id) && !p.school);
   const sixIds = new Set(six.map((p) => p.id));
-  const sugg = state.items.filter((i) => i.suggested && !sixIds.has(i.id) && isNew(i))
+  const sugg = !full() ? [] : state.items.filter((i) => i.suggested && !sixIds.has(i.id) && isNew(i))
     .sort((a, b) => b.created - a.created).slice(0, SUGGESTIONS_PER_DAY);
   // School posts: every one not done, each day, apart from New and the six. Settled ones stay till tomorrow, stamped.
   // School posts: the newest newsletter's posts first (in its own order), then the rest by their date.
@@ -1141,15 +1156,26 @@ function render({ top = false } = {}) {
   bindTimeline(tl);
   tintVisible(tl);
   if (state.reveal) $("#panel", tl)?.classList.add("reveal");
-  requestAnimationFrame(() => { placeSpot(); coachPass(tl); tintSongCard(); refreshDayLine(); watchFoldCards(); });
+  requestAnimationFrame(() => { refocusWhy(); placeSpot(); coachPass(tl); tintSongCard(); refreshDayLine(); watchFoldCards(); });
   updateWidget();
 }
 
 /** Replace one post in place (a summary or picture arrived), without disturbing the page. */
+/** A "Why did you keep this?" answer being typed: kept across redraws, so enrichment landing doesn't wipe it. */
+const whyDrafts = new Map();
+let whyFocus = null;
+function refocusWhy() {
+  const el = whyFocus && document.getElementById("why-" + whyFocus);
+  if (!el || document.activeElement === el) return;
+  el.focus({ preventScroll: true });
+  try { el.setSelectionRange(el.value.length, el.value.length); } catch { /* not a text field */ }
+}
+
 function refreshPost(id) {
   const el = document.getElementById("p-" + id);
   const item = byId(id);
   if (!el || !item || $(".sheet-wrap")) return;
+  if (whyFocus === id && el.contains(document.activeElement)) return; // redraw once they're done typing
   const compact = el.classList.contains("compact");
   const tmp = document.createElement("div");
   tmp.innerHTML = postHtml(item, { compact });
@@ -1250,7 +1276,8 @@ const personal = () => { try { return Boolean(window.shoeboxNative) && localStor
  * decides what's drawn and what's fetched.
  */
 const FULL_KEY = "edition.full";
-const full = () => { if (personal()) return true; try { return localStorage.getItem(FULL_KEY) === "1"; } catch { return false; } };
+/** The App Store app is always the feed: Show everything is for the web, and Shoebox Me has it all. */
+const full = () => { if (personal()) return true; if (window.shoeboxNative) return false; try { return localStorage.getItem(FULL_KEY) === "1"; } catch { return false; } };
 const setFull = (on) => { try { localStorage.setItem(FULL_KEY, on ? "1" : "0"); } catch { /* blocked */ } };
 /** Shoebox Me: write today's school and morning settings to the phone once, so they never depend on defaults in the code. */
 function sealMeSettings() {
@@ -2233,7 +2260,7 @@ async function buildClick(e, step, wrap) {
       const c = morningCache(); c.song = nativeSong(r); c.songTried = true; saveMorningCache(c);
       $("#bm-song", wrap).textContent = `On. Today: ${r.title}`; btn.remove(); say("");
     } else { btn.disabled = false; say(r.status === "denied" ? "Music access is off. Turn it on in the iPhone's Settings › Shoebox." : "No songs with plays in your Music library yet.", true); }
-  } else if (what === "cal") {  } else if (what === "cal") {
+  } else if (what === "cal") {
     btn.disabled = true; say("Asking for your calendars…");
     const r = await turnOnNativeCalendar();
     if (!r.ok) { btn.disabled = false; say(r.msg, true); return; }
@@ -3155,7 +3182,7 @@ function postHtml(item, { compact = false } = {}) {
     + (item.school.fromFile ? `<p class="ev-place">${I.attach}<span>From the attached ${esc(item.school.fromFile)}</span></p>` : "");
   else if (item.kind === KIND.NOTE) say = `<p class="say">${esc(item.text || item.title)}</p>`;
   else if (item.why) say = `<p class="say">${esc(item.why)}</p>`;
-  else if (!full() && !words && !compact && open) say = `<form class="why-ask" data-why-for="${esc(item.id)}"><label class="sr-only" for="why-${esc(item.id)}">Why did you keep this?</label><input id="why-${esc(item.id)}" type="text" maxlength="140" autocomplete="off" placeholder="Why did you keep this?"></form>`;
+  else if (!full() && !words && !compact && open) say = `<form class="why-ask" data-why-for="${esc(item.id)}"><label class="sr-only" for="why-${esc(item.id)}">Why did you keep this?</label><input id="why-${esc(item.id)}" type="text" maxlength="140" autocomplete="off" placeholder="Why did you keep this?" value="${esc(whyDrafts.get(item.id) || "")}"></form>`;
   else if (full() && item.hook && !words) say = `<p class="guess"><span class="sr-only">${APP}'s guess: </span>${esc(item.hook)}</p>`;
   const why = item.why && item.kind === KIND.NOTE ? `<p class="why-line"><span>Why you kept it</span>${esc(item.why)}</p>` : "";
   const quote = item.kind === KIND.QUOTE ? `<figure class="quote ${String(item.text || "").length > 160 ? "long" : ""}"><blockquote>“${esc(item.text || item.title)}”</blockquote>${item.author ? `<figcaption>${esc(item.author)}</figcaption>` : ""}</figure>${item.why ? `<p class="why-line"><span>Why you kept it</span>${esc(item.why)}</p>` : ""}` : "";
@@ -3381,12 +3408,16 @@ function bindTimeline(tl) {
     const id = form.dataset.whyFor, input = form.querySelector("input"), why = input?.value.trim().slice(0, 140) || "";
     const item = byId(id);
     if (!item || !why || item.why === why) return;
+    whyDrafts.delete(id);
     await saveItem({ ...item, why });
     track("why_on_card");
+    if (whyFocus === id) whyFocus = null;
     refreshPost(id);
   };
   tl.addEventListener("submit", (e) => { const f = e.target.closest(".why-ask"); if (f) { e.preventDefault(); saveWhy(f); } });
-  tl.addEventListener("focusout", (e) => { const f = e.target.closest?.(".why-ask"); if (f) saveWhy(f); });
+  tl.addEventListener("focusout", (e) => { const f = e.target.closest?.(".why-ask"); if (!f || !f.isConnected) return; if (whyFocus === f.dataset.whyFor) whyFocus = null; saveWhy(f); });
+  tl.addEventListener("focusin", (e) => { const f = e.target.closest?.(".why-ask"); if (f) whyFocus = f.dataset.whyFor; });
+  tl.addEventListener("input", (e) => { const f = e.target.closest?.(".why-ask"); if (f) whyDrafts.set(f.dataset.whyFor, e.target.value); });
   $("#ask-in", tl)?.addEventListener("input", (e) => { state.schoolDraft = e.target.value; });
   if (q) q.addEventListener("input", () => {
     state.allQuery = q.value; state.allShown = PAGE;
@@ -5096,7 +5127,7 @@ function openSettings(panel = "", { fromCard = false } = {}) {
       <button class="btn" type="button" id="set-rebuild">Rebuild today</button>
       <span class="st" id="set-ed-st" role="status"></span>
       </div>
-      ${me ? "" : `<div class="group">
+      ${me || NATIVE ? "" : `<div class="group">
       <div class="row"><span class="rk">Show everything</span>
         <div class="seg" role="group" aria-label="Show everything"><button type="button" data-full="1" aria-pressed="${full()}">On</button><button type="button" data-full="0" aria-pressed="${!full()}">Off</button></div></div>
       <p class="note">Off is Shoebox: your saves, a few a day. On adds the morning cards, calendar, school posts, top stories, love and replies, for trying them side by side.</p>

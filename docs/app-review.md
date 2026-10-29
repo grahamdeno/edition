@@ -12,11 +12,8 @@ The app is built on a web view of inmyshoebox.com, plus native features that onl
 2. **Home Screen widget.** Long-press the Home Screen › + › Shoebox. It shows what's left today.
 3. **Files and iCloud Drive backups.** A backup is written to Files › On My iPhone › Shoebox › Backups each day, with a copy in iCloud Drive › Shoebox. Settings › Backup › Import restores it.
 4. **Local notifications.** When an item is set aside until a day (Later › This weekend), a reminder arrives that morning.
-5. **Optional extras (Settings › Help › Show everything › On):**
-   - **Calendar.** Settings › Calendar › This iPhone's calendars › On. Today's events appear in a day bar with free time. Events are read on the device and never leave it.
-   - **Apple Music library.** Settings › Daily cards › Song of the day › On. Shoebox picks a song from the user's library that they haven't played in a while (MediaPlayer). No subscription is needed. It opens in Music.
 
-Shoebox does not use location.
+Shoebox does not use location, and this version does not ask for Calendar or Apple Music access.
 
 To try it: open the app, tap Get started and answer the AI question, then tap + to save a note. It appears on Today. Tap Later on it to pick a day.
 
@@ -41,4 +38,3 @@ Data not linked to you:
 
 Not collected: location, contact info, health, financial info, browsing history, search history, contacts, purchases.
 
-Calendar and Apple Music data are read on the device and never leave it, so they aren't listed.
