@@ -30,6 +30,7 @@ import * as db from "./db.js";
 import * as push from "./push.js";
 import { parseIcs, eventsOn, calLink, cleanEventTitle, eventPlace, freeGaps, barRange } from "./calendar.js";
 import * as daily from "./daily.js";
+import { SAMPLE_EMAILS, gradeEmailPost } from "./aicheck.js";
 import { captureText, captureFile, captureTransfer, readClipboard, captureShares } from "./capture.js";
 import { sampleItems, SAMPLES_VERSION } from "./samples.js";
 import * as ai from "./ai.js";
@@ -41,7 +42,7 @@ import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 import * as songs from "./songs.js";
 import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone, mixStories, followOrder } from "./onboard.js";
 
-export const VERSION = "4.67.0";
+export const VERSION = "4.68.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -1896,8 +1897,11 @@ async function dailyBackup() {
 async function writeEmailPost(item) {
   if (!item.email || item.post?.by === "ai" || !ai.settings.enabled() || (item.postTries || 0) >= 2) return item;
   try {
-    const p = await ai.emailPost({ subject: item.email.subject || item.title, fromName: item.email.fromName, text: item.text, links: item.email.links || (item.url ? [item.url] : []) });
+    const mail = { subject: item.email.subject || item.title, fromName: item.email.fromName, text: item.text, links: item.email.links || (item.url ? [item.url] : []) };
+    const p = await ai.emailPost(mail);
     if (!p) return { ...item, postTries: (item.postTries || 0) + 1 };
+    // A post that pastes the email or keeps its clutter isn't used; the cleaned opening stands in, and it's tried once more later.
+    if (gradeEmailPost(mail, p, { hard: true }).length) { track("email_post_rejected"); return { ...item, postTries: (item.postTries || 0) + 1 }; }
     return {
       ...item,
       title: item.titleMine || item.editedAt ? item.title : p.headline || item.title,
@@ -1917,6 +1921,34 @@ async function writeEmailPost(item) {
     return { ...item, postTries: (item.postTries || 0) + 1 };
   }
 }
+/** Shoebox Me: the sample emails through the real AI, each post graded, and a scorecard. */
+async function checkAiWriting(btn, out) {
+  if (!out) return;
+  btn.disabled = true;
+  const results = new Array(SAMPLE_EMAILS.length);
+  let done = 0, next = 0;
+  const say = () => { out.innerHTML = `<p class="note"><span class="spin" aria-hidden="true"></span>Checking ${done} of ${SAMPLE_EMAILS.length}…</p>`; };
+  say();
+  const work = async () => {
+    while (next < SAMPLE_EMAILS.length) {
+      const k = next++, e = SAMPLE_EMAILS[k];
+      let post = null, err = "";
+      try { post = await withTimeout(ai.emailPost(e), 60000); } catch (x) { err = x.message || "failed"; }
+      results[k] = { e, post, problems: err ? [`didn't finish: ${err}`] : gradeEmailPost(e, post) };
+      done++; say();
+    }
+  };
+  await Promise.all([work(), work(), work()]);
+  const pass = results.filter((r) => !r.problems.length).length;
+  track("ai_check");
+  out.innerHTML = `<p class="ai-score"><b>${pass} of ${results.length}</b> passed</p>`
+    + results.filter((r) => r.problems.length).map((r) => `<details class="adv"><summary>${esc(plainSubject(r.e.subject))} · ${r.problems.length} problem${r.problems.length === 1 ? "" : "s"}</summary>
+      <p class="note"><b>${esc(r.post?.headline || "(no headline)")}</b><br>${esc(r.post?.body || "")}</p>
+      <ul class="ai-probs">${r.problems.map((p) => `<li>${esc(p)}</li>`).join("")}</ul></details>`).join("")
+    + (pass === results.length ? `<p class="note">Every post was clean.</p>` : "");
+  btn.disabled = false;
+}
+
 /** Email posts saved before 4.64.0 (the whole email pasted in): written properly, one at a time, once AI is on. */
 let emailPostsRunning = false;
 async function emailPostsPending() {
@@ -5108,6 +5140,9 @@ function openSettings(panel = "", { fromCard = false } = {}) {
         <div class="seg" role="group" aria-label="Top stories each morning"><button type="button" data-stories="1" aria-pressed="${storiesAuto()}">On</button><button type="button" data-stories="0" aria-pressed="${!storiesAuto()}">Off</button></div></div>
       <p class="note">A few of the biggest stories in what you follow, picked once a day.</p>` : `<p class="note">Top stories, summaries and school posts start when AI is on.</p>`}
       ${me ? `<p class="note" id="set-ai-use"></p>` : ""}
+      ${me && ai.settings.enabled() ? `<button class="btn ghost sm" type="button" id="set-ai-check">Check AI writing</button>
+      <p class="note">Runs ${SAMPLE_EMAILS.length} made-up emails through the AI and grades each post: no pasting, no clutter, nothing made up, the right link. About 2¢.</p>
+      <div id="set-ai-check-out" role="status"></div>` : ""}
       <button class="btn ghost sm" type="button" id="set-discover" ${ai.settings.canDiscover() ? "" : "disabled"}>Get more top stories now</button>
       <span class="st" id="set-st" role="status"></span>
       </div>` },
@@ -5190,6 +5225,7 @@ function openSettings(panel = "", { fromCard = false } = {}) {
     render({ top: false });
   }));
   if (me && ai.settings.consented() && ai.settings.device()) {
+    $("#set-ai-check", wrap)?.addEventListener("click", (e) => checkAiWriting(e.currentTarget, $("#set-ai-check-out", wrap)));
     ai.usage().then((u) => { const el = $("#set-ai-use", wrap); if (el) el.textContent = `This month: ${u.cents.toFixed(1)}¢ of AI${u.limit ? ` (allowance ${u.limit}¢)` : ""}. Install id: ${u.device}.`; }).catch(() => {});
   }
   renderSuggestProfile(wrap);
