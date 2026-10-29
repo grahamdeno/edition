@@ -41,7 +41,7 @@ import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 import * as songs from "./songs.js";
 import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone, mixStories, followOrder } from "./onboard.js";
 
-export const VERSION = "4.65.2";
+export const VERSION = "4.66.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -99,6 +99,8 @@ const state = {
   expanded: new Set(), // posts opened in place by a tap on their words
   reader: null,      // { mode: "single", ids: [id], index: 0, total: 1 }
   recent: new Map(), // verdicts given this session: id -> verdict, so a post keeps its stamp
+  linger: new Map(), // posts just settled: id -> timer; they show their stamp a moment, then go
+  showDone: false, // "Done today" opened at the foot of Today
   suggest: null,     // what your answers to suggestions taught (see model.js)
   tagAliases: {},    // renames, merges and deletes made in Settings > Tags (see model.js)
   avatar: "",        // object URL of your photo, or ""
@@ -1138,14 +1140,63 @@ function sectionHead(title, note = "") {
 function todayHtml() {
   const s = todaySections();
   let h = stripHtml(s) + songAskHtml() + whatsNewHtml() + welcomeHtml() + aiAskHtml() + calendarHtml() + morningHtml() + dayTipHtml() + schoolAskHtml();
-  if (s.school.length) h += sectionHead("From school", `${s.school.filter(isOpen).length || "All"} to do`) + s.school.map((i) => postHtml(i)).join("");
-  if (s.fresh.length) h += sectionHead("New", `${s.fresh.filter(isOpen).length || "All"} to sort`) + s.fresh.map((i) => postHtml(i)).join("");
-  if (s.six.length) h += sectionHead("Today's six", `${s.six.filter(isOpen).length} of ${s.six.length} left`) + s.six.map((i) => postHtml(i)).join("");
-  if (s.sugg.length) h += sectionHead("Top stories") + s.sugg.map((i) => postHtml(i)).join("");
+  // Inbox zero: a settled post shows its stamp for a moment, then leaves. What's gone waits under "Done today".
+  const gone = [];
+  const shown = (list) => { const v = list.filter((i) => isOpen(i) || state.linger.has(i.id)); gone.push(...list.filter((i) => !v.includes(i))); return v; };
+  const school = shown(s.school), fresh = shown(s.fresh), six = shown(s.six), sugg = shown(s.sugg);
+  if (school.length) h += sectionHead("From school", `${s.school.filter(isOpen).length || "All"} to do`) + school.map((i) => postHtml(i)).join("");
+  if (fresh.length) h += sectionHead("New", `${s.fresh.filter(isOpen).length || "All"} to sort`) + fresh.map((i) => postHtml(i)).join("");
+  if (six.length) h += sectionHead("Today's six", `${s.six.filter(isOpen).length} of ${s.six.length} left`) + six.map((i) => postHtml(i)).join("");
+  if (sugg.length) h += sectionHead("Top stories") + sugg.map((i) => postHtml(i)).join("");
   else if (state.storiesMiss && !state.storiesLoading && state.tab === "today") h += sectionHead("Top stories") + `<p class="finding miss" role="status">No stories came through just now. Shoebox looks again tomorrow morning.${ai.settings.canDiscover() ? ` <button class="linkish" type="button" data-act="discover">Try again</button>` : ""}</p>`;
   else if (state.storiesLoading) h += sectionHead("Top stories") + `<p class="finding" role="status"><span class="spin" aria-hidden="true"></span>Finding today's top stories${followedTopics(state.suggest).length ? ` on ${esc(followedTopics(state.suggest).slice(0, 3).join(", "))}` : ""}…</p>`;
-  return h + endHtml(s);
+  return h + endHtml(s) + doneTodayHtml(gone);
 }
+
+/** The foot of Today: what you've settled, folded to one line until you want it. */
+function doneTodayHtml(gone) {
+  if (!gone.length) return "";
+  if (!state.showDone) return `<div class="done-today"><button class="done-open" type="button" data-day="done-list" aria-expanded="false">${I.done}<span>Done today · ${gone.length}</span></button></div>`;
+  return `<div class="done-today open"><button class="done-open" type="button" data-day="done-list" aria-expanded="true">${I.done}<span>Done today · ${gone.length}</span><span class="hide-w">Hide</span></button></div>`
+    + gone.map((i) => postHtml(i, { compact: true })).join("");
+}
+
+/*
+ * A post you just settled keeps its stamp (and Undo) about three seconds, then folds shut and leaves.
+ * Never under a finger: while the screen is touched it waits for the lift. Leaving the app clears them all.
+ */
+const LINGER_MS = 3200;
+let touchDown = false;
+const lingerWait = new Set();
+document.addEventListener("pointerdown", () => { touchDown = true; }, true);
+const lift = () => { touchDown = false; const ids = [...lingerWait]; lingerWait.clear(); ids.forEach((id) => setTimeout(() => goAway(id), 250)); };
+document.addEventListener("pointerup", lift, true);
+document.addEventListener("pointercancel", lift, true);
+function linger(id) {
+  clearTimeout(state.linger.get(id));
+  state.linger.set(id, setTimeout(() => goAway(id), LINGER_MS));
+}
+function stopLinger(id) { clearTimeout(state.linger.get(id)); state.linger.delete(id); lingerWait.delete(id); }
+function goAway(id) {
+  if (!state.linger.has(id)) return;
+  if (touchDown) { lingerWait.add(id); return; }
+  stopLinger(id);
+  const item = byId(id);
+  if (item && isOpen(item)) return; // brought back meanwhile
+  const redraw = () => { if (state.tab === "today" && !state.reader && !$(".sheet-wrap")) render({ top: false }); else state.staleToday = true; };
+  const el = document.getElementById("p-" + id), tl = $("#tl");
+  if (!el || !tl || state.tab !== "today") { redraw(); return; }
+  const r = el.getBoundingClientRect(), top = $(".top")?.getBoundingClientRect().bottom || 0;
+  if (r.bottom <= top + 1) { const h = el.offsetHeight; redraw(); $("#tl").scrollTop -= h; return; } // above the screen: keep your place
+  if (reduced() || r.top >= innerHeight) { redraw(); return; }
+  el.style.height = `${el.offsetHeight}px`;
+  el.style.overflow = "hidden";
+  void el.offsetHeight;
+  el.classList.add("leaving");
+  el.style.height = "0px";
+  setTimeout(redraw, 340);
+}
+function lingerFlush() { for (const id of [...state.linger.keys()]) stopLinger(id); }
 
 /* ================= This morning =================
  * The daily set at the top of Today: weather and radar (or your camera),
@@ -1642,6 +1693,12 @@ async function dayAction(what) {
   const [act, arg] = what.split(":");
   const c = morningCache();
   if (act === "wx-setup") { openSettings("weather", { fromCard: true }); return; }
+  if (act === "done-list") {
+    state.showDone = !state.showDone;
+    render({ top: false });
+    if (state.showDone) $(".done-today")?.scrollIntoView({ behavior: reduced() ? "auto" : "smooth", block: "start" });
+    return;
+  }
   if (act === "wx-small" || act === "wx-hide") { setMorningSettings({ ...morningSettings(), wxSmall: true }); delete c.wxHidden; }
   else if (act === "wx-big" || act === "wx-show") { setMorningSettings({ ...morningSettings(), wxSmall: false }); delete c.wxHidden; }
   else if (act === "cq-done" && c.cpmai) {
@@ -3532,6 +3589,7 @@ async function timelineVerdict(id, verdict) {
   const rec = await recordVerdict(before, verdict);
   if (!rec) return;
   state.recent.set(id, { verdict, stage: rec.stage, undo: rec.undo });
+  linger(id);
   render();
   const nowLeft = leftToday();
   const words = {
@@ -3553,6 +3611,7 @@ async function timelineVerdict(id, verdict) {
 async function undoRecent(id) {
   const r = state.recent.get(id);
   if (!r) return;
+  stopLinger(id);
   await r.undo();
   state.recent.delete(id);
   render();
@@ -5883,6 +5942,7 @@ function wireGlobal() {
     if (document.visibilityState === "hidden") {
       const t = $(".toast"); if (t && t._onExpire) expireToast(t);
       for (const key of Object.keys(state.foldSeen || {})) if (autoFold(key)) state.foldedAway = true;
+      if (state.linger.size) { lingerFlush(); state.foldedAway = true; } // back to an empty feed, not a grey one
       state.foldSeen = {};
       return;
     }
