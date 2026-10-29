@@ -12,9 +12,9 @@ Built like [Scales](https://github.com/grahamdeno/scales) and [Tabs](https://git
 
 ## Two builds
 
-**Shoebox** (the public app) is the feed and nothing else. Today opens on your posts: a save joins your pool as it's saved and comes back a few a day, each asking once for why you kept it, with Done, Later and Let go. Add is one field, why; title, note and a day to show it wait behind More. Settings is five panels and Help.
+**Shoebox** (the public app) is the feed and nothing else. Today opens on your posts: a save joins your pool as it's saved and comes back a few a day, asking why you kept it if you didn't say, with Done, Later and Let go. Add is one field, why; title, note and a day to show it wait behind More. Settings is five panels and Help.
 
-**Shoebox Me** (`?me=1` in the iPhone app) and **Settings › Help › Show everything** keep everything below: the morning cards, calendar, school posts, top stories, love and replies, samples, and the five-step Build my morning. Nothing is deleted; `full()` in `src/app.js` decides what is drawn and fetched.
+**Shoebox Me** (`?me=1` in the iPhone app) and **Settings › Help › Show everything** keep everything below: the morning cards, calendar, school posts, top stories, love and replies, samples, and the five-step Build my morning. Neither build has weather, sports scores or location any more (since web version 4.70). Nothing is deleted; `full()` in `src/app.js` decides what is drawn and fetched.
 
 ## How it works
 
@@ -52,9 +52,9 @@ When everything is settled, the end of Today shows what you cleared as a collage
 
 School posts have their own section, **From school**, on Today: every one you haven't marked Done or Not needed shows each day, soonest date first, and one whose date has passed leaves on its own. They're not in New, don't take one of today's six and don't count toward what's left. Calendar events work the same way (they can't be marked at all, and leave at midnight).
 
-**This morning.** At the top of Today: the weather for 28409 (now, high and low, rain chance, wind, sunrise and sunset, Wrightsville Beach tides) with the National Weather Service radar for Wilmington (or a camera picture you set); last night's Hurricanes and Capitals games with goal scorers and a highlights link; a Carl Jung quote, each with its source; *On this day*, something you saved a year, a month or a week ago; and three CPMAI practice questions (Sonnet writes them; tap an answer to see why). Each can be turned off in Settings › Mornings. Your calendar comes first on Today, above This morning; an event happening now is highlighted. The weather's × shrinks it to one line for the day (it isn't a task, so it never goes to Done). CPMAI gets a Done button once all three are answered, with your score and a running monthly total. A Jung quote can be kept (it becomes a quote post in your saves) or retired with Not for me.
+**This morning.** At the top of Today: a quote of the day (Carl Jung, or a person or theme you pick), each with its source; *On this day*, something you saved a year, a month or a week ago; and three CPMAI practice questions (Sonnet writes them; tap an answer to see why). Each can be turned off in Settings › Daily cards. Your calendar comes first on Today, above This morning; an event happening now is highlighted. CPMAI gets a Done button once all three are answered, with your score and a running monthly total. A Jung quote can be kept (it becomes a quote post in your saves) or retired with Not for me.
 
-**Apple.** With your Apple key in the relay: *Song of the day* (an iPhone Shortcut sends the library song you've gone longest without playing; Shoebox shows its artwork, a 30-second preview and Open in Apple Music) and Apple Weather for the weather card, with the next hour's rain. Setup in `relay/README.md`.
+**Apple.** With your Apple key in the relay: *Song of the day* (an iPhone Shortcut sends the library song you've gone longest without playing; Shoebox shows its artwork, a 30-second preview and Open in Apple Music). In the iPhone app it reads the phone's own library instead. Setup in `relay/README.md`.
 
 **Email in.** Forward any email to your Shoebox address and it becomes a post; school mail becomes school posts. The AI writes the post from the email (a headline, a few plain lines, any dates or to-dos, and the one link worth opening) rather than pasting it in; without AI, the post is the start of the email with forwarding headers, footers and tracking links taken out. The whole email, cleaned the same way, is under More. Needs a domain on Cloudflare (setup in `relay/README.md`).
 

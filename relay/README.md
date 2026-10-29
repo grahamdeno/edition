@@ -33,19 +33,18 @@ Forward any email to your own address (for example `shoebox@yourdomain.com`) and
 
 Mail waits at the relay for up to 30 days until Shoebox collects it, then it's deleted there.
 
-## Your Apple key (Song of the day, Apple Weather, Maps)
+## Your Apple key (Song of the day)
 
 The relay signs Apple's access tokens with your key. Its Key ID (79QU7DSTN9) and Team ID (7MHDTK68M2) are built in; only the key file itself is secret.
 
 1. In Cloudflare, open the Worker › **Settings** › **Variables and Secrets** › **Add**.
 2. Type **Secret**, name `APPLE_P8`, value: open your `AuthKey_79QU7DSTN9.p8` in a text editor and paste everything, including the BEGIN and END lines. Save.
-3. For Apple Weather, add a text variable `APPLE_WEATHER_SERVICE_ID` with your WeatherKit Services ID (for example `com.grahamdeno.shoebox.weather`). Until it's set, the weather card uses the free source.
-4. Deploy. In Shoebox, Settings › Relay › Save and test.
+3. Deploy. In Shoebox, Settings › Relay › Save and test.
 
 **Song of the day Shortcut** (Shortcuts app on your iPhone):
 
 1. New Shortcut › **Find Music** › Filter: *Play Count* is greater than 0 › Sort by *Last Played*, *Oldest First* › Limit 1.
-2. **Get Contents of URL**: your relay address + `/song`, Method **POST**, Header `x-song-key` = the Song key from Shoebox (Settings › Mornings), Request Body **JSON** with `title` = Music's *Name*, `artist` = *Artist*, `lastPlayed` = *Last Played*.
+2. **Get Contents of URL**: your relay address + `/song`, Method **POST**, Header `x-song-key` = the Song key from Shoebox (Settings › Daily cards), Request Body **JSON** with `title` = Music's *Name*, `artist` = *Artist*, `lastPlayed` = *Last Played*.
 3. Automation › **Time of Day** 6:00 AM, Daily › Run Immediately › run this Shortcut.
 
 ## Updating
@@ -67,5 +66,9 @@ The relay now makes every Claude call with Shoebox's own key, so the app never a
 - Secret `ANTHROPIC_API_KEY` (required for AI).
 - Optional variables: `AI_DEVICE_DAILY_CENTS` (per install per day, default 25), `AI_DAILY_CENTS` (whole relay per day, default 500), `AI_OWNER_DEVICES` (install ids with no per-install limit; the app shows its id in Settings › AI once it has used AI).
 - **AI is for the iPhone app.** The relay's AI answers only installs that proved themselves with Apple's App Attest (the iPhone app does this on its own) and the ids in `AI_OWNER_DEVICES`. The web app has no AI unless the browser is one of yours. `AI_ATTEST=off` opens AI to every existing install again, as an escape hatch.
+
+## Version 26
+
+Weather, NHL scores, the live camera finder and the MapKit token are gone (`/apple/weather`, `/nhl`, `/ai/cams`, `/apple/maps-token`). If the Worker has an `APPLE_WEATHER_SERVICE_ID` variable, it can be deleted.
 
 Updates deploy on their own from GitHub (`.github/workflows/relay.yml`) once the repo has `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` and the `SHOEBOX_KV_ID` variable.

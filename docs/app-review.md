@@ -1,5 +1,7 @@
 # Shoebox: App Review notes and privacy labels
 
+> **Before you press Submit on this release:** in App Store Connect › App Privacy, remove **Location › Coarse location**. Shoebox no longer asks for location. Then paste the new description from `app-store.md`.
+
 ## Notes for App Review (App Store Connect › App Review Information › Notes)
 
 Shoebox is a personal feed of things the user chooses to save: links, notes, photos, files and email they forward. Saved items come back a few at a time, and the feed ends when they're done. No account is needed.
@@ -8,13 +10,15 @@ The app is built on a web view of inmyshoebox.com, plus native features that onl
 
 1. **Share extension.** In Safari or any app, tap Share › Shoebox. The item appears at the top of Today.
 2. **Home Screen widget.** Long-press the Home Screen › + › Shoebox. It shows what's left today.
-3. **Calendar.** Settings › Calendar › This iPhone's calendars › On. Today's events appear in a day bar with free time. Events are read on the device and never leave it.
-4. **Apple Music library.** Settings › Daily cards › Song of the day › On. Shoebox picks a song from the user's library that they haven't played in a while (MediaPlayer). No subscription is needed. It opens in Music.
-5. **Files and iCloud Drive backups.** A backup is written to Files › On My iPhone › Shoebox › Backups each day, with a copy in iCloud Drive › Shoebox. Settings › Backup › Import restores it.
-6. **Local notifications.** When an item is set aside until a day (Later › This weekend), a reminder arrives that morning.
-7. **Location.** Settings › Weather › Use my location (when in use only) sets the weather place.
+3. **Files and iCloud Drive backups.** A backup is written to Files › On My iPhone › Shoebox › Backups each day, with a copy in iCloud Drive › Shoebox. Settings › Backup › Import restores it.
+4. **Local notifications.** When an item is set aside until a day (Later › This weekend), a reminder arrives that morning.
+5. **Optional extras (Settings › Help › Show everything › On):**
+   - **Calendar.** Settings › Calendar › This iPhone's calendars › On. Today's events appear in a day bar with free time. Events are read on the device and never leave it.
+   - **Apple Music library.** Settings › Daily cards › Song of the day › On. Shoebox picks a song from the user's library that they haven't played in a while (MediaPlayer). No subscription is needed. It opens in Music.
 
-To try it: open the app, tap Get started, follow the five steps, then tap + to save a note. Tap Later on a card to pick a day.
+Shoebox does not use location.
+
+To try it: open the app, tap Get started and answer the AI question, then tap + to save a note. It appears on Today. Tap Later on it to pick a day.
 
 AI features use Anthropic's Claude through Shoebox's own server, only after the user turns AI on. Nothing is used to train models.
 
@@ -33,9 +37,8 @@ Data not linked to you:
 | User Content | Photos | App functionality | Only photos the user adds, sent for AI only when AI is on; not kept. |
 | Usage Data | Product interaction | Analytics | Anonymous daily counts; can be turned off in Settings › Privacy. |
 | Diagnostics | Other diagnostic data | Analytics | Kinds of problem, counted; no details. |
-| Location | Coarse location | App functionality | Only when the user taps Use my location; used for weather, not kept. |
 | Identifiers | Device ID | App functionality | A random install number for the AI allowance; not linked to the person. |
 
-Not collected: contact info, health, financial info, browsing history, search history, contacts, purchases.
+Not collected: location, contact info, health, financial info, browsing history, search history, contacts, purchases.
 
 Calendar and Apple Music data are read on the device and never leave it, so they aren't listed.
