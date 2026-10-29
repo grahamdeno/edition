@@ -4,9 +4,9 @@ import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep
 
 const memStore = () => { const m = new Map(); return { getItem: (k) => m.get(k) ?? null, setItem: (k, v) => m.set(k, String(v)) }; };
 
-test("ten topic chips", () => {
-  assert.equal(TOPICS.length, 10);
-  assert.ok(TOPICS.includes("Local"));
+test("nine topic chips, none of them local", () => {
+  assert.equal(TOPICS.length, 9);
+  assert.ok(!TOPICS.includes("Local"));
 });
 
 test("followTopics adds chosen topics without lowering learned ones", () => {
@@ -22,11 +22,10 @@ test("followTopics adds chosen topics without lowering learned ones", () => {
 });
 
 test("withFollows gives a new person something to search for", () => {
-  const p = withFollows({ tags: {}, kept: [], dropped: [] }, { topics: { science: 3, local: 3, history: -1 } }, { place: "Wilmington" });
+  const p = withFollows({ tags: {}, kept: [], dropped: [] }, { topics: { science: 3, local: 3, history: -1 } });
   assert.equal(p.tags.science, 3);
-  assert.equal(p.tags["local news in Wilmington"], 3);
   assert.equal(p.tags.history, undefined);
-  assert.equal(p.tags.local, undefined);
+  assert.equal(p.tags.local, undefined, "a retired local topic adds nothing");
   const q = withFollows({ tags: { science: 2 } }, { topics: { science: 3, local: 3 } });
   assert.equal(q.tags.science, 5);
   assert.equal(Object.keys(q.tags).length, 1);
@@ -87,12 +86,12 @@ import { mixStories, followOrder } from "../src/onboard.js";
 test("shared stories mix one from each topic, strongest first, tagged by topic", () => {
   const lists = [
     { topic: "science", picks: [{ url: "a", tags: ["space"] }, { url: "b" }, { url: "c" }] },
-    { topic: "local:wilmington", picks: [{ url: "a" }, { url: "d" }] },
+    { topic: "health", picks: [{ url: "a" }, { url: "d" }] },
     { topic: "tech", picks: [] },
   ];
   const out = mixStories(lists, 3, new Set(["c"]));
   assert.deepEqual(out.map((p) => p.url), ["a", "d", "b"]);
   assert.deepEqual(out[0].tags, ["science", "space"]);
-  assert.deepEqual(out[1].tags, ["local"]);
+  assert.deepEqual(out[1].tags, ["health"]);
   assert.deepEqual(followOrder({ topics: { tech: 3, science: 4.5, rust: 9, sports: -1 } }), ["science", "tech"]);
 });

@@ -8,7 +8,7 @@
  */
 
 /** The topic chips in Build my morning. Each becomes a followed topic for top stories. */
-export const TOPICS = ["World", "US", "Tech", "Science", "Business", "Sports", "History", "Health", "Arts", "Local"];
+export const TOPICS = ["World", "US", "Tech", "Science", "Business", "Sports", "History", "Health", "Arts"];
 
 /** How much a chosen topic weighs, next to what finishing a suggestion teaches (+1.5). */
 export const FOLLOW_WEIGHT = 3;
@@ -38,14 +38,12 @@ export function followedTopics(suggest) {
 /**
  * The interest profile top stories search from, with followed topics added.
  * A new person has no saves yet, so without this there is nothing to search for.
- * "local" becomes news near their weather place, when there is one.
  */
-export function withFollows(profile, suggest, { place = "" } = {}) {
+export function withFollows(profile, suggest) {
   const tags = { ...(profile?.tags || {}) };
   for (const [k, v] of Object.entries(suggest?.topics || {})) {
-    if (!(v > 0)) continue;
-    const name = k === "local" ? (place ? `local news in ${place}` : "") : k;
-    if (name) tags[name] = (tags[name] || 0) + v;
+    if (!(v > 0) || k === "local") continue; // "local" was a topic when Shoebox knew your town; it's retired
+    tags[k] = (tags[k] || 0) + v;
   }
   return { ...profile, tags };
 }
@@ -121,8 +119,7 @@ export function mixStories(lists, count = 3, known = new Set()) {
         const p = q.picks.shift();
         if (!p?.url || seen.has(p.url)) continue;
         seen.add(p.url);
-        const tag = q.topic.startsWith("local") ? "local" : q.topic;
-        out.push({ ...p, tags: [...new Set([tag, ...(p.tags || [])])].slice(0, 3) });
+        out.push({ ...p, tags: [...new Set([q.topic, ...(p.tags || [])])].slice(0, 3) });
         break;
       }
       if (out.length >= count) break;
