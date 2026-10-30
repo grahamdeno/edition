@@ -67,6 +67,10 @@ The relay now makes every Claude call with Shoebox's own key, so the app never a
 - Optional variables: `AI_DEVICE_DAILY_CENTS` (per install per day, default 25), `AI_DAILY_CENTS` (whole relay per day, default 500), `AI_OWNER_DEVICES` (install ids with no per-install limit; the app shows its id in Settings › AI once it has used AI).
 - **AI is for the iPhone app.** The relay's AI answers only installs that proved themselves with Apple's App Attest (the iPhone app does this on its own) and the ids in `AI_OWNER_DEVICES`. The web app has no AI unless the browser is one of yours. `AI_ATTEST=off` opens AI to every existing install again, as an escape hatch.
 
+## Version 27
+
+Quote of the day is gone (`/ai/quotes`).
+
 ## Version 26
 
 Weather, NHL scores, the live camera finder and the MapKit token are gone (`/apple/weather`, `/nhl`, `/ai/cams`, `/apple/maps-token`). If the Worker has an `APPLE_WEATHER_SERVICE_ID` variable, it can be deleted.

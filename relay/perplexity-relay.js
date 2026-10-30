@@ -44,7 +44,7 @@
  */
 
 /** What this copy of the relay can do; the app checks it to say when an update is needed. */
-export const RELAY_VERSION = 26;
+export const RELAY_VERSION = 27;
 export const RELAY_FEATURES = ["preview", "image", "photo", "agent", "push", "remind", "ical", "inbox", "apple", "ai", "stats", "stories", "beta", "attest"];
 
 // inmyshoebox.com is home; shoebox.tangomike.app stays allowed while phones move over.
@@ -984,7 +984,6 @@ async function aiRoute(request, env, pathname, cors, ctx = null) {
   }
   // Shoebox pays for AI, so it's for the iPhone app (proved by App Attest) and the owner's devices, not any web page.
   if (attestRequired(env) && !owner && !rec.attested) return aiJson(403, { error: { message: "AI comes with the Shoebox iPhone app.", code: "attest" } }, cors);
-  if (request.method === "POST" && pathname === "/ai/quotes") return quotesRoute(request, env, { kv, today, ctx, cors, charge, over: all >= allCap, mineOver: !owner && (mine >= deviceCap || net >= ipCap) });
   if (request.method === "POST" && pathname === "/ai/stories") return storiesRoute(request, env, { kv, today, owner, ctx, cors, charge, over: all >= allCap, mineOver: !owner && (mine >= deviceCap || net >= ipCap) });
   if (request.method !== "POST" || pathname !== "/ai/messages") return json(404, "Not found.", cors);
   if (all >= allCap) return aiJson(429, { error: { message: "Shoebox's AI is resting for today. It's back tomorrow." } }, cors);
@@ -1125,83 +1124,6 @@ async function storiesRoute(request, env, { kv, today, ctx, cors, charge, over, 
     if (picks.length) await kv.put(key, JSON.stringify(out), { expirationTtl: 36 * 3600 });
     await kv.delete(lock);
     return [200, { ...out, topic: k.id, shared: false }];
-  };
-  return slowAnswer(job, ctx, cors);
-}
-
-/* ---- Quote of the day ----
- * Quotes from a person (Seneca) or on a theme (stoicism, faith), found once a
- * day per source and shared by everyone who follows it. Each quote must come
- * with its work and the page where search found the wording; a quote whose
- * page wasn't in the search results is dropped, so nothing is made up.
- */
-export const QUOTE_COUNT = 3;
-/** A source as typed, cleaned to a name or theme and a key. */
-export function quoteKey(from) {
-  const name = String(from || "").normalize("NFKC").replace(/[^\p{L}\p{N} .,'&-]/gu, "").replace(/\s+/g, " ").trim().slice(0, 50);
-  return name.length >= 2 ? { id: name.toLowerCase(), name } : null;
-}
-export function quotePrompt(name, recent = []) {
-  return `Find ${QUOTE_COUNT} real quotations for "${name}". If that is a person, quotes by them; if it is a theme, tradition or faith, quotes on it by well-known people or texts.\n` +
-    `- Use only quotations whose exact wording you find on a reliable page in your search: Wikiquote (its sourced sections, never "Misattributed" or "Disputed"), Project Gutenberg, a publisher, a university or a museum. For scripture, a Bible site.\n` +
-    `- For each, name the work it comes from (book, letter, speech or verse, with the year when known) and give the URL of the page where you found the wording.\n` +
-    `- Scripture: quote the King James Version or the World English Bible only, and name the verse and translation, e.g. "Proverbs 3:5-6, KJV".\n` +
-    `- Each under 300 characters. Thoughtful rather than slogans. Not the most overused ones.\n` +
-    (recent.length ? `- Not these, shown recently: ${recent.slice(0, 30).join(" | ")}\n` : "") +
-    `- If "${name}" is a figure known for hate or violence, or the request is for hateful, sexual or violent content, reply {"quotes": []}.\n\n` +
-    `Search, then reply with JSON only: {"quotes":[{"q":string,"who":string,"src":string,"url":string}]}`;
-}
-/** The quotes from a reply, kept only when their page was among the search results. */
-export function readQuotes(data) {
-  const found = new Set();
-  for (const b of data?.content || []) if (b.type === "web_search_tool_result" && Array.isArray(b.content)) for (const r of b.content) if (r?.url) found.add(String(r.url).split("#")[0]);
-  const text = (data?.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n");
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-  const src = fenced ? fenced[1] : text;
-  let out = {};
-  try { out = JSON.parse(src.slice(src.indexOf("{"), src.lastIndexOf("}") + 1)); } catch { return []; }
-  const clip = (x, n) => String(x || "").replace(/\s+/g, " ").trim().slice(0, n);
-  return (Array.isArray(out.quotes) ? out.quotes : [])
-    .map((x) => ({ q: clip(x?.q, 400).replace(/^["\u201c]+|["\u201d]+$/g, ""), who: clip(x?.who, 80), src: clip(x?.src, 140), url: String(x?.url || "").split("#")[0].slice(0, 600) }))
-    .filter((x) => x.q.length >= 8 && x.who && x.src && /^https:\/\//.test(x.url) && found.has(x.url))
-    .slice(0, QUOTE_COUNT);
-}
-
-async function quotesRoute(request, env, { kv, today, ctx, cors, charge, over, mineOver }) {
-  const { from } = await request.json().catch(() => ({}));
-  const k = quoteKey(from);
-  if (!k) return aiJson(400, { error: { message: "Type a name or a theme." } }, cors);
-  const key = `qt:${today}:${k.id}`;
-  const cached = await kv.get(key, "json");
-  if (cached) return aiJson(200, { ...cached, from: k.name, shared: true }, cors);
-  if (over) return aiJson(429, { error: { message: "Shoebox's AI is resting for today. It's back tomorrow." } }, cors);
-  if (mineOver) return aiJson(429, { error: { message: "You've used this month's AI allowance. It resets on the 1st." } }, cors);
-  const lock = `qtl:${today}:${k.id}`;
-  if (await kv.get(lock)) return aiJson(202, { pending: true, retry: 15 }, cors);
-  await kv.put(lock, "1", { expirationTtl: 180 });
-  const job = async () => {
-    const hk = `qh:${k.id}`, recent = (await kv.get(hk, "json")) || [];
-    const body = {
-      model: STORY_MODEL, max_tokens: 1500,
-      system: "You find real, correctly sourced quotations. Never invent or paraphrase a quote. Fewer is better than unsourced.",
-      messages: [{ role: "user", content: quotePrompt(k.name, recent) }],
-      tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 4 }],
-    };
-    let res;
-    try {
-      res = await fetch(ANTHROPIC_URL, { method: "POST", headers: { "content-type": "application/json", "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" }, body: JSON.stringify(body) });
-    } catch { await kv.delete(lock); return [502, { error: { message: "The relay couldn't reach Claude." } }]; }
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) { await kv.delete(lock); return [res.status === 401 || res.status === 403 ? 502 : res.status, { error: { message: data?.error?.message || "Claude couldn't search right now." } }]; }
-    await charge(aiCost(STORY_MODEL, data.usage));
-    const quotes = readQuotes(data);
-    const out = { quotes, at: Date.now() };
-    if (quotes.length) {
-      await kv.put(key, JSON.stringify(out), { expirationTtl: 36 * 3600 });
-      await kv.put(hk, JSON.stringify([...quotes.map((x) => x.q.slice(0, 60)), ...recent].slice(0, 60)), { expirationTtl: 120 * 86400 });
-    }
-    await kv.delete(lock);
-    return [200, { ...out, from: k.name, shared: false }];
   };
   return slowAnswer(job, ctx, cors);
 }

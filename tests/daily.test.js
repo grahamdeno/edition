@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { onThisDay, jungFor, JUNG } from "../src/daily.js";
+import { onThisDay } from "../src/daily.js";
 
 test("on this day prefers a year ago, then a month, then a week", () => {
   const now = new Date(2026, 9, 26, 8).getTime();
@@ -15,10 +15,4 @@ test("on this day prefers a year ago, then a month, then a week", () => {
   assert.equal(onThisDay(items.slice(0, 2), now).label, "A month ago today");
   assert.equal(onThisDay(items.slice(0, 1), now).label, "A week ago today");
   assert.equal(onThisDay([], now), null);
-});
-
-test("a Jung quote each day, with its source", () => {
-  const a = jungFor(new Date(2026, 9, 26).getTime()), b = jungFor(new Date(2026, 9, 27).getTime());
-  assert.notEqual(a.q, b.q);
-  assert.ok(JUNG.every((j) => j.q && j.src));
 });

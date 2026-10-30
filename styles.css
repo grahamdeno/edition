@@ -794,12 +794,11 @@ details.group[open] { padding-bottom: 14px; }
 /* A sheet's parts keep their size; when they don't fit, the sheet scrolls (iOS would otherwise squeeze them). */
 
 /* The Save bar runs edge to edge (it's meant to be wider than the sheet's padding) and sits above the home bar. */
-/* This morning: Jung, On this day, CPMAI, the song */
+/* This morning: On this day, CPMAI, the song */
 .post.daily { padding-bottom: 16px; }
 .av-day { display: grid; place-items: center; background: var(--sig-soft); color: var(--sig-ink); font: 600 0.9rem var(--sans); box-shadow: none; }
 .av-day .i { width: 58%; height: 58%; }
 .wx-line { margin: 4px 0 0; color: var(--muted); font-size: 0.875rem; }
-.jung-q { margin: 4px 0 0; font: 400 1.35rem/1.3 var(--serif); color: var(--fg); }
 .otd-card { display: flex; gap: 12px; align-items: center; width: 100%; margin-top: 6px; padding: 10px; border-radius: 14px; border: 1px solid var(--line-2); background: var(--panel); text-align: left; }
 .otd-pic { flex: none; width: 64px; height: 64px; border-radius: 10px; overflow: hidden; background: var(--soft); }
 .otd-pic img { width: 100%; height: 100%; object-fit: cover; display: block; }
@@ -853,7 +852,7 @@ details.group[open] { padding-bottom: 14px; }
 @media (prefers-reduced-motion: reduce) { .disc-play .ring .fill { transition: none; } }
 .post.daily .rail { align-self: start; }
 
-/* Morning cards: one-line notes, finished quiz, Jung buttons, live event */
+/* Morning cards: one-line notes, finished quiz, live event */
 .wx-mini { display: flex; align-items: center; gap: 10px; margin: 0 var(--gutter-r) 0 var(--gutter-l); padding: 10px 0; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 0.9rem; }
 .wx-mini > span:nth-child(2) { flex: 1; min-width: 0; }
 .wx-ic-s { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; background: var(--sig-soft); color: var(--sig-ink); font-weight: 600; font-size: 0.75rem; flex: none; }
@@ -1089,9 +1088,6 @@ details.adv > summary, .group details.adv > summary, .ag-more summary { min-heig
 
 /* While typing, the "More below" pill would sit on the field: hide it. */
 .kb .more-hint, .kb .sheet.more-below .sheet-foot::before { display: none !important; }
-/* Quote of the day */
-.q-src { margin-left: 4px; color: var(--sig-ink); font-weight: 600; text-underline-offset: 3px; }
-.q-from .q-picks { margin-top: 10px; gap: 8px; }
 /* Morning cards done for today: one line of chips under This morning */
 .fold-row { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px var(--gutter-r) 14px var(--gutter-l); border-bottom: 1px solid var(--line); }
 .fold-chip { display: inline-flex; align-items: center; gap: 6px; min-height: 40px; color: var(--muted); }

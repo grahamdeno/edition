@@ -42,7 +42,7 @@ import { track, trackError, sendReport, statsOn, setStatsOn } from "./stats.js";
 import * as songs from "./songs.js";
 import { TOPICS, followTopics, followedTopics, withFollows, makeCoach, shareStep, pickTip, tipDone, mixStories, followOrder } from "./onboard.js";
 
-export const VERSION = "4.70.0";
+export const VERSION = "4.71.0";
 const APP = "Shoebox";
 const noteError = (e, opts = {}) => { trackError(opts.where || "other"); return logError(e, { ...opts, version: VERSION }); };
 
@@ -207,9 +207,32 @@ function dropWeatherAndSports() {
   } catch { /* storage blocked: nothing to clean */ }
 }
 
+/**
+ * Quote of the day was taken out. Once per phone, drop its setting, its cached quotes and the lists of
+ * quotes you said weren't for you. Quotes you kept stay in your saves.
+ */
+function dropQuoteOfDay() {
+  try {
+    if (localStorage.getItem("edition.qodGone") === "1") return;
+    const m = JSON.parse(localStorage.getItem(MORNING_KEY) || "null");
+    if (m && typeof m === "object") { for (const k of ["quote", "quoteFrom", "jung"]) delete m[k]; localStorage.setItem(MORNING_KEY, JSON.stringify(m)); }
+    const c = JSON.parse(localStorage.getItem(MORNING_CACHE) || "null");
+    if (c && typeof c === "object") {
+      for (const k of ["quotes", "quotesTried", "jungDone"]) delete c[k];
+      if (c.folded) delete c.folded.quote;
+      if (c.unfolded) delete c.unfolded.quote;
+      localStorage.setItem(MORNING_CACHE, JSON.stringify(c));
+    }
+    localStorage.removeItem("edition.quoteRetired");
+    localStorage.removeItem("edition.jungRetired");
+    localStorage.setItem("edition.qodGone", "1");
+  } catch { /* storage blocked: nothing to clean */ }
+}
+
 async function boot() {
   const movedNote = await restoreAfterMove();
   dropWeatherAndSports();
+  dropQuoteOfDay();
   sealMeSettings();
   const migrated = await db.migrateFromLocalStorage(migrateLegacy).catch(() => 0);
   ai.migrateAiSettings();
@@ -1261,7 +1284,7 @@ function goAway(id) {
 function lingerFlush() { for (const id of [...state.linger.keys()]) stopLinger(id); }
 
 /* ================= This morning =================
- * The daily set at the top of Today: a quote, On this day, a song,
+ * The daily set at the top of Today: On this day, a song,
  * and CPMAI practice. Each
  * can be turned off in Settings › Mornings. Read fresh each day; never saved.
  */
@@ -1303,18 +1326,16 @@ async function keepAddress() {
     if (res.ok && d.address) localStorage.setItem("edition.inboxAddress", d.address);
   } catch { /* next launch */ }
 }
-/** Modules that only Shoebox Me shows: a quote set, a one-library song. */
+/** Modules that only Shoebox Me shows: a one-library song. */
 const PERSONAL_MODULES = ["song"];
-const MORNING_PUBLIC = { otd: true, study: false, studyTopic: "", jung: false, song: false, quote: false, quoteFrom: "" };
+const MORNING_PUBLIC = { otd: true, study: false, studyTopic: "", song: false };
 // Shoebox Me's own choices live on its phone (written there once by sealMeSettings); only the modules are switched on here.
-const MORNING_ME = { ...MORNING_PUBLIC, song: true, quote: true, quoteFrom: "Carl Jung" };
+const MORNING_ME = { ...MORNING_PUBLIC, song: true };
 function morningSettings() {
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem(MORNING_KEY) || "{}") || {}; } catch { /* storage blocked */ }
   // Earlier versions had a CPMAI switch; it's now a study deck on that topic.
   if (saved.cpmai !== undefined && saved.study === undefined) { saved.study = saved.cpmai; saved.studyTopic = saved.studyTopic || "PMI-CPMAI"; }
-  // The Jung card became Quote of the day; whoever had it on keeps Jung.
-  if (saved.jung !== undefined && saved.quote === undefined) { saved.quote = saved.jung; saved.quoteFrom = saved.quoteFrom || "Carl Jung"; }
   const m = { ...(personal() ? MORNING_ME : MORNING_PUBLIC), ...saved };
   // Song of the day is for everyone in the iPhone app (from the phone's own library); otherwise only in Shoebox Me.
   if (!personal()) for (const k of PERSONAL_MODULES) if (!(k === "song" && nativeCan("music"))) m[k] = false;
@@ -1441,15 +1462,6 @@ async function loadMorning() {
         } else { try { localStorage.setItem("edition.songErr", d?.error?.message || `The relay said ${r.status}.`); } catch { /* full */ } }
       } catch (e) { noteError(e, { quiet: true, where: "song of the day" }); }
     }
-    if (c.quotes && c.quotes.from !== m.quoteFrom) { delete c.quotes; delete c.quotesTried; changed = true; }
-    if (m.quote && m.quoteFrom && !isJung(m.quoteFrom) && ai.settings.enabled() && !c.quotes && !c.quotesTried) {
-      c.quotesTried = true;
-      try {
-        const list = await withTimeout(ai.dailyQuotes(m.quoteFrom), 90000);
-        if (list.length) c.quotes = { from: m.quoteFrom, list, i: 0 };
-      } catch (e) { noteError(e, { quiet: true, where: "quotes" }); }
-      changed = true;
-    }
     if (c.cpmai && c.cpmaiTopic !== m.studyTopic) { delete c.cpmai; delete c.cpmaiTried; changed = true; }
     if (m.study && m.studyTopic && ai.settings.enabled() && !c.cpmai && !c.cpmaiTried) {
       c.cpmaiTried = true;
@@ -1501,41 +1513,6 @@ function morningHtml() {
     cards.push(card("song", `<span class="av av-day" aria-hidden="true">${I.music}</span>`, `<span class="who">Song of the day</span>${cardMore("cards", "Daily cards")}`,
       songCard({ art: mt.artwork, title: mt.name || sg.title, artist: mt.artist || sg.artist, year: mt.year, when: Number.isFinite(t) ? t : 0, preview: mt.preview, url: mt.url, tint: sg.tint }), { key: "song", label: mt.name || sg.title, btn: "Listened" }));
   }
-  if (m.quote && isJung(m.quoteFrom)) {
-    // Carl Jung: the hand-picked set, on the phone, no AI needed.
-    const j = daily.jungFor(Date.now(), jungRetired());
-    if (j && c.jungDone !== j.index) {
-      const kept = state.items.some((i) => i.jung === j.index);
-      cards.push(card("quote", `<span class="av av-day" aria-hidden="true">${I.quote}</span>`, `<span class="who">Quote of the day</span>${cardMore("cards", "Daily cards")}`,
-        `<blockquote class="jung-q">${esc(j.q)}</blockquote><p class="wx-line">Carl Jung, ${esc(j.src)}</p>
-         <div class="acts"><span class="grow"></span>
-           <button class="act" type="button" data-day="jung-no:${j.index}">${I.letGo}<span>Not for me</span></button>
-           <button class="act done" type="button" data-day="jung-keep:${j.index}" ${kept ? "disabled" : ""}>${I.keep}<span>${kept ? "Kept" : "Keep"}</span></button></div>`));
-    } else if (j && c.jungDone === j.index) {
-      cards.push(`<div class="wx-mini"><span class="wx-ic-s" aria-hidden="true">${I.quote}</span><span>${state.items.some((i) => i.jung === j.index) ? "Today's quote is in your saves." : "Quote cleared for today."}</span></div>`);
-    }
-  } else if (m.quote && m.quoteFrom) {
-    const qs = c.quotes?.list || [], gone = quoteRetired();
-    let i = c.quotes?.i || 0;
-    while (i < qs.length && gone.includes(quoteId(qs[i]))) i++;
-    const qt = qs[i];
-    if (qt && !c.quotes.done) {
-      const kept = state.items.some((x) => x.quoteId === quoteId(qt));
-      cards.push(card("quote", `<span class="av av-day" aria-hidden="true">${I.quote}</span>`, `<span class="who">Quote of the day</span>${cardMore("cards", "Daily cards")}`,
-        `<blockquote class="jung-q">${esc(qt.q)}</blockquote>
-         <p class="wx-line">${esc(qt.who)}, ${esc(qt.src)} <a class="q-src" href="${esc(qt.url)}" target="_blank" rel="noopener">Source</a></p>
-         <div class="acts"><span class="grow"></span>
-           <button class="act" type="button" data-day="quote-no:${i}">${I.letGo}<span>Not for me</span></button>
-           <button class="act done" type="button" data-day="quote-keep:${i}" ${kept ? "disabled" : ""}>${I.keep}<span>${kept ? "Kept" : "Keep"}</span></button></div>`));
-    } else if (qt && c.quotes.done) {
-      cards.push(`<div class="wx-mini"><span class="wx-ic-s" aria-hidden="true">${I.quote}</span><span>${state.items.some((x) => x.quoteId === quoteId(qt)) ? "Today's quote is in your saves." : "Quote cleared for today."}</span></div>`);
-    } else if (!ai.settings.enabled()) {
-      cards.push(`<div class="wx-mini"><span class="wx-ic-s" aria-hidden="true">${I.quote}</span><span>Quotes from ${esc(m.quoteFrom)} start when AI is on.</span><button class="btn sm" type="button" data-panel="ai">Turn on</button></div>`);
-    } else if (c.quotesTried && !qs.length) {
-      cards.push(`<div class="wx-mini"><span class="wx-ic-s" aria-hidden="true">${I.quote}</span><span>No checked quotes from ${esc(m.quoteFrom)} today. Shoebox looks again tomorrow.</span></div>`);
-    }
-  }
-
   if (m.otd) {
     const o = daily.onThisDay(state.items);
     if (o) {
@@ -1575,7 +1552,7 @@ function morningHtml() {
   return shown.length ? sectionHead(h < 5 || h >= 17 ? "This evening" : h < 12 ? "This morning" : "This afternoon") + shown.join("") : "";
 }
 
-/* The morning cards' own buttons: finish CPMAI, keep or retire a Jung quote. */
+/* The morning cards' own buttons: finish CPMAI, fold or unfold a card. */
 /*
  * On/off settings are switches. They're still drawn as two buttons (On, Off or Show, Hide) so every
  * panel's own handler keeps working; this turns each such pair into one switch you tap or press Space on.
@@ -1642,11 +1619,6 @@ function watchFoldCards() {
   }, { threshold: [0, 0.6] });
   document.querySelectorAll('#panel [data-fold]:not([data-fold="song"])').forEach((el) => foldSeen.observe(el));
 }
-const isJung = (from) => /^\s*(carl\s+(gustav\s+)?)?jung\s*$/i.test(String(from || ""));
-/** A quote's id: its first words, so "Not for me" and Keep follow it across days. */
-const quoteId = (q) => String(q?.q || "").toLowerCase().replace(/[^a-z0-9 ]/g, "").replace(/\s+/g, " ").trim().slice(0, 60);
-const quoteRetired = () => { try { return JSON.parse(localStorage.getItem("edition.quoteRetired") || "[]"); } catch { return []; } };
-const jungRetired = () => { try { return JSON.parse(localStorage.getItem("edition.jungRetired") || "[]"); } catch { return []; } };
 function cpmaiScore(now = Date.now()) {
   try {
     const all = JSON.parse(localStorage.getItem("edition.cpmaiScores") || "{}"), month = dayKey(now).slice(0, 7);
@@ -1669,36 +1641,6 @@ async function dayAction(what) {
   } else if (act === "cq-show" && c.cpmai) c.cpmai.done = false;
   else if (act === "fold") { foldCard(c, arg); live("Done for today."); }
   else if (act === "unfold") { if (c.folded) delete c.folded[arg]; c.unfolded = { ...(c.unfolded || {}), [arg]: true }; }
-  else if (act === "jung-keep") {
-    const j = daily.JUNG[+arg];
-    if (j && !state.items.some((i) => i.jung === +arg)) {
-      const item = createItem({ kind: KIND.QUOTE, text: j.q, author: "Carl Jung", title: j.q.slice(0, 140) }, { id: db.newId(), source: "jung" });
-      Object.assign(item, { jung: +arg, note: j.src, status: STATUS.QUEUED, queuedAt: Date.now(), tags: ["jung", "psychology"], enrichedAt: Date.now() });
-      await saveItem(item);
-      toast("Kept. It's in your saves and can come back as one of your six.");
-    }
-    c.jungDone = +arg; tick(true);
-  } else if (act === "quote-keep" && c.quotes) {
-    const qt = c.quotes.list[+arg];
-    if (qt && !state.items.some((x) => x.quoteId === quoteId(qt))) {
-      const item = createItem({ kind: KIND.QUOTE, text: qt.q, author: qt.who, title: qt.q.slice(0, 140) }, { id: db.newId(), source: "quote" });
-      Object.assign(item, { quoteId: quoteId(qt), note: qt.src, url: qt.url, status: STATUS.QUEUED, queuedAt: Date.now(), tags: ["quotes"], enrichedAt: Date.now() });
-      await saveItem(item);
-      toast("Kept. It's in your saves and can come back as one of your six.");
-    }
-    c.quotes.i = +arg; c.quotes.done = true; tick(true);
-  } else if (act === "quote-no" && c.quotes) {
-    const qt = c.quotes.list[+arg];
-    try { const r = quoteRetired(); if (qt && !r.includes(quoteId(qt))) r.push(quoteId(qt)); localStorage.setItem("edition.quoteRetired", JSON.stringify(r.slice(-300))); } catch { /* full */ }
-    // The next of today's quotes, if there is one; otherwise done for today.
-    c.quotes.i = +arg + 1;
-    if (c.quotes.i >= c.quotes.list.length) c.quotes.done = true;
-    live("That one won't come back.");
-  } else if (act === "jung-no") {
-    try { const r = jungRetired(); if (!r.includes(+arg)) r.push(+arg); localStorage.setItem("edition.jungRetired", JSON.stringify(r)); } catch { /* full */ }
-    c.jungDone = +arg;
-    live("That one won't come back.");
-  }
   saveMorningCache(c);
   render({ top: false });
 }
@@ -4924,7 +4866,7 @@ function openSettings(panel = "", { fromCard = false } = {}) {
   const mailOn = (() => { try { return Boolean(localStorage.getItem("edition.inboxAddress")); } catch { return false; } })();
   const mailPick = (() => { try { return localStorage.getItem("edition.inboxPick") || ""; } catch { return ""; } })();
   const calShown = [...new Set((calCache()?.events || []).map((e) => calName(e.calendar, "Calendar")))].filter((n) => !calHidden().includes(n));
-  const cardsOn = ["otd", "quote", ...(me || nativeCan("music") ? ["song"] : [])].filter((k) => m[k]).length;
+  const cardsOn = ["otd", ...(me || nativeCan("music") ? ["song"] : [])].filter((k) => m[k]).length;
   const P = {
     you: { title: "You", value: { system: "Phone look", light: "Light", dark: "Dark" }[themeChoice()], body: `
       <div class="group">
@@ -4980,11 +4922,6 @@ function openSettings(panel = "", { fromCard = false } = {}) {
         <div class="seg" role="group" aria-label="When I'm done with a card"><button type="button" data-done-mode="fold" aria-pressed="${m.doneMode !== "hide"}">Fold</button><button type="button" data-done-mode="hide" aria-pressed="${m.doneMode === "hide"}">Hide</button></div></div>
       ${onOff("doneAuto", "Fold by itself once I've seen it", m.doneAuto !== false)}
       <p class="note">Song, scores and On this day each get a Listened or Seen it button. Folded cards wait in one line under This morning; tap one to see it again. Hide takes them away until tomorrow. Everything opens fresh each morning.</p>
-      ${onOff("quote", "Quote of the day", m.quote)}
-      <div class="field q-from" ${m.quote ? "" : "hidden"}><label for="set-q-from">Quotes from <span class="hint">(a person or a theme)</span></label>
-        <div class="mail-pick"><input id="set-q-from" type="text" autocomplete="off" maxlength="50" placeholder="Seneca, stoicism, faith…" value="${esc(m.quoteFrom || "")}"><button class="btn sm" type="button" id="set-q-save">Use</button></div>
-        <div class="chips wrap q-picks">${["Stoicism", "Motivation", "Faith", "Leadership", "Poetry", "Carl Jung"].map((t) => `<button class="chip" type="button" data-q-pick="${t}" aria-pressed="${(m.quoteFrom || "").toLowerCase() === t.toLowerCase()}">${t}</button>`).join("")}</div>
-        <p class="note">Every quote comes with where it's from, checked against a real source. Carl Jung works without AI; anything else needs AI on.</p></div>
       ${me ? `${nativeCan("music") ? "" : `<h3 class="sub">Song of the day: your Shortcut</h3>
       ${(() => {
         const got = (k) => { try { return localStorage.getItem(k) || ""; } catch { return ""; } };
@@ -5193,7 +5130,6 @@ function openSettings(panel = "", { fromCard = false } = {}) {
       }).catch(() => {});
     }
     wrap.querySelectorAll(`[data-mo^="${k}:"]`).forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
-    if (k === "quote") { const f = $(".q-from", wrap); if (f) f.hidden = on !== "1"; if (on === "1" && !morningSettings().quoteFrom) $("#set-q-from", wrap)?.focus(); }
     render({ top: false });
     loadMorning();
   }));
@@ -5202,20 +5138,6 @@ function openSettings(panel = "", { fromCard = false } = {}) {
     wrap.querySelectorAll("[data-done-mode]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
     render({ top: false });
   }));
-  const useQuoteFrom = (from) => {
-    const v = String(from || "").trim().slice(0, 50);
-    if (!v) { affirm($("#set-more-st", wrap), "Type a person or a theme.", true); return; }
-    setMorningSettings({ ...morningSettings(), quote: true, quoteFrom: v });
-    const c = morningCache(); delete c.quotes; delete c.quotesTried; delete c.jungDone; saveMorningCache(c);
-    $("#set-q-from", wrap).value = v;
-    wrap.querySelectorAll("[data-q-pick]").forEach((x) => x.setAttribute("aria-pressed", String(x.dataset.qPick.toLowerCase() === v.toLowerCase())));
-    affirm($("#set-more-st", wrap), isJung(v) || ai.settings.enabled() ? `Quotes from ${v}, starting today.` : `Saved. Turn on AI in Settings › AI for quotes from ${v}.`);
-    render({ top: false });
-    loadMorning();
-  };
-  $("#set-q-save", wrap)?.addEventListener("click", () => useQuoteFrom($("#set-q-from", wrap).value));
-  $("#set-q-from", wrap)?.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); useQuoteFrom(e.target.value); } });
-  wrap.querySelectorAll("[data-q-pick]").forEach((b) => b.addEventListener("click", () => useQuoteFrom(b.dataset.qPick)));
   $("#set-study-save", wrap)?.addEventListener("click", () => {
     const topic = $("#set-study-topic", wrap).value.trim().slice(0, 80);
     setMorningSettings({ ...morningSettings(), studyTopic: topic, study: Boolean(topic) });
