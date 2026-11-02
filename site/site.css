@@ -253,3 +253,8 @@ form .btn { margin-top: 8px; }
   .foot .made { margin-left: 0; }
 }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; transition: none !important; animation: none !important; } }
+
+/* real screenshots in the phone frame */
+.phone.shot { aspect-ratio: 1206 / 2622; padding: 8px; }
+.phone.shot .scr { background: var(--night); }
+.phone.shot img { width: 100%; height: 100%; object-fit: cover; display: block; }
