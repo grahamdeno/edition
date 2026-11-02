@@ -2,48 +2,70 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Shoebox Privacy</title>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<link rel="icon" href="icons/favicon.svg" type="image/svg+xml">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif&family=Geist:wght@400;600&display=swap">
+<title>Shoebox Privacy</title>
+<meta name="description" content="What Shoebox for iPhone keeps, what leaves your phone and why. No account, no ads, no tracking.">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#FFF6E9" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#2F2036" media="(prefers-color-scheme: dark)">
+<link rel="canonical" href="https://inmyshoebox.com/privacy">
+<meta property="og:title" content="Shoebox Privacy">
+<meta property="og:description" content="What Shoebox for iPhone keeps, what leaves your phone and why. No account, no ads, no tracking.">
+<meta property="og:image" content="https://inmyshoebox.com/site/og.png">
+<meta property="og:url" content="https://inmyshoebox.com/privacy">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="site/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="site/apple-touch-icon.png">
 <link rel="stylesheet" href="site/site.css">
 </head>
 <body>
-<header class="doc-top"><div class="wrap bar">
-  <a class="mark" href="welcome" aria-label="Shoebox home"><svg aria-hidden="true" viewBox="0 0 64 64"><rect width="64" height="64" rx="14.5" fill="#7B3FF2"/><svg x="10" y="9" width="44" height="44" viewBox="0 0 64 64" overflow="visible"><rect x="10.5" y="20" width="9" height="16" rx="2" fill="#E2D4FF"/><rect x="21.5" y="16.5" width="10" height="19.5" rx="2" fill="#E2D4FF"/><rect x="33.5" y="19" width="9" height="17" rx="2" fill="#E2D4FF"/><path d="M5 31h54v19a5 5 0 0 1-5 5H10a5 5 0 0 1-5-5z" fill="#FFF7DA"/><g transform="rotate(-16 6 26)"><rect x="3" y="17" width="58" height="10" rx="3" fill="#FFD23F"/></g></svg></svg>Shoebox</a>
-  <a class="open" href="./?app=1">Open Shoebox</a>
-</div><div class="lidline"></div></header>
+<header class="top doc-top"><div class="wrap bar">
+  <a class="mark" href="welcome" aria-label="Shoebox home"><svg aria-hidden="true" viewBox="0 0 64 64"><g transform="translate(32 34.5) scale(.66) translate(-32 -36)"><g style="fill:var(--logo-cards)"><rect x="10.5" y="20" width="9" height="16" rx="2"/><rect x="21.5" y="16.5" width="10" height="19.5" rx="2"/><rect x="33.5" y="19" width="9" height="17" rx="2"/></g><path d="M5 31h54v19a5 5 0 0 1-5 5H10a5 5 0 0 1-5-5z" style="fill:var(--logo-box)"/><rect x="3" y="17" width="58" height="10" rx="3" fill="#FFBD76" transform="rotate(-16 6 26)"/></g></svg>Shoebox</a>
+  <a class="go" href="beta">Get the beta</a>
+</div></header>
+
 <main class="doc">
 <h1>Privacy</h1>
-<p class="sub">Effective October 27, 2026 (updated October 29, 2026: Shoebox no longer uses your location or gets weather)</p>
-<p>Shoebox keeps what you save on your phone. There are no accounts, no ads, no tracking across apps or websites, and nothing is sold.</p>
+<p class="date">Effective November 1, 2026. This covers Shoebox 2 for iPhone. Shoebox 1, the earlier web version, is covered by the <a href="privacy-1">earlier policy</a>.</p>
+<div class="summary"><p>What you keep stays on your phone. There's no account, no ads, no tracking, no analytics, and nothing is sold. A few things pass through Shoebox's server to work, and they're listed here.</p></div>
+
 <h2>What stays on your phone</h2>
-<p>Your saved links, notes, photos, files, tags, settings and reading history are stored on your device. Deleting the app deletes them. Backups you export are files you control.</p>
+<p>Your saves, your reasons, notes, photos, files, dates and settings are stored on your iPhone. The smart parts run on the phone too: Apple Intelligence writes the short post for a forwarded email and picks pictures, Apple's Vision finds the subject of a photo, and dates are read by the app itself.</p>
+<p>Once a day Shoebox saves a copy to the Files app and, if you use it, your iCloud Drive, which Apple's terms cover. Deleting the app deletes your saves from the phone; copies in Files and iCloud Drive stay until you delete them.</p>
+
 <h2>What leaves your phone, and why</h2>
-<p>Shoebox does not ask for or use your location.</p>
+<p>Shoebox's server is <strong>shoebox-api.tangomike.app</strong>, run on Cloudflare.</p>
 <ul>
-<li><b>AI (iPhone app, only if you turn it on).</b> To read, tag and rank what you save, find pictures and turn newsletters into posts, Shoebox sends the text of the item, your notes on it and any photo you add to Anthropic's Claude, through Shoebox's server. Anthropic does not use this data to train its models. For the one-line summary at the top of Today, AI sees your school post headlines (with your child's name left out) and how many calendar events are left and when the next starts, never their titles. For Quote of the day, only the person or theme you type is sent, and the quotes found are shared with everyone who picked the same one. Shoebox's server passes it through and does not keep it. The server keeps a random install number, a fingerprint of its access code, Apple's confirmation that it's the real Shoebox app (App Attest, which identifies no person) and a daily count of AI use, to keep costs in check.</li>
-<li><b>Link previews.</b> When you save a link, Shoebox's server fetches that page to read its title, summary and pictures. The page address is not kept.</li>
-<li><b>Calendar.</b> In the iPhone app, your calendars are read on your phone and never leave it. If you add a calendar address instead, it passes through Shoebox's server to be read. It is not kept.</li>
-<li><b>Beta requests.</b> If you ask to join the iPhone beta, your name, email and answers are kept on Shoebox's server for 90 days so we can decide on invites. Your answers, without your name or email, are read by Anthropic's Claude to suggest whether Shoebox is a good fit; a person makes the decision.</li>
-<li><b>Reminders.</b> If you turn on notifications, the reminder's title and time, and your device's notification address, are kept on Shoebox's server until the reminder is sent.</li>
-<li><b>Email in.</b> If you use your Shoebox email address, mail sent to it, with any PDFs and pictures attached, is held on Shoebox's server for up to 30 days, until the app collects it, then deleted.</li>
-<li><b>Anonymous usage stats (you can turn them off).</b> Once a day, Shoebox sends counts: how many things were saved, how many days were cleared, which kinds of problem came up. They come with a random number used only for this and the day you started, never with anything you saved, an error's details, your name or your device. Settings › Help › Anonymous usage stats turns this off.</li>
-<li><b>Music.</b> Song of the day uses Apple Music on your device. Nothing about your library leaves your phone.</li>
+<li><strong>Link previews.</strong> When you keep a link, Shoebox's server fetches that page to read its title, summary, text and picture, and sends them to your phone. The address isn't kept. Your phone then downloads the page's picture from that website, which sees your phone's internet address as any visit would.</li>
+<li><strong>Pictures for posts without one</strong> (on unless you turn it off in <strong>Settings › Pictures</strong>). Your phone writes two to four plain words for the post, never names or what you wrote, and posts about health, money or legal matters are never looked up. Those words go through Shoebox's server to Pixabay to find a photo and aren't kept. Your phone downloads the photo from Pixabay, which can see your phone's internet address but nothing you saved. The photo's credit is shown on the post.</li>
+<li><strong>Your Shoebox email</strong> (only if you set it up). Mail sent to your address, with any attachments, is held on Shoebox's server for up to 30 days until the app collects it, then deleted there. Your address and a private key that ties it to your phone are kept while you use it. On your phone Shoebox keeps a short post written from the email and its first useful link; the email itself isn't kept.</li>
+<li><strong>Beta requests.</strong> If you ask to join the beta, your name, email and answers are kept on Shoebox's server for 90 days to decide on invites, then deleted. Your answers, without your name or email, are read by Anthropic's Claude to suggest whether Shoebox is a good fit; a person makes the decision. Anthropic doesn't use them to train its models.</li>
 </ul>
+
+<h2>What Shoebox doesn't do</h2>
+<p>No location, contacts or calendars. No usage analytics or advertising identifiers. Notifications are scheduled on your phone; nothing about them is sent anywhere. If you choose to share crash reports with developers in iOS Settings, Apple sends them; they don't include your saves.</p>
+
 <h2>Children</h2>
-<p>Shoebox is not directed to children under 13. If you turn newsletters into posts and add a child's name, the name stays on your phone: in the newsletter's text AI only sees "your child", and Shoebox puts the name back on the post. Flyers and PDFs attached to a newsletter email are read by AI as they are.</p>
+<p>Shoebox isn't directed to children under 13.</p>
+
 <h2>Your choices</h2>
-<p>Turn AI, notifications, calendar and email in on or off at any time in Settings. To delete everything, use Settings › Privacy › Delete all my data: it removes your saves and settings from the device, and from Shoebox's server your email address, any mail waiting there and your AI sign-up. Backups you exported stay where you put them. You can also email <a href="mailto:support@inmyshoebox.com?subject=%5BShoebox%5D%20Delete%20my%20data">support@inmyshoebox.com</a> to ask for deletion.</p>
+<ul>
+<li>Turn off pictures for posts without one in <strong>Settings › Pictures</strong>.</li>
+<li>Don't set up a Shoebox email, and nothing is held for you on the server.</li>
+<li><strong>Settings › Delete everything</strong> saves one last copy to Files, removes every save from your phone, and asks Shoebox's server to delete your email address and any mail waiting there.</li>
+<li>Email <a href="mailto:support@inmyshoebox.com?subject=Privacy">support@inmyshoebox.com</a> to ask what's held for you, or to have it deleted.</li>
+</ul>
+
 <h2>Changes</h2>
 <p>If this policy changes, the new version is posted here with a new date.</p>
+
 <h2>Contact</h2>
-<p>Graham D., <a href="mailto:support@inmyshoebox.com?subject=%5BShoebox%5D%20">support@inmyshoebox.com</a></p>
+<p>Graham D., <a href="mailto:support@inmyshoebox.com">support@inmyshoebox.com</a></p>
 </main>
 <footer class="foot"><div class="wrap">
   <a href="welcome">Home</a><a href="support">Support</a><a href="privacy">Privacy</a>
+  <span>support@inmyshoebox.com</span>
   <span class="made">Made by Graham D. at <a href="https://tangomike.app">tangomike.app</a></span>
 </div></footer>
-</body></html>
+</body>
+</html>
