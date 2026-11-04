@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Shoebox for Android</title>
+<meta name="description" content="Shoebox is on iPhone today. Leave your email to hear when it comes to Android.">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#FFF6E9" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#2F2036" media="(prefers-color-scheme: dark)">
+<link rel="canonical" href="https://inmyshoebox.com/android">
+<meta property="og:title" content="Shoebox for Android">
+<meta property="og:description" content="Shoebox is on iPhone today. Leave your email to hear when it comes to Android.">
+<meta property="og:image" content="https://inmyshoebox.com/site/og.png">
+<meta property="og:url" content="https://inmyshoebox.com/android">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="site/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="site/apple-touch-icon.png">
+<link rel="stylesheet" href="site/site.css">
+</head>
+<body>
+<header class="top doc-top"><div class="wrap bar">
+  <a class="mark" href="welcome" aria-label="Shoebox home"><svg aria-hidden="true" viewBox="0 0 64 64"><g transform="translate(32 34.5) scale(.66) translate(-32 -36)"><g style="fill:var(--logo-cards)"><rect x="10.5" y="20" width="9" height="16" rx="2"/><rect x="21.5" y="16.5" width="10" height="19.5" rx="2"/><rect x="33.5" y="19" width="9" height="17" rx="2"/></g><path d="M5 31h54v19a5 5 0 0 1-5 5H10a5 5 0 0 1-5-5z" style="fill:var(--logo-box)"/><rect x="3" y="17" width="58" height="10" rx="3" fill="#FFBD76" transform="rotate(-16 6 26)"/></g></svg>Shoebox</a>
+  
+</div></header>
+
+<main class="doc beta">
+<h1>Shoebox for Android</h1>
+<p class="sub">Shoebox is on iPhone today. Leave your email and you'll hear once, when it comes to Android. Nothing else.</p>
+
+<form id="android" novalidate>
+  <fieldset>
+    <legend>About you</legend>
+    <label class="field">Your email<input name="email" type="email" autocomplete="email" inputmode="email" required maxlength="120"></label>
+    <label class="field">Your name <span class="opt">Optional</span><input name="name" autocomplete="name" maxlength="80"></label>
+    <label class="field">Your phone <span class="opt">Optional</span><input name="phone" maxlength="80" placeholder="Pixel 9, Galaxy S25…"></label>
+  </fieldset>
+
+  <fieldset>
+    <legend>What would you keep in it? <span class="opt">Optional</span></legend>
+    <textarea name="keep" rows="3" maxlength="1200" placeholder="School emails, links, recipes…"></textarea>
+  </fieldset>
+
+  <label class="trap" aria-hidden="true">Website<input name="website" tabindex="-1" autocomplete="off"></label>
+
+  <p class="err" id="err" role="alert"></p>
+  <button class="btn lid" type="submit" id="send">Tell me when it's ready</button>
+  <p class="hint small">Your email is kept for up to 180 days to write to you about Android, then deleted. <a href="privacy">Privacy</a></p>
+</form>
+
+<div class="contact done" id="done" hidden tabindex="-1">
+  <h2>You're on the list.</h2>
+  <p>Thanks. You'll get one email when Shoebox comes to Android. Have an iPhone too? <a href="beta">Ask for the iPhone beta</a>.</p>
+</div>
+</main>
+
+<footer class="foot"><div class="wrap">
+  <a href="welcome">Home</a><a href="support">Support</a><a href="privacy">Privacy</a><a href="terms">Terms</a><a href="android">Android</a>
+  <span>support@inmyshoebox.com</span>
+  <span class="made">Made by Graham D. at <a href="https://tangomike.app">tangomike.app</a></span>
+</div></footer>
+
+<script>
+(function () {
+  var RELAY = "https://api.inmyshoebox.com";
+  var form = document.getElementById("android"), err = document.getElementById("err"), send = document.getElementById("send");
+  form.addEventListener("submit", function (e) {
+    e.preventDefault();
+    err.textContent = "";
+    var body = {
+      email: form.elements.email.value.trim(), name: form.elements.name.value.trim(),
+      phone: form.elements.phone.value.trim(), keep: form.elements.keep.value.trim(), website: form.elements.website.value
+    };
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(body.email)) { err.textContent = "Please add your email address."; return; }
+    send.disabled = true; send.textContent = "Sending…";
+    fetch(RELAY + "/request/android", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
+      .then(function (res) { return res.json().catch(function () { return {}; }).then(function (d) { if (!res.ok) throw new Error((d.error && d.error.message) || "Something went wrong."); }); })
+      .then(function () { form.hidden = true; var d = document.getElementById("done"); d.hidden = false; d.focus(); window.scrollTo(0, 0); })
+      .catch(function (x) { err.textContent = (x && x.message && !/fetch|network|load failed/i.test(x.message)) ? x.message : "Couldn't send. Check your connection, or email support@inmyshoebox.com."; send.disabled = false; send.textContent = "Tell me when it's ready"; });
+  });
+})();
+</script>
+</body>
+</html>

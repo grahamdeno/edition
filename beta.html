@@ -74,7 +74,7 @@
 
   <p class="err" id="err" role="alert"></p>
   <button class="btn lid" type="submit" id="send">Ask for an invite</button>
-  <p class="hint small">Your answers are kept for 90 days to decide on invites, then deleted. <a href="privacy">Privacy</a></p>
+  <p class="hint small">Your answers are kept for up to 180 days to decide on invites, then deleted. <a href="privacy">Privacy</a></p>
 </form>
 
 <div class="contact done" id="done" hidden tabindex="-1">
@@ -84,14 +84,14 @@
 </main>
 
 <footer class="foot"><div class="wrap">
-  <a href="welcome">Home</a><a href="support">Support</a><a href="privacy">Privacy</a><a href="terms">Terms</a>
+  <a href="welcome">Home</a><a href="support">Support</a><a href="privacy">Privacy</a><a href="terms">Terms</a><a href="android">Android</a>
   <span>support@inmyshoebox.com</span>
   <span class="made">Made by Graham D. at <a href="https://tangomike.app">tangomike.app</a></span>
 </div></footer>
 
 <script>
 (function () {
-  var RELAY = "https://shoebox-api.tangomike.app";
+  var RELAY = "https://api.inmyshoebox.com";
   var PLACES = ["Texts to myself", "Screenshots", "Notes app", "Starred or snoozed email", "Open browser tabs", "Bookmarks", "A read-later app", "A paper notebook", "I don't really save things"];
   var form = document.getElementById("beta"), err = document.getElementById("err"), send = document.getElementById("send");
   var esc = function (s) { return s.replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); };
@@ -120,7 +120,7 @@
     var missing = !body.name ? "Please add your name." : !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(body.email) ? "Please add the email you use for your Apple ID." : !body.iphone ? "Please say whether you have an iPhone." : (!body.back || !body.often || !body.feedback) ? "Please answer questions 2, 4 and 5." : "";
     if (missing) { err.textContent = missing; return; }
     send.disabled = true; send.textContent = "Sending…";
-    fetch(RELAY + "/beta", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
+    fetch(RELAY + "/request/beta", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
       .then(function (res) { return res.json().catch(function () { return {}; }).then(function (d) { if (!res.ok) throw new Error((d.error && d.error.message) || "Something went wrong."); }); })
       .then(function () { form.hidden = true; var d = document.getElementById("done"); d.hidden = false; d.focus(); window.scrollTo(0, 0); })
       .catch(function (x) { err.textContent = (x && x.message && !/fetch|network|load failed/i.test(x.message)) ? x.message : "Couldn't send. Check your connection, or email support@inmyshoebox.com."; send.disabled = false; send.textContent = "Ask for an invite"; });
