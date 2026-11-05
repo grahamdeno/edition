@@ -78,7 +78,7 @@ p { margin: 0; }
 .hero-pic { grid-area: pic; min-width: 0; }
 .hero-notes { grid-area: notes; align-self: start; }
 .hero .watch { margin-top: 18px; font-size: 16px; }
-.promo-loop { width: 100%; max-width: 380px; margin-inline: auto; height: auto; border-radius: 40px; display: block; background: #3B2240; }
+.promo-loop { width: auto; max-width: 380px; max-height: calc(100vh - 160px); margin-inline: auto; height: auto; border-radius: 40px; display: block; background: #3B2240; }
 @media (prefers-reduced-motion: reduce) { .promo-loop { display: none; } }
 .stage { display: flex; justify-content: center; align-items: flex-end; gap: 0; position: relative; min-width: 0; }
 .stage .phone + .phone { margin-left: -46px; transform: translateY(28px) rotate(3deg); z-index: 0; }
